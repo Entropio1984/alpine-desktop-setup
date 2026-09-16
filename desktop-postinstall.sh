@@ -82,6 +82,13 @@ install_pkgs() {
 # BLOQUE 3: Distribución de teclado a "latam" (consola + sesión gráfica)
 # ------------------------------------------------------------------------------
 setup_keyboard_layout() {
+    log_info "== Distribución de teclado =="
+
+    if ! ask_yes_no "¿Deseas configurar el teclado a distribución latinoamericana (latam)?"; then
+        log_info "Se omite la configuración de teclado. Se deja el layout por defecto del sistema/instalación."
+        return 0
+    fi
+
     log_info "== Configurando distribución de teclado a 'latam' =="
 
     if command -v setup-keymap >/dev/null 2>&1; then
@@ -617,7 +624,65 @@ setup_power() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 17: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
+# ------------------------------------------------------------------------------
+# BLOQUE 17: Optimizacion de discos duros mecanicos (HDD)
+# ------------------------------------------------------------------------------
+# Equipos "revividos" suelen tener disco mecanico, no SSD. BFQ prioriza
+# que un proceso con mucha carga de E/S (una actualizacion de apk, copiar
+# un archivo grande) no congele el resto del escritorio -- el mismo
+# objetivo que earlyoom persigue para la memoria. Contrapartida real: BFQ
+# tiene mas overhead de CPU que mq-deadline; en CPUs muy debiles esto
+# puede notarse. Se verifica en tiempo de ejecucion si el kernel actual
+# tiene BFQ disponible (no se asume) y se cae a mq-deadline si no.
+#
+# NO se modifica /etc/fstab automaticamente (por ejemplo, para agregar
+# "noatime"): es un archivo critico para el arranque y un error ahi deja
+# el sistema sin bootear. Se sugiere como paso manual en el log.
+optimize_hdd_storage() {
+    log_info "== Optimizando planificador de E/S para discos mecanicos =="
+
+    modprobe bfq 2>/dev/null || true
+
+    found_rotational="no"
+    sample_dev=""
+
+    for dev in /sys/block/*/queue/rotational; do
+        [ -e "$dev" ] || continue
+        devname="$(echo "$dev" | cut -d/ -f4)"
+        case "$devname" in
+            loop*|ram*|zram*) continue ;;
+        esac
+        rotational="$(cat "$dev" 2>/dev/null || echo 0)"
+        if [ "$rotational" = "1" ]; then
+            found_rotational="yes"
+            [ -z "$sample_dev" ] && sample_dev="$devname"
+            log_info "Disco mecanico detectado: /dev/$devname"
+        fi
+    done
+
+    if [ "$found_rotational" = "no" ]; then
+        log_info "No se detectaron discos mecanicos (SSD/NVMe unicamente, o ninguno). Se omite esta optimizacion."
+        return 0
+    fi
+
+    chosen_scheduler="mq-deadline"
+    if [ -r "/sys/block/$sample_dev/queue/scheduler" ] && grep -q "bfq" "/sys/block/$sample_dev/queue/scheduler"; then
+        chosen_scheduler="bfq"
+    else
+        log_warn "El kernel actual no reporta 'bfq' disponible; se usa 'mq-deadline' como alternativa segura."
+    fi
+
+    mkdir -p /etc/udev/rules.d
+    cat > /etc/udev/rules.d/60-ioscheduler.rules <<EOF
+# Generado por desktop-postinstall.sh
+ACTION=="add|change", KERNEL=="sd[a-z]|hd[a-z]|vd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="$chosen_scheduler"
+EOF
+
+    log_ok "Planificador '$chosen_scheduler' configurado para discos mecanicos en /etc/udev/rules.d/60-ioscheduler.rules"
+    log_info "Sugerencia manual (no aplicada automaticamente): agregar 'noatime' a las opciones de montaje en /etc/fstab reduce escrituras innecesarias en discos mecanicos."
+}
+
+# BLOQUE 18: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
 # ------------------------------------------------------------------------------
 # El montaje real lo hace udisks2 (dbus-activated, no requiere su propio
 # servicio OpenRC). Para que un usuario normal (no root) pueda montar sin
@@ -674,9 +739,16 @@ setup_usb_automount() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 18: Soporte de impresión (CUPS)
+# BLOQUE 19: Soporte de impresión (CUPS)
 # ------------------------------------------------------------------------------
 setup_printing() {
+    log_info "== Soporte de impresión (CUPS) =="
+
+    if ! ask_yes_no "¿Deseas instalar soporte de impresión (CUPS)?"; then
+        log_info "Se omite CUPS."
+        return 0
+    fi
+
     log_info "== Configurando soporte de impresión (CUPS) =="
     install_pkgs cups cups-openrc cups-filters system-config-printer
     rc-update add cupsd default || log_warn "No se pudo agregar 'cupsd' al runlevel default."
@@ -684,7 +756,7 @@ setup_printing() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 19: Backends de compresión
+# BLOQUE 20: Backends de compresión
 # ------------------------------------------------------------------------------
 # NOTA: "unrar" NO existe como paquete en Alpine (ni en main ni en
 # community, verificado en v3.24) - es de licencia no-libre y Alpine no
@@ -700,7 +772,7 @@ install_archive_tools() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 20: Idioma español — sistema, XFCE y propagación global a Plasma
+# BLOQUE 21: Idioma español — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
 setup_locale_es() {
     log_info "== Configurando idioma español para el sistema =="
@@ -767,7 +839,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 21: Tipografías base (antes de LibreOffice)
+# BLOQUE 22: Tipografías base (antes de LibreOffice)
 # ------------------------------------------------------------------------------
 install_fonts() {
     log_info "== Instalando tipografías base =="
@@ -776,21 +848,35 @@ install_fonts() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 22: LibreOffice + paquete de idioma español
+# BLOQUE 23: LibreOffice + paquete de idioma español
 # ------------------------------------------------------------------------------
 install_libreoffice() {
+    log_info "== LibreOffice =="
+
+    if ! ask_yes_no "¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)"; then
+        log_info "Se omite LibreOffice."
+        return 0
+    fi
+
     log_info "== Instalando LibreOffice (español) =="
     install_pkgs libreoffice libreoffice-lang-es
     log_ok "LibreOffice instalado con soporte de idioma español."
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 23: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
+# BLOQUE 24: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
 # ------------------------------------------------------------------------------
 setup_flatpak() {
+    log_info "== Flatpak / Flathub =="
+
+    if ! ask_yes_no "¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)"; then
+        log_info "Se omite Flatpak por completo (no se instala infraestructura ni se preguntará por apps individuales)."
+        return 0
+    fi
+
     log_info "== Configurando Flatpak y repositorio Flathub =="
 
-    # dbus ya se instaló y habilitó en el Bloque 17 (setup_usb_automount).
+    # dbus ya se instaló y habilitó en el Bloque 18 (setup_usb_automount).
     # Portal GTK como base universal (XFCE/GNOME/MATE, y red de seguridad
     # para cualquier entorno). El propio xdg-desktop-portal elige el
     # backend correcto en tiempo real según XDG_CURRENT_DESKTOP, así que
@@ -843,7 +929,7 @@ setup_flatpak() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 24: Habilitar el Gestor de Inicio de Sesión (Display Manager)
+# BLOQUE 25: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
 # No basta con que setup-desktop lo haya dejado instalado: hay reportes
 # reales de lightdm/sddm fallando al no quedar correctamente enganchados
@@ -888,7 +974,7 @@ setup_display_manager() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 25: Permisos de grupo para Audio/Video/Impresión
+# BLOQUE 26: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
     log_info "== Configurando permisos de grupo =="
@@ -904,7 +990,7 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 26: Función principal
+# BLOQUE 27: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
@@ -926,6 +1012,7 @@ main() {
     setup_zram
     setup_earlyoom
     setup_power
+    optimize_hdd_storage
     setup_usb_automount
     setup_printing
     install_archive_tools
