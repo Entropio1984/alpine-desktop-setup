@@ -63,7 +63,7 @@ Tres principios guían todas las decisiones de diseño:
 
 ## Recorrido bloque por bloque
 
-El script se organiza en 26 bloques, ejecutados en este orden por la función `main()`:
+El script se organiza en 27 bloques, ejecutados en este orden por la función `main()`:
 
 ### Bloque 1 — `check_root`
 Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
@@ -72,7 +72,7 @@ Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un men
 `update_system` corre `apk update` una sola vez al principio. `install_pkg` instala **un** paquete con tolerancia a fallos (usado cuando el nombre del paquete depende de hardware detectado y no se quiere arriesgar una transacción en lote). `install_pkgs` instala **varios** paquetes en una sola transacción de `apk` (mucho más rápido: una sola resolución de dependencias en vez de una por paquete) — si la transacción en lote falla porque algún nombre no existe en tu rama/arquitectura, cae automáticamente a instalar cada paquete por separado con `install_pkg`, así se gana velocidad en el caso normal sin perder la tolerancia a fallos individuales en el caso excepcional.
 
 ### Bloque 3 — `setup_keyboard_layout`
-Configura el teclado a distribución **latam** en dos capas independientes:
+**Pregunta primero** (ver sección 5) si se desea configurar el teclado a distribución latam — no es una preferencia universal, así que no se aplica sin confirmar. Si se acepta, lo hace en dos capas independientes:
 - **Consola (TTY):** `setup-keymap latam latam`, ejecutado de forma no interactiva. El único prompt que sobrevive es la confirmación de OpenRC al reiniciar el servicio `loadkmap` ("you are stopping a boot service"), que se responde automáticamente vía `yes |`.
 - **Sesión gráfica (Xorg):** crea `/etc/X11/xorg.conf.d/00-keyboard.conf` con `Option "XkbLayout" "latam"`, para que XFCE, Plasma, GNOME, MATE o LXQt también arranquen en ese layout (la consola y Xorg son capas separadas; una no implica la otra).
 
@@ -137,20 +137,23 @@ Instala `earlyoom` (+ su subpaquete `earlyoom-openrc`, necesario para que exista
 ### Bloque 16 — `setup_power`
 Instala y habilita `acpid` (+ `acpid-openrc`), para que Alpine reaccione a eventos físicos: cerrar la tapa de un laptop, presionar el botón de encendido, etc.
 
-### Bloque 17 — `setup_usb_automount`
+### Bloque 17 — `optimize_hdd_storage`
+Recorre `/sys/block/*/queue/rotational` para identificar discos **mecánicos** (excluyendo `loop`/`ram`/`zram`). Si encuentra alguno, configura el planificador de E/S vía una regla `udev` persistente (`/etc/udev/rules.d/60-ioscheduler.rules`): prioriza **BFQ** (diseñado para que un proceso con mucha carga de E/S no congele el resto del escritorio — la misma filosofía que `earlyoom` aplica a la memoria), verificando en tiempo de ejecución si el kernel actual lo tiene disponible y cayendo a `mq-deadline` si no. **No modifica `/etc/fstab`** automáticamente (por ejemplo, para agregar `noatime`) — es un archivo crítico para el arranque y se deja como sugerencia manual en el log, no como cambio automático.
+
+### Bloque 18 — `setup_usb_automount`
 Configura el montaje automático de memorias USB al conectarlas. Es el bloque con más piezas coordinadas:
 1. **`dbus`** (+ servicio `dbus`) — instalado primero porque todo lo demás en este bloque depende del bus de mensajes del sistema.
 2. **`udisks2`** — hace el montaje real. No tiene servicio OpenRC propio: se activa bajo demanda vía D-Bus.
 3. **`elogind` + `polkit-elogind`** (servicios `elogind` y `polkit`, nombres distintos a los paquetes) — autorización para que un usuario normal (no root) pueda montar sin contraseña, basada en detección de **sesión activa** (no en pertenencia a grupos Unix — ver [Limitaciones conocidas](#limitaciones-conocidas)).
 4. **Disparador según entorno:** `gvfs` + `thunar-volman` para XFCE; `gvfs` para GNOME/MATE; `gvfs` + `lxqt-policykit` para LXQt. Plasma no necesita nada adicional aquí porque Dolphin usa KIO/Solid + `udisks2` directamente.
 
-### Bloque 18 — `setup_printing`
-Instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
+### Bloque 19 — `setup_printing`
+**Pregunta primero** (ver sección 5) si se desea soporte de impresión — no todo equipo "revivido" tiene o necesita una impresora. Si se acepta, instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
 
-### Bloque 19 — `install_archive_tools`
+### Bloque 20 — `install_archive_tools`
 Instala `zip`, `unzip`, `p7zip`. **`unrar` no se instala porque no existe como paquete en Alpine** (licencia no-libre, verificado en v3.24) — el script lo indica explícitamente en el log en vez de intentarlo y fallar en silencio, y apunta al binario oficial de `rarlab.com/download.htm` como única vía si de verdad se necesita soporte RAR (no automatizado por el script: cada versión de RARLAB cambia el nombre del archivo, y una URL fija quedaría rota con el tiempo).
 
-### Bloque 20 — `setup_locale_es`
+### Bloque 21 — `setup_locale_es`
 Configura español en tres capas independientes, porque ningún mecanismo por sí solo cubre todos los casos:
 1. **`/etc/profile.d/lang-es.sh`** — variables `LANG`/`LC_ALL`/`LC_MESSAGES=es_ES.UTF-8` para shells de login tradicionales.
 2. **`/etc/environment`** — las mismas variables, leídas por PAM (`pam_env`) en la mayoría de gestores de sesión gráficos (SDDM incluido), que no siempre pasan por `/etc/profile.d`.
@@ -160,65 +163,84 @@ También instala `musl-locales`/`musl-locales-lang` y el metapaquete `lang`, que
 
 > **Nota:** musl (la libc de Alpine) no tiene un locale `es_MX.UTF-8` — solo un conjunto reducido, entre ellos `es_ES.UTF-8`, que es el que usa el script. Para la traducción de interfaz esto no supone ninguna diferencia práctica (los paquetes de idioma no distinguen variantes regionales de español).
 
-### Bloque 21 — `install_fonts`
+### Bloque 22 — `install_fonts`
 Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) y `font-noto`. Se ejecuta antes de LibreOffice a propósito.
 
-### Bloque 22 — `install_libreoffice`
-Instala `libreoffice` + `libreoffice-lang-es`.
+### Bloque 23 — `install_libreoffice`
+**Pregunta primero** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
 
-### Bloque 23 — `setup_flatpak`
-Instala Flatpak y agrega el repositorio Flathub. Instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego **pregunta** (ver sección 5) si instalar OnlyOffice y Google Chrome desde Flathub.
+### Bloque 24 — `setup_flatpak`
+**Pregunta primero** (ver sección 5) si se desea habilitar Flatpak/Flathub en absoluto — si se responde "no", no se instala nada de infraestructura (`flatpak`, portales XDG) ni se pregunta por apps individuales. Si se acepta: instala Flatpak y agrega el repositorio Flathub, instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego **pregunta** dos veces más si instalar OnlyOffice y Google Chrome desde Flathub.
 
-### Bloque 24 — `setup_display_manager`
+### Bloque 25 — `setup_display_manager`
 Habilita el gestor de inicio de sesión gráfico (`lightdm`/`sddm`/`gdm`) en el runlevel `default`. No basta con que `setup-desktop` lo haya instalado — hay casos reales donde el DM queda instalado pero no correctamente enganchado al arranque. En vez de una prioridad fija (que podría elegir el DM equivocado en equipos con más de un entorno instalado, como XFCE + Plasma a la vez), reutiliza las banderas `DE_*` del Bloque 4 para preferir el emparejamiento convencional — el mismo que usa el propio `setup-desktop` de Alpine internamente: Plasma → `sddm`, GNOME → `gdm`, cualquier otro (XFCE/MATE/LXQt) → `lightdm` si está instalado. Si hay más de un DM instalado, se advierte explícitamente cuál se eligió y por qué.
 
-### Bloque 25 — `setup_user_groups`
+### Bloque 26 — `setup_user_groups`
 Agrega al usuario detectado en el Bloque 5 a los grupos `audio`, `video` y `lpadmin` (necesarios para acceso a hardware de sonido/video y administración de impresoras).
 
-### Bloque 26 — `main`
+### Bloque 27 — `main`
 Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
 
 ## Preguntas interactivas que hará el script
 
-El script se detiene a preguntar en exactamente tres puntos:
+El script se detiene a preguntar en siete puntos, en este orden:
 
-1. **NVIDIA detectada (Bloque 12):**
+1. **Distribución de teclado (Bloque 3):**
+   > `¿Deseas configurar el teclado a distribución latinoamericana (latam)?`
+   - **`s`** → Configura "latam" en consola (TTY) y en Xorg.
+   - **`n`** → No toca la configuración de teclado; se deja el layout por defecto del sistema/instalación.
+
+2. **NVIDIA detectada (Bloque 12):**
    > `¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?`
    - **`s`** → Bloquea `nouveau` por completo: `Option "NoAccel" "True"` en Xorg **+** `blacklist nouveau` a nivel de kernel (`/etc/modprobe.d`). La NVIDIA queda inactiva; el sistema usa solo la(s) GPU(s) restante(s). Recomendado en tarjetas Tesla/Fermi/Kepler o si notas pantalla negra/cuelgues.
    - **`n`** → Deja `nouveau` activo con aceleración 3D normal. Riesgo de cuelgue en hardware legacy.
 
-2. **OnlyOffice vía Flatpak (Bloque 23):**
+3. **Soporte de impresión / CUPS (Bloque 19):**
+   > `¿Deseas instalar soporte de impresión (CUPS)?`
+   - **`n`** → Omite CUPS por completo (ni paquetes ni servicio).
+
+4. **LibreOffice (Bloque 23):**
+   > `¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)`
+   - Pensado para equipos con poco espacio en disco, o para quien prefiera usar únicamente OnlyOffice desde Flatpak.
+
+5. **Flatpak/Flathub como infraestructura base (Bloque 24):**
+   > `¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)`
+   - **`n`** → No instala `flatpak` ni los portales XDG, y **no se preguntará** por OnlyOffice ni Chrome (bloque completo omitido).
+   - **`s`** → Instala la infraestructura y continúa a las dos preguntas siguientes.
+
+6. **OnlyOffice vía Flatpak (Bloque 24, solo si se aceptó la pregunta 5):**
    > `¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?`
 
-3. **Google Chrome vía Flatpak (Bloque 23):**
+7. **Google Chrome vía Flatpak (Bloque 24, solo si se aceptó la pregunta 5):**
    > `¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?`
    - Se aclara explícitamente que es un empaquetado mantenido por la comunidad de Flathub, no publicado por Google.
 
-Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no".
+Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no". La pregunta de NVIDIA solo aparece si el hardware detectado incluye una tarjeta NVIDIA; las preguntas 6 y 7 solo aparecen si se respondió "sí" a la pregunta 5.
 
 ## Archivos que el script crea o modifica
 
 | Archivo | Bloque | Propósito |
 |---|---|---|
 | `/etc/X11/xorg.conf.d/00-keyboard.conf` | 3 | Layout de teclado latam en Xorg |
-| `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 8 | `NoAccel` para nouveau (solo si se acepta el modo seguro) |
-| `/etc/modprobe.d/blacklist-nouveau.conf` | 8 | Bloqueo del módulo `nouveau` a nivel de kernel (solo si se acepta) |
-| `/etc/conf.d/zram-init` | 10 | Tamaño y algoritmo del dispositivo zram |
-| `/etc/sysctl.conf` | 10 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
-| `/etc/profile.d/lang-es.sh` | 16 | Variables de idioma para shells de login |
-| `/etc/environment` | 16 | Variables de idioma para PAM (se limpian líneas `LANG`/`LC_*` previas antes de reescribir) |
-| `/etc/xdg/plasma-localerc` | 16 | Idioma de Plasma, default de sistema (solo si se detecta Plasma) |
-| `$HOME/.config/plasma-localerc` | 16 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
-| `/etc/rc.conf` | 16 | Se agrega `unicode="YES"` si no estaba presente |
+| `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 12 | `NoAccel` para nouveau (solo si se acepta el modo seguro) |
+| `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo del módulo `nouveau` a nivel de kernel (solo si se acepta) |
+| `/etc/conf.d/zram-init` | 14 | Tamaño y algoritmo del dispositivo zram |
+| `/etc/sysctl.conf` | 14 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
+| `/etc/udev/rules.d/60-ioscheduler.rules` | 17 | Planificador de E/S (BFQ o mq-deadline) para discos mecánicos detectados |
+| `/etc/profile.d/lang-es.sh` | 21 | Variables de idioma para shells de login |
+| `/etc/environment` | 21 | Variables de idioma para PAM (se limpian líneas `LANG`/`LC_*` previas antes de reescribir) |
+| `/etc/xdg/plasma-localerc` | 21 | Idioma de Plasma, default de sistema (solo si se detecta Plasma) |
+| `$HOME/.config/plasma-localerc` | 21 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
+| `/etc/rc.conf` | 21 | Se agrega `unicode="YES"` si no estaba presente |
 | `/var/log/desktop-postinstall.log` | (todos) | Registro completo de la ejecución |
 
 ## Servicios OpenRC habilitados
 
 Todos en el runlevel `default`, salvo aclaración:
 
-`networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 24).
+`networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 25).
 
-`udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 17 para el porqué de cada uno).
+`udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 18 para el porqué de cada uno).
 
 ## Registro de ejecución (log)
 
@@ -248,7 +270,7 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
   - No asumas que el equipo quedó "arreglado" solo por haber aceptado el modo seguro; verifica el arranque real tras reiniciar.
   - Si necesitas recuperar acceso, entra por una TTY (consola de texto, sin arrancar Xorg) para revisar `dmesg | grep -i nouveau` y `cat /var/log/desktop-postinstall.log`, y confirmar si `/etc/modprobe.d/blacklist-nouveau.conf` realmente se aplicó y si el módulo sigue cargado (`lsmod | grep nouveau`).
   - Si el bloqueo del módulo no fue suficiente, puede que el cuelgue ocurra en una etapa aún más temprana que la cubierta por este script (por ejemplo, en el propio firmware/KMS antes de que OpenRC llegue a iniciar servicios) — este escenario requiere más diagnóstico específico por equipo y todavía no tiene una solución generalizada incorporada al script.
-- **`unrar` no está disponible.** No hay alternativa vía `apk`; ver Bloque 19.
+- **`unrar` no está disponible.** No hay alternativa vía `apk`; ver Bloque 20.
 - **El microcódigo de AMD no se garantiza cargado en el arranque** solo con instalar el paquete; Alpine no lo integra automáticamente al initramfs.
 - **El montaje de USB depende de `elogind` reconociendo la sesión como activa.** Si en algún momento el montaje pide contraseña de root inesperadamente, el problema casi seguro está en que la sesión gráfica no está siendo reconocida como activa por `elogind` — **no** es un problema de pertenencia a grupos Unix (`plugdev`/`storage`), que es el mecanismo de un backend distinto (`seatd`) que este script no usa.
 - **El script asume que el entorno de escritorio ya fue instalado por separado** (vía `setup-desktop`). No instala XFCE, Plasma, GNOME, MATE ni LXQt desde cero.
@@ -273,7 +295,8 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 | zram | `rc-service zram-init stop`, `rc-update del zram-init`, borrar `/etc/conf.d/zram-init` |
 | EarlyOOM | `rc-update del earlyoom`, `apk del earlyoom earlyoom-openrc` |
 | CUPS | `rc-update del cupsd`, `apk del cups cups-filters system-config-printer` |
+| Planificador de E/S para HDD | Borrar `/etc/udev/rules.d/60-ioscheduler.rules`, luego `udevadm control --reload-rules && udevadm trigger` (o reiniciar) |
 
 ---
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam, detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), habilitación automática del Display Manager, zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión, idioma español en tres capas, tipografías, LibreOffice y Flatpak.*
+*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional) y Flatpak (opcional).*
