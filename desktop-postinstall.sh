@@ -643,7 +643,20 @@ optimize_hdd_storage() {
 
     modprobe bfq 2>/dev/null || true
 
+    # Identifica el disco raiz solo para dar contexto mas preciso en el
+    # log (no cambia la logica: la regla udev sigue aplicando por
+    # atributo 'rotational', no por nombre de disco, asi que funciona
+    # igual sea cual sea el orden sda/sdb entre reinicios). Se usa
+    # 'mount' en vez de findmnt/lsblk para no agregar una dependencia
+    # nueva solo por este dato informativo.
+    root_partition="$(mount | awk '$3=="/" {print $1; exit}')"
+    root_dev=""
+    if [ -n "$root_partition" ]; then
+        root_dev="$(basename "$root_partition" | sed -E 's#^/dev/##; s/p?[0-9]+$//')"
+    fi
+
     found_rotational="no"
+    found_nonrotational="no"
     sample_dev=""
 
     for dev in /sys/block/*/queue/rotational; do
@@ -656,7 +669,16 @@ optimize_hdd_storage() {
         if [ "$rotational" = "1" ]; then
             found_rotational="yes"
             [ -z "$sample_dev" ] && sample_dev="$devname"
-            log_info "Disco mecanico detectado: /dev/$devname"
+            if [ "$devname" = "$root_dev" ]; then
+                log_info "Disco mecanico detectado: /dev/$devname (es el disco RAIZ del sistema)"
+            else
+                log_info "Disco mecanico detectado: /dev/$devname (auxiliar, no es la raiz)"
+            fi
+        else
+            found_nonrotational="yes"
+            if [ "$devname" = "$root_dev" ]; then
+                log_info "Disco de estado solido detectado: /dev/$devname (es el disco RAIZ del sistema)"
+            fi
         fi
     done
 
@@ -675,11 +697,20 @@ optimize_hdd_storage() {
     mkdir -p /etc/udev/rules.d
     cat > /etc/udev/rules.d/60-ioscheduler.rules <<EOF
 # Generado por desktop-postinstall.sh
+# Se aplica solo a dispositivos con rotational==1 (por atributo, no por
+# nombre) -- en un sistema mixto SSD+HDD, el/los SSD nunca se ven
+# afectados por esta regla, sin importar que letra de disco les toque.
 ACTION=="add|change", KERNEL=="sd[a-z]|hd[a-z]|vd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="$chosen_scheduler"
 EOF
 
     log_ok "Planificador '$chosen_scheduler' configurado para discos mecanicos en /etc/udev/rules.d/60-ioscheduler.rules"
-    log_info "Sugerencia manual (no aplicada automaticamente): agregar 'noatime' a las opciones de montaje en /etc/fstab reduce escrituras innecesarias en discos mecanicos."
+
+    if [ "$found_nonrotational" = "yes" ]; then
+        log_info "Configuracion mixta detectada (SSD + HDD): el SSD conserva el planificador que el kernel ya le asigna por defecto, no requiere intervencion."
+        log_info "Sugerencia manual: si el disco mecanico se usa solo para datos (no es la raiz), agregar 'noatime' a su linea en /etc/fstab es especialmente seguro de aplicar (a diferencia de tocar la particion raiz) y reduce escrituras innecesarias."
+    else
+        log_info "Sugerencia manual (no aplicada automaticamente): agregar 'noatime' a las opciones de montaje en /etc/fstab reduce escrituras innecesarias en discos mecanicos."
+    fi
 }
 
 # BLOQUE 18: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
@@ -974,7 +1005,113 @@ setup_display_manager() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 26: Permisos de grupo para Audio/Video/Impresión
+# ------------------------------------------------------------------------------
+# BLOQUE 26: Acceso directo de actualizacion en el menu de aplicaciones
+# ------------------------------------------------------------------------------
+# Los archivos .desktop siguen el estandar XDG Desktop Entry: un unico
+# archivo en /usr/share/applications/ aparece automaticamente en el menu
+# de TODOS los entornos detectados (XFCE, Plasma, GNOME, MATE, LXQt), sin
+# logica especifica por DE -- es justamente para eso que existe el
+# estandar.
+#
+# Autenticacion via pkexec (parte de polkit-elogind, Bloque 18). Por
+# defecto, SIN necesidad de ninguna regla de polkit personalizada: si el
+# usuario objetivo esta en el grupo "wheel", pkexec pide UNICAMENTE su
+# propia contrasena (igual que doas), nunca la de root. Es el
+# comportamiento estandar documentado de polkit, no un ajuste especial.
+#
+# Diseno en dos scripts separados por robustez:
+#   - alpine-update-root.sh      -> corre como root via pkexec; SOLO
+#     hace el trabajo (apk + flatpak), sin nada grafico, para no
+#     depender de que X11/Wayland se reenvien correctamente a traves
+#     del salto de privilegios.
+#   - alpine-update-launcher.sh  -> corre como el usuario normal; llama
+#     a pkexec y muestra el resultado con zenity ya en su propia sesion
+#     grafica, sin cruzar el limite de privilegios para la parte visual.
+setup_update_shortcut() {
+    log_info "== Acceso directo de actualizacion en el menu =="
+
+    if ! ask_yes_no "¿Deseas crear un boton en el menu de aplicaciones para actualizar Alpine (y Flatpak, si esta instalado) con un clic?"; then
+        log_info "Se omite el acceso directo de actualizacion."
+        return 0
+    fi
+
+    install_pkgs zenity
+
+    if [ -z "$TARGET_USER" ]; then
+        log_warn "No se determino un usuario estandar; el acceso directo se creara igual, pero verifica manualmente que el usuario este en el grupo 'wheel' para que pkexec pida solo su propia contrasena."
+    else
+        if ! id -nG "$TARGET_USER" 2>/dev/null | grep -qw wheel; then
+            adduser "$TARGET_USER" wheel && log_ok "Usuario '$TARGET_USER' agregado al grupo 'wheel' (requerido por pkexec)." || log_warn "No se pudo agregar '$TARGET_USER' al grupo 'wheel'."
+        fi
+    fi
+
+    cat > /usr/local/bin/alpine-update-root.sh <<'INNEREOF'
+#!/bin/sh
+# Ejecutado como root via pkexec. Imprime a stdout/stderr a proposito
+# (sin redirigir a un archivo aqui): el script lanzador es quien captura
+# esta salida en vivo y la muestra en una ventana con scroll.
+echo "===== Actualizando Alpine (apk) ====="
+apk update
+apk upgrade
+apk_status=$?
+
+if command -v flatpak >/dev/null 2>&1; then
+    echo ""
+    echo "===== Actualizando aplicaciones Flatpak ====="
+    flatpak update -y
+fi
+
+echo ""
+if [ "$apk_status" -eq 0 ]; then
+    echo "Actualizacion de Alpine completada sin errores."
+else
+    echo "La actualizacion de Alpine termino con errores (codigo $apk_status). Revisa el detalle arriba."
+fi
+
+exit "$apk_status"
+INNEREOF
+    chmod 755 /usr/local/bin/alpine-update-root.sh
+    chown root:root /usr/local/bin/alpine-update-root.sh
+
+    cat > /usr/local/bin/alpine-update-launcher.sh <<'INNEREOF'
+#!/bin/sh
+# Corre como el usuario normal; pide autenticacion via pkexec y muestra
+# la salida EN VIVO (apk + flatpak) en una ventana con scroll, ya en la
+# sesion grafica del usuario -- ningun proceso grafico cruza el limite
+# de privilegios, solo texto plano a traves de la tuberia.
+LOG="/var/log/alpine-update.log"
+
+{
+    echo "===== Actualizacion iniciada: $(date) ====="
+    pkexec /usr/local/bin/alpine-update-root.sh
+    echo "===== Actualizacion finalizada: $(date) ====="
+} 2>&1 | tee -a "$LOG" | zenity --text-info \
+    --title="Actualizando el sistema" \
+    --width=700 --height=450 \
+    --font="monospace"
+INNEREOF
+    chmod 755 /usr/local/bin/alpine-update-launcher.sh
+    chown root:root /usr/local/bin/alpine-update-launcher.sh
+
+    mkdir -p /usr/share/applications
+    cat > /usr/share/applications/alpine-update.desktop <<'INNEREOF'
+[Desktop Entry]
+Type=Application
+Name=Actualizar el sistema
+Comment=Actualiza Alpine Linux y las aplicaciones Flatpak instaladas
+Exec=/usr/local/bin/alpine-update-launcher.sh
+Icon=system-software-update
+Terminal=false
+Categories=System;
+StartupNotify=true
+INNEREOF
+
+    log_ok "Acceso directo creado: aparecera como 'Actualizar el sistema' en el menu de aplicaciones."
+    log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
+}
+
+# BLOQUE 27: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
     log_info "== Configurando permisos de grupo =="
@@ -990,7 +1127,7 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 27: Función principal
+# BLOQUE 28: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
@@ -1021,6 +1158,7 @@ main() {
     install_libreoffice
     setup_flatpak
     setup_display_manager
+    setup_update_shortcut
     setup_user_groups
 
     log_ok "===== Proceso completado exitosamente ====="

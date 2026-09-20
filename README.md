@@ -63,7 +63,7 @@ Tres principios guían todas las decisiones de diseño:
 
 ## Recorrido bloque por bloque
 
-El script se organiza en 27 bloques, ejecutados en este orden por la función `main()`:
+El script se organiza en 28 bloques, ejecutados en este orden por la función `main()`:
 
 ### Bloque 1 — `check_root`
 Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
@@ -138,7 +138,11 @@ Instala `earlyoom` (+ su subpaquete `earlyoom-openrc`, necesario para que exista
 Instala y habilita `acpid` (+ `acpid-openrc`), para que Alpine reaccione a eventos físicos: cerrar la tapa de un laptop, presionar el botón de encendido, etc.
 
 ### Bloque 17 — `optimize_hdd_storage`
-Recorre `/sys/block/*/queue/rotational` para identificar discos **mecánicos** (excluyendo `loop`/`ram`/`zram`). Si encuentra alguno, configura el planificador de E/S vía una regla `udev` persistente (`/etc/udev/rules.d/60-ioscheduler.rules`): prioriza **BFQ** (diseñado para que un proceso con mucha carga de E/S no congele el resto del escritorio — la misma filosofía que `earlyoom` aplica a la memoria), verificando en tiempo de ejecución si el kernel actual lo tiene disponible y cayendo a `mq-deadline` si no. **No modifica `/etc/fstab`** automáticamente (por ejemplo, para agregar `noatime`) — es un archivo crítico para el arranque y se deja como sugerencia manual en el log, no como cambio automático.
+Recorre `/sys/block/*/queue/rotational` para identificar discos **mecánicos** (excluyendo `loop`/`ram`/`zram`). Si encuentra alguno, configura el planificador de E/S vía una regla `udev` persistente (`/etc/udev/rules.d/60-ioscheduler.rules`): prioriza **BFQ** (diseñado para que un proceso con mucha carga de E/S no congele el resto del escritorio — la misma filosofía que `earlyoom` aplica a la memoria), verificando en tiempo de ejecución si el kernel actual lo tiene disponible y cayendo a `mq-deadline` si no.
+
+La regla de `udev` filtra **por atributo físico** (`rotational==1`), no por nombre de disco — esto es clave en configuraciones mixtas (ej. sistema instalado en SSD con un HDD auxiliar solo para datos): el SSD nunca recibe esta regla sin importar qué letra de disco (`sda`/`sdb`) le toque en un arranque dado, ya que el orden de asignación no está garantizado entre reinicios. El bloque también identifica cuál disco es la raíz del sistema (usando `mount`, sin depender de `findmnt`/`lsblk` para no sumar una dependencia nueva) y ajusta la sugerencia de `noatime` en consecuencia: si el disco mecánico detectado **no** es la raíz (es un disco de datos auxiliar), la sugerencia es más directa, ya que modificar `/etc/fstab` para una partición no-raíz tiene mucho menor riesgo que tocar la partición de arranque.
+
+**No modifica `/etc/fstab`** automáticamente en ningún caso — es un archivo crítico para el arranque y se deja como sugerencia manual en el log, no como cambio automático.
 
 ### Bloque 18 — `setup_usb_automount`
 Configura el montaje automático de memorias USB al conectarlas. Es el bloque con más piezas coordinadas:
@@ -175,15 +179,25 @@ Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métric
 ### Bloque 25 — `setup_display_manager`
 Habilita el gestor de inicio de sesión gráfico (`lightdm`/`sddm`/`gdm`) en el runlevel `default`. No basta con que `setup-desktop` lo haya instalado — hay casos reales donde el DM queda instalado pero no correctamente enganchado al arranque. En vez de una prioridad fija (que podría elegir el DM equivocado en equipos con más de un entorno instalado, como XFCE + Plasma a la vez), reutiliza las banderas `DE_*` del Bloque 4 para preferir el emparejamiento convencional — el mismo que usa el propio `setup-desktop` de Alpine internamente: Plasma → `sddm`, GNOME → `gdm`, cualquier otro (XFCE/MATE/LXQt) → `lightdm` si está instalado. Si hay más de un DM instalado, se advierte explícitamente cuál se eligió y por qué.
 
-### Bloque 26 — `setup_user_groups`
+### Bloque 26 — `setup_update_shortcut`
+**Pregunta primero** (ver sección 5) si se desea un botón en el menú de aplicaciones para actualizar el sistema (Alpine vía `apk` y Flatpak, si está instalado) con un clic. Usa dos piezas del ecosistema freedesktop.org que hacen esto trivialmente multi-entorno:
+
+- **Un único archivo `.desktop`** en `/usr/share/applications/` — el estándar XDG que XFCE, Plasma, GNOME, MATE y LXQt leen por igual, así que el botón aparece en el menú de **todos** los entornos detectados sin lógica separada por DE.
+- **`pkexec`** (parte de `polkit-elogind`, ya instalado en el Bloque 18) para pedir autenticación. Por defecto, sin ninguna regla de polkit adicional, si el usuario pertenece al grupo `wheel` (se agrega automáticamente si hace falta), `pkexec` pide **su propia contraseña** — igual que `doas` — nunca la de root.
+
+El trabajo se divide en dos scripts. `alpine-update-root.sh` corre como root vía `pkexec` y solo imprime a stdout/stderr (`apk update`, `apk upgrade`, y `flatpak update -y` si Flatpak está instalado) — sin nada gráfico en el lado privilegiado, para no depender de que X11/Wayland se reenvíe correctamente a través del salto de privilegios. `alpine-update-launcher.sh` corre como el usuario normal, invoca el anterior, y **canaliza esa salida en vivo** (`| tee -a /var/log/alpine-update.log | zenity --text-info`) hacia una ventana con scroll que se va llenando mientras el proceso corre — así se ve exactamente qué paquetes se actualizaron o si no había ninguno disponible, en vez de solo un mensaje final de "listo". El propio script imprime una línea de resultado al final (éxito o error) como parte de ese mismo texto, así que no hace falta un diálogo de confirmación aparte.
+
+> **Nota técnica:** algunos programas cambian su propio buffering cuando su salida va a una tubería en vez de a una terminal, así que el texto puede llegar en bloques en vez de línea por línea perfectamente fluida — sigue siendo "en vivo" (no hay que esperar a que todo termine para ver algo), solo no es tan suave como una terminal real.
+
+### Bloque 27 — `setup_user_groups`
 Agrega al usuario detectado en el Bloque 5 a los grupos `audio`, `video` y `lpadmin` (necesarios para acceso a hardware de sonido/video y administración de impresoras).
 
-### Bloque 27 — `main`
+### Bloque 28 — `main`
 Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
 
 ## Preguntas interactivas que hará el script
 
-El script se detiene a preguntar en siete puntos, en este orden:
+El script se detiene a preguntar en ocho puntos, en este orden:
 
 1. **Distribución de teclado (Bloque 3):**
    > `¿Deseas configurar el teclado a distribución latinoamericana (latam)?`
@@ -215,6 +229,10 @@ El script se detiene a preguntar en siete puntos, en este orden:
    > `¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?`
    - Se aclara explícitamente que es un empaquetado mantenido por la comunidad de Flathub, no publicado por Google.
 
+8. **Acceso directo de actualización en el menú (Bloque 26):**
+   > `¿Deseas crear un botón en el menú de aplicaciones para actualizar Alpine (y Flatpak, si está instalado) con un clic?`
+   - **`s`** → Crea el botón "Actualizar el sistema", visible en el menú de cualquier entorno detectado, que pide la contraseña del usuario (vía `pkexec`) y muestra la salida de `apk`/`flatpak` **en vivo** en una ventana con scroll — se ve exactamente qué se actualizó o si no había nada pendiente.
+
 Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no". La pregunta de NVIDIA solo aparece si el hardware detectado incluye una tarjeta NVIDIA; las preguntas 6 y 7 solo aparecen si se respondió "sí" a la pregunta 5.
 
 ## Archivos que el script crea o modifica
@@ -233,6 +251,10 @@ Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío)
 | `$HOME/.config/plasma-localerc` | 21 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
 | `/etc/rc.conf` | 21 | Se agrega `unicode="YES"` si no estaba presente |
 | `/var/log/desktop-postinstall.log` | (todos) | Registro completo de la ejecución |
+| `/usr/local/bin/alpine-update-root.sh` | 26 | Script de trabajo (root, vía `pkexec`): `apk update`/`apk upgrade` + `flatpak update`, imprime a stdout/stderr |
+| `/usr/local/bin/alpine-update-launcher.sh` | 26 | Script lanzador (usuario normal): invoca `pkexec` y canaliza su salida en vivo hacia `zenity --text-info` |
+| `/usr/share/applications/alpine-update.desktop` | 26 | Entrada de menú "Actualizar el sistema", visible en todos los DE detectados |
+| `/var/log/alpine-update.log` | 26 | Registro de cada ejecución del botón de actualización (separado del log de instalación) |
 
 ## Servicios OpenRC habilitados
 
@@ -299,4 +321,4 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 ---
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional) y Flatpak (opcional).*
+*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional) y Flatpak (opcional).*
