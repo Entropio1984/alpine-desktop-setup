@@ -1174,15 +1174,16 @@ setup_update_shortcut() {
 #!/bin/sh
 # Ejecutado como root via pkexec. Imprime a stdout/stderr a proposito
 # (sin redirigir a un archivo aqui): el script lanzador es quien captura
-# esta salida en vivo y la muestra en una ventana con scroll.
+# esta salida en vivo y la muestra en pantalla.
 
-# Si el usuario cierra la ventana a mitad del proceso, la tuberia se
-# rompe y el kernel envia SIGPIPE a quien intente escribir en ella. Sin
-# esta linea, esa senal MATA a apk a mitad de una transaccion. Ignorada,
-# apk solo recibe un error de escritura en pantalla y termina su trabajo.
-# Se pone aqui (y no como 'pkexec sh -c "trap..."') para que pkexec siga
-# autorizando ESTE script concreto y no un /bin/sh con comando arbitrario.
-trap '' PIPE
+# Senal de "la contrasena ya se acepto" para el lanzador (ver mas abajo
+# en alpine-update-launcher.sh). El marcador lo CREA el lanzador como el
+# usuario normal antes de invocar pkexec, y aqui solo se ESCRIBE contenido
+# dentro de ese mismo archivo -- root puede escribir en cualquier archivo
+# sin importar el dueno, pero la propiedad del archivo nunca cambia de
+# manos, asi que el lanzador siempre puede borrarlo despues sin toparse
+# con el bit sticky de /tmp (que impide borrar archivos ajenos).
+printf 'ok\n' > /tmp/.alpine-update-authenticated 2>/dev/null || true
 
 echo "===== Actualizando Alpine (apk) ====="
 
@@ -1211,10 +1212,14 @@ if command -v flatpak >/dev/null 2>&1; then
 fi
 
 echo ""
+# La HORA se agrega aqui, no en el lanzador, para que esta linea -- la
+# que el lanzador muestra como mensaje final en la ventana de progreso,
+# ver mas abajo -- ya quede completa por si sola, sin depender de que el
+# lanzador anada nada despues.
 if [ "$apk_status" -eq 0 ]; then
-    echo "Actualizacion de Alpine completada sin errores."
+    echo "Actualizacion completada sin errores. ($(date '+%H:%M:%S'))"
 else
-    echo "La actualizacion de Alpine termino con errores (codigo $apk_status). Revisa el detalle arriba."
+    echo "Actualizacion terminada con errores, codigo $apk_status. ($(date '+%H:%M:%S'))"
 fi
 
 exit "$apk_status"
@@ -1225,12 +1230,20 @@ INNEREOF
     cat > /usr/local/bin/alpine-update-launcher.sh <<'INNEREOF'
 #!/bin/sh
 # Corre como el usuario normal; pide autenticacion via pkexec y muestra
-# la salida EN VIVO (apk + flatpak) en una ventana con scroll, ya en la
-# sesion grafica del usuario -- ningun proceso grafico cruza el limite
-# de privilegios, solo texto plano a traves de la tuberia.
+# el avance en vivo, ya en la sesion grafica del usuario -- ningun
+# proceso grafico cruza el limite de privilegios, solo texto plano a
+# traves de una tuberia.
 LOG="/var/log/alpine-update.log"
+MARKER="/tmp/.alpine-update-authenticated"
 
-# --- 1. Agente de autenticacion polkit --------------------------------
+# El marcador lo crea el lanzador (dueno: el usuario), y alpine-update-root.sh
+# solo ESCRIBE contenido dentro de el una vez autenticado -- nunca lo borra
+# ni lo recrea, asi que la propiedad se mantiene y este script si puede
+# borrarlo despues, pese al bit sticky de /tmp.
+rm -f "$MARKER"
+: > "$MARKER"
+
+# --- Agente de autenticacion polkit ------------------------------------
 # pkexec sin terminal depende de un agente grafico para pedir la
 # contrasena. Se busca uno del propio usuario leyendo /proc directamente
 # (sin depender de las opciones de pgrep, que varian entre versiones).
@@ -1246,9 +1259,6 @@ polkit_agent_running() {
 }
 
 if ! polkit_agent_running; then
-    # La ruta del binario cambia segun la distribucion; se prueban las
-    # conocidas. Si ninguna existe se sigue igual: puede tratarse de un
-    # escritorio con agente integrado (p. ej. GNOME Shell).
     for agent in \
         /usr/libexec/polkit-gnome-authentication-agent-1 \
         /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 \
@@ -1263,28 +1273,69 @@ if ! polkit_agent_running; then
     done
 fi
 
-# --- 2. Proteccion contra el cierre de la ventana ---------------------
-# Si el usuario cierra la ventana a mitad del proceso, zenity deja de
-# leer la tuberia. Ignorando SIGPIPE aqui, 'tee' (que hereda esta
-# configuracion) NO muere: sigue drenando la tuberia y escribiendo el
-# log completo, de modo que apk nunca se bloquea ni se interrumpe. El
-# script raiz ignora la senal tambien, por si pkexec restablece las
-# senales heredadas. Se configura DESPUES de lanzar el agente para no
-# alterar el comportamiento de ese proceso.
-trap '' PIPE
+# NOTA: en versiones anteriores de este bloque, apk quedaba conectado
+# DIRECTAMENTE a Zenity por una tuberia (pkexec | tee | zenity), y cerrar
+# la ventana a mitad del proceso podia matarlo por SIGPIPE -- de ahi un
+# 'trap PIPE' que ya no aparece aqui. Con el diseno actual, apk escribe a
+# un ARCHIVO (linea de abajo), no a una tuberia: Zenity ni siquiera esta
+# conectado a el, asi que ese riesgo desaparecio por diseno, no hace
+# falta blindarse contra el.
 
 {
     echo "===== Actualizacion iniciada: $(date) ====="
     pkexec /usr/local/bin/alpine-update-root.sh
-    echo "===== Actualizacion finalizada: $(date) ====="
-} 2>&1 | tee -a "$LOG" | zenity --text-info \
-    --title="Actualizando el sistema" \
-    --width=700 --height=450 \
-    --font="monospace"
-# El shell espera a que TODA la tuberia termine: si la ventana se cerro
-# antes, esta linea no se alcanza hasta que apk haya acabado de verdad.
+} >> "$LOG" 2>&1 &
+BGPID=$!
 
-# --- 3. Aviso de reinicio ---------------------------------------------
+# --- No mostrar NADA hasta que la contrasena ya se haya aceptado -------
+# pkexec y el dialogo de Zenity arrancarian al mismo tiempo si se
+# encadenaran en una sola tuberia, y la ventana de Zenity a veces tapa al
+# dialogo de contrasena, obligando a buscarlo. Aqui se espera a que
+# alpine-update-root.sh escriba en MARKER (ya autenticado como root) o a
+# que el proceso completo termine antes de eso (p. ej. el usuario
+# cancelo el dialogo de contrasena, o pkexec fallo por falta de agente):
+# en ese caso no se muestra ninguna ventana.
+while [ ! -s "$MARKER" ] && kill -0 "$BGPID" 2>/dev/null; do
+    sleep 0.2
+done
+
+# Se captura el resultado ANTES de borrar el marcador, para no depender
+# de inferirlo despues por otros medios.
+authenticated="no"
+[ -s "$MARKER" ] && authenticated="yes"
+rm -f "$MARKER"
+
+if [ "$authenticated" = "no" ]; then
+    # El proceso ya termino y nunca llego a ejecutar nada como root
+    # (contrasena cancelada o pkexec sin agente): no hay nada que
+    # mostrar.
+    wait "$BGPID" 2>/dev/null
+    exit 0
+fi
+
+# --- Ventana de progreso: solo la linea mas reciente, sin scroll -------
+# En vez de --text-info (que exige desplazarse para ver el avance mas
+# nuevo), se usa --progress --pulsate con una sola linea que se
+# reemplaza sola cada vez -- el mismo patron usado por otros scripts
+# reales para monitorear procesos largos con Zenity. La barra animada
+# transmite "esto sigue corriendo" aunque el texto no cambie por un
+# momento.
+(
+    while kill -0 "$BGPID" 2>/dev/null; do
+        tail -n1 "$LOG" | sed 's/^/# /'
+        sleep 0.3
+    done
+    # Una ultima lectura para no perder la linea final si el proceso
+    # termino justo entre dos sondeos.
+    tail -n1 "$LOG" | sed 's/^/# /'
+) | zenity --progress --pulsate \
+    --title="Actualizando el sistema" \
+    --text="Iniciando..." \
+    --width=420
+
+wait "$BGPID"
+
+# --- Aviso de reinicio ---------------------------------------------
 # modules.order pertenece al PAQUETE del kernel: desaparece al
 # desinstalarse ese kernel, aunque en su directorio queden residuos sin
 # dueno (p. ej. archivos generados por depmod), que harian que un simple
