@@ -1146,7 +1146,11 @@ setup_update_shortcut() {
     # util-linux-misc trae 'script', necesario mas abajo en
     # alpine-update-root.sh para forzar a apk/flatpak a comportarse como
     # si escribieran a una terminal real.
-    install_pkgs zenity util-linux-misc
+    # coreutils trae la version de 'tail' con soporte para --pid, usada
+    # mas abajo para que la ventana de progreso sepa cuando terminar sola
+    # (el 'tail' de BusyBox, el de por defecto en Alpine, no tiene esa
+    # opcion).
+    install_pkgs zenity util-linux-misc coreutils
 
     # pkexec lanzado desde un menu grafico (sin terminal) NECESITA un
     # agente de autenticacion polkit en ejecucion para dibujar la ventana
@@ -1178,66 +1182,76 @@ setup_update_shortcut() {
 # Ejecutado como root via pkexec. Imprime a stdout/stderr a proposito
 # (sin redirigir a un archivo aqui): el script lanzador es quien captura
 # esta salida en vivo y la muestra en pantalla.
+#
+# NOTA DE DISENO: cada linea que este script imprime lleva el prefijo
+# "# " -- es la sintaxis que 'zenity --progress' usa para saber que debe
+# actualizar el texto visible (una linea SIN ese prefijo se ignora por
+# completo). Esto hace que /var/log/alpine-update.log se vea distinto a
+# un log convencional si se abre despues, pero a cambio el lanzador
+# puede alimentar a Zenity con un 'tail -f' directo, sin procesos
+# intermedios que sincronizar. Un diseno anterior usaba una tuberia con
+# nombre (FIFO) para separar el prefijado del resto, y esa version
+# demostro en pruebas ser propensa a quedarse esperando para siempre si
+# el lector y el escritor no llegaban a sincronizarse a tiempo.
 
-# Senal de "la contrasena ya se acepto" para el lanzador (ver mas abajo
-# en alpine-update-launcher.sh). El marcador lo CREA el lanzador como el
-# usuario normal antes de invocar pkexec, y aqui solo se ESCRIBE contenido
-# dentro de ese mismo archivo -- root puede escribir en cualquier archivo
-# sin importar el dueno, pero la propiedad del archivo nunca cambia de
-# manos, asi que el lanzador siempre puede borrarlo despues sin toparse
-# con el bit sticky de /tmp (que impide borrar archivos ajenos).
 printf 'ok\n' > /tmp/.alpine-update-authenticated 2>/dev/null || true
 
 # apk (y flatpak) deciden cuanto detalle imprimir -- y con que buffer --
-# segun si SU salida esta conectada a una terminal real. Aqui no lo esta
-# (escribe a un archivo), asi que sin este paso la ventana de progreso
-# puede quedarse pegada en el primer mensaje hasta que el proceso
-# termine del todo, sin mostrar nada mientras tanto. 'script' (parte de
-# util-linux-misc) hace creer al programa que si hay una terminal, sin
-# que aparezca nada distinto en la pantalla real: el 'typescript' que
-# normalmente guardaria se descarta a /dev/null. Si 'script' no esta
-# disponible por algun motivo, se sigue igual sin el (mejor que fallar).
+# segun si SU salida esta conectada a una terminal real. Aqui no lo esta,
+# asi que 'script' (util-linux-misc) hace creer al programa que si la
+# hay, sin que aparezca nada distinto en la pantalla real (su copia
+# normal se descarta a /dev/null). Si 'script' no esta disponible, se
+# sigue igual sin el.
 if command -v script >/dev/null 2>&1; then
-    run_with_pty() { script -qec "$1" /dev/null; }
+    run_raw() { script -qec "$1" /dev/null; }
 else
-    run_with_pty() { sh -c "$1"; }
+    run_raw() { sh -c "$1"; }
 fi
 
-echo "===== Actualizando Alpine (apk) ====="
+# Antepone "# " a cada linea que llega por su entrada, usando solo
+# comandos internos del shell (read/echo) -- no un programa aparte
+# (como 'sed') que pudiera acumular su propia salida en un buffer antes
+# de escribirla, sobre todo al procesar muchas lineas seguidas.
+prefixed() {
+    while IFS= read -r linea; do
+        echo "# $linea"
+    done
+}
+
+EXIT_TMP="/tmp/.alpine-update-exit"
+
+echo "# ===== Actualizando Alpine (apk) ====="
 
 # Kernels instalados ANTES de actualizar. Se compara /lib/modules (un
 # directorio por kernel instalado) en vez de la salida de 'apk info',
 # cuyo formato cambio entre apk-tools v2 y v3.
 modules_before="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
 
-run_with_pty "apk update --no-progress"
-run_with_pty "apk upgrade --no-progress"
-apk_status=$?
+run_raw "apk update --no-progress; echo \$? > $EXIT_TMP" | prefixed
+run_raw "apk upgrade --no-progress; echo \$? > $EXIT_TMP" | prefixed
+apk_status="$(cat "$EXIT_TMP" 2>/dev/null || echo 1)"
+rm -f "$EXIT_TMP"
 
 modules_after="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
 if [ -n "$modules_after" ] && [ "$modules_before" != "$modules_after" ]; then
-    echo ""
-    echo "*** SE ACTUALIZO EL KERNEL ***"
-    echo "    Antes:   $modules_before"
-    echo "    Despues: $modules_after"
-    echo "    Es necesario REINICIAR el equipo para empezar a usarlo."
+    echo "# "
+    echo "# *** SE ACTUALIZO EL KERNEL ***"
+    echo "# Antes:   $modules_before"
+    echo "# Despues: $modules_after"
+    echo "# Es necesario REINICIAR el equipo para empezar a usarlo."
 fi
 
 if command -v flatpak >/dev/null 2>&1; then
-    echo ""
-    echo "===== Actualizando aplicaciones Flatpak ====="
-    run_with_pty "flatpak update -y"
+    echo "# "
+    echo "# ===== Actualizando aplicaciones Flatpak ====="
+    run_raw "flatpak update -y" | prefixed
 fi
 
-echo ""
-# La HORA se agrega aqui, no en el lanzador, para que esta linea -- la
-# que el lanzador muestra como mensaje final en la ventana de progreso,
-# ver mas abajo -- ya quede completa por si sola, sin depender de que el
-# lanzador anada nada despues.
+echo "# "
 if [ "$apk_status" -eq 0 ]; then
-    echo "Actualizacion completada sin errores. ($(date '+%H:%M:%S'))"
+    echo "# Actualizacion completada sin errores. ($(date '+%H:%M:%S'))"
 else
-    echo "Actualizacion terminada con errores, codigo $apk_status. ($(date '+%H:%M:%S'))"
+    echo "# Actualizacion terminada con errores, codigo $apk_status. ($(date '+%H:%M:%S'))"
 fi
 
 exit "$apk_status"
@@ -1334,24 +1348,37 @@ fi
 # --- Ventana de progreso: solo la linea mas reciente, sin scroll -------
 # En vez de --text-info (que exige desplazarse para ver el avance mas
 # nuevo), se usa --progress --pulsate con una sola linea que se
-# reemplaza sola cada vez -- el mismo patron usado por otros scripts
-# reales para monitorear procesos largos con Zenity. La barra animada
-# transmite "esto sigue corriendo" aunque el texto no cambie por un
-# momento.
-(
-    while kill -0 "$BGPID" 2>/dev/null; do
-        tail -n1 "$LOG" | sed 's/^/# /'
-        sleep 0.3
-    done
-    # Una ultima lectura para no perder la linea final si el proceso
-    # termino justo entre dos sondeos.
-    tail -n1 "$LOG" | sed 's/^/# /'
-) | zenity --progress --pulsate \
+# reemplaza sola cada vez. La barra animada transmite "esto sigue
+# corriendo" aunque el texto no cambie por un momento.
+#
+# CORRECCION: tres disenos anteriores de este bloque resultaron
+# fragiles o incompletos. El primero sondeaba el log dependiendo de
+# 'kill -0 "$BGPID"' en cada vuelta; si esa deteccion fallaba, la
+# ventana quedaba congelada en el primer mensaje. El segundo uso una
+# tuberia con nombre (FIFO) para separar el prefijado "# " del resto, y
+# demostro en pruebas quedarse esperando para siempre si el lector y el
+# escritor no llegaban a sincronizarse a tiempo. El tercero (con
+# alpine-update-root.sh ya escribiendo el prefijo "# " directamente)
+# arreglo el avance en vivo, pero dejaba 'tail -f' corriendo para
+# siempre a proposito -- lo cual resulto ser un error, no un costo
+# aceptable: sin que la tuberia hacia Zenity reciba EOF, la barra
+# --pulsate nunca deja de animarse y el boton para cerrar la ventana
+# nunca se habilita, aunque el ultimo mensaje ya diga que todo termino.
+#
+# Ahora se usa 'tail --pid="$BGPID"' (coreutils, instalado junto con
+# zenity mas arriba -- el 'tail' de BusyBox no soporta esta opcion):
+# tail se detiene SOLO, automaticamente, en cuanto el trabajo de fondo
+# ya no existe, sin necesidad de rastrear ni matar ningun proceso a
+# mano. Eso le da a Zenity el EOF que estaba esperando para dejar de
+# animarse y habilitar el cierre de la ventana.
+tail -n1 -f --pid="$BGPID" "$LOG" | zenity --progress --pulsate \
     --title="Actualizando el sistema" \
     --text="Iniciando..." \
-    --width=420
+    --width=420 &
+ZPID=$!
 
 wait "$BGPID"
+wait "$ZPID" 2>/dev/null
 
 # --- Aviso de reinicio ---------------------------------------------
 # modules.order pertenece al PAQUETE del kernel: desaparece al
