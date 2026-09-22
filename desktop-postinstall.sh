@@ -1143,7 +1143,10 @@ setup_update_shortcut() {
         return 0
     fi
 
-    install_pkgs zenity
+    # util-linux-misc trae 'script', necesario mas abajo en
+    # alpine-update-root.sh para forzar a apk/flatpak a comportarse como
+    # si escribieran a una terminal real.
+    install_pkgs zenity util-linux-misc
 
     # pkexec lanzado desde un menu grafico (sin terminal) NECESITA un
     # agente de autenticacion polkit en ejecucion para dibujar la ventana
@@ -1185,6 +1188,21 @@ setup_update_shortcut() {
 # con el bit sticky de /tmp (que impide borrar archivos ajenos).
 printf 'ok\n' > /tmp/.alpine-update-authenticated 2>/dev/null || true
 
+# apk (y flatpak) deciden cuanto detalle imprimir -- y con que buffer --
+# segun si SU salida esta conectada a una terminal real. Aqui no lo esta
+# (escribe a un archivo), asi que sin este paso la ventana de progreso
+# puede quedarse pegada en el primer mensaje hasta que el proceso
+# termine del todo, sin mostrar nada mientras tanto. 'script' (parte de
+# util-linux-misc) hace creer al programa que si hay una terminal, sin
+# que aparezca nada distinto en la pantalla real: el 'typescript' que
+# normalmente guardaria se descarta a /dev/null. Si 'script' no esta
+# disponible por algun motivo, se sigue igual sin el (mejor que fallar).
+if command -v script >/dev/null 2>&1; then
+    run_with_pty() { script -qec "$1" /dev/null; }
+else
+    run_with_pty() { sh -c "$1"; }
+fi
+
 echo "===== Actualizando Alpine (apk) ====="
 
 # Kernels instalados ANTES de actualizar. Se compara /lib/modules (un
@@ -1192,8 +1210,8 @@ echo "===== Actualizando Alpine (apk) ====="
 # cuyo formato cambio entre apk-tools v2 y v3.
 modules_before="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
 
-apk update
-apk upgrade
+run_with_pty "apk update --no-progress"
+run_with_pty "apk upgrade --no-progress"
 apk_status=$?
 
 modules_after="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
@@ -1208,7 +1226,7 @@ fi
 if command -v flatpak >/dev/null 2>&1; then
     echo ""
     echo "===== Actualizando aplicaciones Flatpak ====="
-    flatpak update -y
+    run_with_pty "flatpak update -y"
 fi
 
 echo ""
