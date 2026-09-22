@@ -537,7 +537,84 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 13: Detección de CPU y microcódigo
+# BLOQUE 13: Dispositivos sin controlador y capas de compatibilidad
+# ------------------------------------------------------------------------------
+# Hasta aqui el script instalo firmware para el hardware que reconocio.
+# Este bloque cierra el ciclo preguntando algo distinto: ¿quedo algun
+# dispositivo SIN ningun driver del kernel enlazado? Ese es justamente
+# el sintoma de hardware que solo funciona con controladores propietarios
+# o fuera del arbol del kernel.
+#
+# En Alpine hay DOS caminos, y no son intercambiables:
+#
+#   1. Modulos de KERNEL (NVIDIA .ko, broadcom "wl", varios Realtek USB):
+#      se manejan con AKMS (Alpine Kernel Module Support), el equivalente
+#      oficial de DKMS: compila el modulo desde fuente y lo RECONSTRUYE
+#      automaticamente en cada actualizacion de kernel. Alpine empaqueta
+#      varios de estos como paquetes "*-src" (rtl8812au-src,
+#      rtl88x2bu-src, rtw89-src...), casi todos en el repositorio
+#      "testing", que NO viene habilitado por defecto.
+#
+#   2. Binarios de ESPACIO DE USUARIO compilados contra glibc (plugins de
+#      impresora, DRM Widevine): se manejan con "gcompat", una capa de
+#      compatibilidad glibc sobre musl. gcompat NO sirve para modulos de
+#      kernel: son mundos distintos.
+#
+# El script NO instala automaticamente modulos propietarios ni habilita
+# "testing" por su cuenta: habilitar un repositorio inestable a nivel de
+# sistema puede arrastrar paquetes rotos al resto de la instalacion, y
+# compilar un modulo equivocado puede dejar el equipo sin red o sin
+# video. Se reporta el diagnostico y se deja la decision al usuario.
+check_unclaimed_devices() {
+    log_info "== Verificando dispositivos sin controlador cargado =="
+
+    if ! command -v lspci >/dev/null 2>&1; then
+        log_warn "'lspci' no disponible; se omite esta verificacion."
+        return 0
+    fi
+
+    # "lspci -k" agrega la linea "Kernel driver in use:" a cada
+    # dispositivo que SI tiene driver enlazado. Se listan los que no la
+    # tienen, filtrando a las clases que nos importan (red, video,
+    # audio): muchos dispositivos como los host bridges no llevan driver
+    # y eso es completamente normal, no un problema.
+    unclaimed="$(lspci -k 2>/dev/null | awk '
+        /^[0-9a-f][0-9a-f]:/ {
+            if (dev != "" && claimed == 0 && dev ~ /Network|Ethernet|VGA|3D controller|Audio device|Wireless/) print dev
+            dev = $0; claimed = 0; next
+        }
+        /Kernel driver in use:/ { claimed = 1 }
+        END {
+            if (dev != "" && claimed == 0 && dev ~ /Network|Ethernet|VGA|3D controller|Audio device|Wireless/) print dev
+        }
+    ' || true)"
+
+    if [ -z "$unclaimed" ]; then
+        log_ok "Todos los dispositivos de red, video y audio tienen un controlador del kernel enlazado."
+    else
+        log_warn "Los siguientes dispositivos NO tienen ningun controlador del kernel enlazado:"
+        log_warn "$unclaimed"
+        log_info "Esto suele indicar hardware que requiere un controlador propietario o fuera del arbol del kernel."
+        log_info "Camino recomendado en Alpine: AKMS (equivalente oficial de DKMS), que compila el modulo y lo reconstruye solo en cada actualizacion de kernel."
+        log_info "  1) apk add akms linux-lts-dev linux-headers"
+        log_info "  2) Busca si existe un paquete de fuentes para tu chip: apk search -- -src | grep -i <tu_chip>"
+        log_info "  3) Varios viven en el repositorio 'testing' (no habilitado por defecto). Se instalan con la sintaxis pkg@testing tras agregar el repo con etiqueta, en vez de habilitar 'testing' para todo el sistema."
+        log_info "Nota: los drivers NVIDIA propietarios no estan disponibles en Alpine por la incompatibilidad con musl libc; para GPU NVIDIA la unica via es nouveau."
+    fi
+
+    # gcompat: util para binarios de espacio de usuario compilados contra
+    # glibc (plugins de impresoras HP, DRM Widevine de Netflix, etc.).
+    # No tiene relacion con los modulos de kernel de arriba.
+    if ask_yes_no "¿Deseas instalar 'gcompat' (capa de compatibilidad glibc para programas propietarios de espacio de usuario, p.ej. plugins de impresora o DRM de video)?"; then
+        install_pkgs gcompat
+        log_ok "gcompat instalado. Los binarios compilados contra glibc pueden ejecutarse normalmente."
+    else
+        log_info "Se omite gcompat."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 14: Detección de CPU y microcódigo
 # ------------------------------------------------------------------------------
 CPU_VENDOR=""
 
@@ -551,6 +628,36 @@ detect_cpu() {
         CPU_VENDOR="desconocido"
     fi
     log_ok "CPU clasificada como: $CPU_VENDOR"
+
+    # Nivel de microarquitectura x86-64 (v1..v4). SOLO INFORMATIVO: la
+    # optimizacion por nivel (lo que hace CachyOS) ocurre al COMPILAR los
+    # paquetes, no despues de instalarlos. Alpine distribuye un unico
+    # juego de paquetes x86_64 para el nivel base, asi que este dato no
+    # cambia nada de lo que se instala; sirve para saber que esperar.
+    # Se lee /proc/cpuinfo porque el metodo habitual
+    # (/lib/ld-linux-x86-64.so.2 --help) es propio de glibc y no existe
+    # en musl.
+    if [ "$(uname -m)" = "x86_64" ]; then
+        CPU_FLAGS=" $(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null | cut -d: -f2) "
+        CPU_LEVEL="x86-64-v1"
+        cpu_has_flags cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 && CPU_LEVEL="x86-64-v2"
+        [ "$CPU_LEVEL" = "x86-64-v2" ] && cpu_has_flags avx avx2 bmi1 bmi2 f16c fma abm movbe xsave && CPU_LEVEL="x86-64-v3"
+        [ "$CPU_LEVEL" = "x86-64-v3" ] && cpu_has_flags avx512f avx512bw avx512cd avx512dq avx512vl && CPU_LEVEL="x86-64-v4"
+        log_info "Nivel de microarquitectura detectado: $CPU_LEVEL (informativo; Alpine usa paquetes compilados para el nivel base)."
+    fi
+}
+
+# Devuelve 0 si TODOS los flags pedidos estan en $CPU_FLAGS. Usa 'case'
+# (coincidencia de patrones del propio shell) en vez de invocar grep por
+# cada flag.
+cpu_has_flags() {
+    for f in "$@"; do
+        case "$CPU_FLAGS" in
+            *" $f "*) ;;
+            *) return 1 ;;
+        esac
+    done
+    return 0
 }
 
 install_microcode() {
@@ -571,7 +678,7 @@ install_microcode() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 14: zram (memoria comprimida al 100% de la RAM física)
+# BLOQUE 15: zram (memoria comprimida al 100% de la RAM física)
 # ------------------------------------------------------------------------------
 setup_zram() {
     log_info "== Configurando zram =="
@@ -604,7 +711,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 15: EarlyOOM
+# BLOQUE 16: EarlyOOM
 # ------------------------------------------------------------------------------
 setup_earlyoom() {
     log_info "== Configurando EarlyOOM =="
@@ -614,7 +721,7 @@ setup_earlyoom() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 16: Gestión de energía básica (ACPI)
+# BLOQUE 17: Gestión de energía básica (ACPI)
 # ------------------------------------------------------------------------------
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
@@ -625,7 +732,7 @@ setup_power() {
 
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# BLOQUE 17: Optimizacion de discos duros mecanicos (HDD)
+# BLOQUE 18: Optimizacion de discos duros mecanicos (HDD)
 # ------------------------------------------------------------------------------
 # Equipos "revividos" suelen tener disco mecanico, no SSD. BFQ prioriza
 # que un proceso con mucha carga de E/S (una actualizacion de apk, copiar
@@ -713,7 +820,7 @@ EOF
     fi
 }
 
-# BLOQUE 18: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
+# BLOQUE 19: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
 # ------------------------------------------------------------------------------
 # El montaje real lo hace udisks2 (dbus-activated, no requiere su propio
 # servicio OpenRC). Para que un usuario normal (no root) pueda montar sin
@@ -770,7 +877,7 @@ setup_usb_automount() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 19: Soporte de impresión (CUPS)
+# BLOQUE 20: Soporte de impresión (CUPS)
 # ------------------------------------------------------------------------------
 setup_printing() {
     log_info "== Soporte de impresión (CUPS) =="
@@ -787,7 +894,7 @@ setup_printing() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 20: Backends de compresión
+# BLOQUE 21: Backends de compresión
 # ------------------------------------------------------------------------------
 # NOTA: "unrar" NO existe como paquete en Alpine (ni en main ni en
 # community, verificado en v3.24) - es de licencia no-libre y Alpine no
@@ -803,7 +910,7 @@ install_archive_tools() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 21: Idioma español — sistema, XFCE y propagación global a Plasma
+# BLOQUE 22: Idioma español — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
 setup_locale_es() {
     log_info "== Configurando idioma español para el sistema =="
@@ -870,7 +977,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 22: Tipografías base (antes de LibreOffice)
+# BLOQUE 23: Tipografías base (antes de LibreOffice)
 # ------------------------------------------------------------------------------
 install_fonts() {
     log_info "== Instalando tipografías base =="
@@ -879,7 +986,7 @@ install_fonts() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 23: LibreOffice + paquete de idioma español
+# BLOQUE 24: LibreOffice + paquete de idioma español
 # ------------------------------------------------------------------------------
 install_libreoffice() {
     log_info "== LibreOffice =="
@@ -895,7 +1002,7 @@ install_libreoffice() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 24: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
+# BLOQUE 25: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
 # ------------------------------------------------------------------------------
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
@@ -960,7 +1067,7 @@ setup_flatpak() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 25: Habilitar el Gestor de Inicio de Sesión (Display Manager)
+# BLOQUE 26: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
 # No basta con que setup-desktop lo haya dejado instalado: hay reportes
 # reales de lightdm/sddm fallando al no quedar correctamente enganchados
@@ -1006,7 +1113,7 @@ setup_display_manager() {
 
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# BLOQUE 26: Acceso directo de actualizacion en el menu de aplicaciones
+# BLOQUE 27: Acceso directo de actualizacion en el menu de aplicaciones
 # ------------------------------------------------------------------------------
 # Los archivos .desktop siguen el estandar XDG Desktop Entry: un unico
 # archivo en /usr/share/applications/ aparece automaticamente en el menu
@@ -1038,6 +1145,23 @@ setup_update_shortcut() {
 
     install_pkgs zenity
 
+    # pkexec lanzado desde un menu grafico (sin terminal) NECESITA un
+    # agente de autenticacion polkit en ejecucion para dibujar la ventana
+    # de contrasena. Sin el, pkexec falla con "No authentication agent
+    # found" y la actualizacion nunca empieza. Plasma (polkit-kde-agent),
+    # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 19)
+    # ya traen el suyo; XFCE y MATE se cubren aqui. Ademas, el lanzador
+    # comprueba en cada ejecucion que el agente este CORRIENDO y lo
+    # inicia si hace falta: instalar el paquete no garantiza que arranque,
+    # porque el autoarranque de polkit-gnome suele estar restringido a
+    # ciertos escritorios segun la distribucion.
+    if [ "$DE_XFCE" = "yes" ]; then
+        install_pkgs polkit-gnome
+    fi
+    if [ "$DE_MATE" = "yes" ]; then
+        install_pkgs mate-polkit
+    fi
+
     if [ -z "$TARGET_USER" ]; then
         log_warn "No se determino un usuario estandar; el acceso directo se creara igual, pero verifica manualmente que el usuario este en el grupo 'wheel' para que pkexec pida solo su propia contrasena."
     else
@@ -1051,10 +1175,34 @@ setup_update_shortcut() {
 # Ejecutado como root via pkexec. Imprime a stdout/stderr a proposito
 # (sin redirigir a un archivo aqui): el script lanzador es quien captura
 # esta salida en vivo y la muestra en una ventana con scroll.
+
+# Si el usuario cierra la ventana a mitad del proceso, la tuberia se
+# rompe y el kernel envia SIGPIPE a quien intente escribir en ella. Sin
+# esta linea, esa senal MATA a apk a mitad de una transaccion. Ignorada,
+# apk solo recibe un error de escritura en pantalla y termina su trabajo.
+# Se pone aqui (y no como 'pkexec sh -c "trap..."') para que pkexec siga
+# autorizando ESTE script concreto y no un /bin/sh con comando arbitrario.
+trap '' PIPE
+
 echo "===== Actualizando Alpine (apk) ====="
+
+# Kernels instalados ANTES de actualizar. Se compara /lib/modules (un
+# directorio por kernel instalado) en vez de la salida de 'apk info',
+# cuyo formato cambio entre apk-tools v2 y v3.
+modules_before="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
+
 apk update
 apk upgrade
 apk_status=$?
+
+modules_after="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
+if [ -n "$modules_after" ] && [ "$modules_before" != "$modules_after" ]; then
+    echo ""
+    echo "*** SE ACTUALIZO EL KERNEL ***"
+    echo "    Antes:   $modules_before"
+    echo "    Despues: $modules_after"
+    echo "    Es necesario REINICIAR el equipo para empezar a usarlo."
+fi
 
 if command -v flatpak >/dev/null 2>&1; then
     echo ""
@@ -1082,6 +1230,49 @@ INNEREOF
 # de privilegios, solo texto plano a traves de la tuberia.
 LOG="/var/log/alpine-update.log"
 
+# --- 1. Agente de autenticacion polkit --------------------------------
+# pkexec sin terminal depende de un agente grafico para pedir la
+# contrasena. Se busca uno del propio usuario leyendo /proc directamente
+# (sin depender de las opciones de pgrep, que varian entre versiones).
+polkit_agent_running() {
+    for c in /proc/[0-9]*/comm; do
+        [ -O "$c" ] || continue
+        read -r name < "$c" 2>/dev/null || continue
+        case "$name" in
+            polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+if ! polkit_agent_running; then
+    # La ruta del binario cambia segun la distribucion; se prueban las
+    # conocidas. Si ninguna existe se sigue igual: puede tratarse de un
+    # escritorio con agente integrado (p. ej. GNOME Shell).
+    for agent in \
+        /usr/libexec/polkit-gnome-authentication-agent-1 \
+        /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 \
+        /usr/libexec/polkit-mate-authentication-agent-1 \
+        /usr/lib/mate-polkit/polkit-mate-authentication-agent-1
+    do
+        if [ -x "$agent" ]; then
+            "$agent" >/dev/null 2>&1 &
+            sleep 1
+            break
+        fi
+    done
+fi
+
+# --- 2. Proteccion contra el cierre de la ventana ---------------------
+# Si el usuario cierra la ventana a mitad del proceso, zenity deja de
+# leer la tuberia. Ignorando SIGPIPE aqui, 'tee' (que hereda esta
+# configuracion) NO muere: sigue drenando la tuberia y escribiendo el
+# log completo, de modo que apk nunca se bloquea ni se interrumpe. El
+# script raiz ignora la senal tambien, por si pkexec restablece las
+# senales heredadas. Se configura DESPUES de lanzar el agente para no
+# alterar el comportamiento de ese proceso.
+trap '' PIPE
+
 {
     echo "===== Actualizacion iniciada: $(date) ====="
     pkexec /usr/local/bin/alpine-update-root.sh
@@ -1090,9 +1281,40 @@ LOG="/var/log/alpine-update.log"
     --title="Actualizando el sistema" \
     --width=700 --height=450 \
     --font="monospace"
+# El shell espera a que TODA la tuberia termine: si la ventana se cerro
+# antes, esta linea no se alcanza hasta que apk haya acabado de verdad.
+
+# --- 3. Aviso de reinicio ---------------------------------------------
+# modules.order pertenece al PAQUETE del kernel: desaparece al
+# desinstalarse ese kernel, aunque en su directorio queden residuos sin
+# dueno (p. ej. archivos generados por depmod), que harian que un simple
+# "existe el directorio?" nunca detectara la actualizacion. Si el
+# sistema no usa modules.order, se recurre a comprobar el directorio.
+running="$(uname -r)"
+reboot_needed="no"
+if ls /lib/modules/*/modules.order >/dev/null 2>&1; then
+    [ -f "/lib/modules/$running/modules.order" ] || reboot_needed="yes"
+else
+    [ -d "/lib/modules/$running" ] || reboot_needed="yes"
+fi
+
+if [ "$reboot_needed" = "yes" ]; then
+    zenity --warning --title="Reinicio necesario" \
+        --text="Se instalo una version nueva del kernel (el nucleo del sistema).\n\nReinicia el equipo cuando puedas para empezar a usarla." \
+        --width=380 2>/dev/null
+fi
 INNEREOF
     chmod 755 /usr/local/bin/alpine-update-launcher.sh
     chown root:root /usr/local/bin/alpine-update-launcher.sh
+
+    # CORRECCION: el lanzador corre como el usuario normal, que NO puede
+    # escribir en /var/log. Sin esto, 'tee -a' fallaba en silencio: la
+    # ventana funcionaba, pero el log nunca se guardaba. Se crea el
+    # archivo perteneciente al grupo 'wheel' (al que el usuario ya se
+    # agrego arriba) con permiso de escritura para el grupo.
+    touch /var/log/alpine-update.log
+    chown root:wheel /var/log/alpine-update.log
+    chmod 664 /var/log/alpine-update.log
 
     mkdir -p /usr/share/applications
     cat > /usr/share/applications/alpine-update.desktop <<'INNEREOF'
@@ -1111,7 +1333,7 @@ INNEREOF
     log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
 }
 
-# BLOQUE 27: Permisos de grupo para Audio/Video/Impresión
+# BLOQUE 28: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
     log_info "== Configurando permisos de grupo =="
@@ -1127,7 +1349,7 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 28: Función principal
+# BLOQUE 29: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
@@ -1144,6 +1366,7 @@ main() {
     install_bluetooth
     detect_hardware
     install_drivers
+    check_unclaimed_devices
     detect_cpu
     install_microcode
     setup_zram

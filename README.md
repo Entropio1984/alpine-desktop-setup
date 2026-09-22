@@ -63,7 +63,7 @@ Tres principios guían todas las decisiones de diseño:
 
 ## Recorrido bloque por bloque
 
-El script se organiza en 28 bloques, ejecutados en este orden por la función `main()`:
+El script se organiza en 29 bloques, ejecutados en este orden por la función `main()`:
 
 ### Bloque 1 — `check_root`
 Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
@@ -125,39 +125,64 @@ Si no se detecta ninguna GPU reconocida, `mesa-dri-gallium` ya deja software ren
 
 > **Por qué no se instala el paquete genérico `linux-firmware`:** se verificó directamente en el repositorio de Alpine que ese paquete tiene **102 dependencias** — arrastra casi todos sus subpaquetes de fabricante por defecto. Instalarlo anularía todo el trabajo de selección específica de este bloque y de los Bloques 8/10 (WiFi/Bluetooth), sumando cientos de MB de firmware irrelevante. Por eso el script instala únicamente los subpaquetes que corresponden al hardware realmente detectado.
 
-### Bloque 13 — `detect_cpu` / `install_microcode`
+### Bloque 13 — `check_unclaimed_devices`
+Cierra el ciclo de los bloques de firmware anteriores preguntando algo distinto: **¿quedó algún dispositivo sin ningún controlador del kernel enlazado?** Usa `lspci -k`, que añade una línea `Kernel driver in use:` a cada dispositivo que sí tiene driver; los que no la tienen se reportan (filtrando a clases de red, video y audio — muchos dispositivos como los *host bridges* legítimamente no llevan driver, y eso es normal). Un dispositivo de red o video sin driver es exactamente el síntoma de hardware que solo funciona con controladores propietarios o fuera del árbol del kernel.
+
+En Alpine hay **dos caminos distintos y no intercambiables** para esos casos, y el bloque los explica en el log:
+
+| Tipo | Ejemplos | Mecanismo |
+|---|---|---|
+| Módulo de **kernel** | NVIDIA `.ko`, Broadcom `wl`, varios Realtek USB | **AKMS** (Alpine Kernel Module Support) — el equivalente oficial de DKMS: compila el módulo desde fuente y lo **reconstruye solo** en cada actualización de kernel. Alpine empaqueta varios como `*-src` (`rtl8812au-src`, `rtl88x2bu-src`, `rtw89-src`…), casi todos en el repositorio `testing` |
+| Binario de **espacio de usuario** (glibc) | Plugins de impresora, DRM Widevine | **`gcompat`** — capa de compatibilidad glibc sobre musl. **No** sirve para módulos de kernel |
+
+El bloque **pregunta** (ver sección 5) si instalar `gcompat`, pero **no instala módulos propietarios ni habilita `testing` por su cuenta**: habilitar un repositorio inestable a nivel de sistema puede arrastrar paquetes rotos al resto de la instalación, y compilar un módulo equivocado puede dejar el equipo sin red o sin video. Reporta el diagnóstico con los comandos exactos y deja la decisión al usuario.
+
+> **Sobre NVIDIA:** los drivers propietarios de NVIDIA no están disponibles en Alpine por la incompatibilidad con musl libc — AKMS no cambia eso. Para GPU NVIDIA la única vía sigue siendo `nouveau` (ver Bloque 12).
+
+### Bloque 14 — `detect_cpu` / `install_microcode`
 Lee `/proc/cpuinfo` para clasificar el fabricante (`GenuineIntel`/`AuthenticAMD`). Para Intel instala `intel-ucode`. **Para AMD no existe un paquete `amd-ucode` en Alpine** — el microcódigo viaja dentro de `linux-firmware-amd`, que es lo que se instala en su lugar. En ambos casos se advierte que el paquete instalado no garantiza por sí solo que el microcódigo se cargue en el arranque (Alpine no lo integra automáticamente al initramfs); verificar con `dmesg | grep -i microcode` tras reiniciar.
 
-### Bloque 14 — `setup_zram`
+También detecta el **nivel de microarquitectura x86-64** (v1 a v4) a partir de los *flags* de `/proc/cpuinfo` — el método habitual (`/lib/ld-linux-x86-64.so.2 --help`) es propio de glibc y no existe en musl. **Es un dato solo informativo:** la optimización por nivel que hacen distribuciones como CachyOS ocurre al *compilar* los paquetes, no después de instalarlos, y Alpine distribuye un único juego de paquetes x86_64 para el nivel base. Saber el nivel sirve para entender qué rendimiento esperar, no cambia nada de lo que se instala.
+
+| Nivel | Requisitos clave | CPUs típicas |
+|---|---|---|
+| v1 | SSE2 (base de x86-64) | Athlon 64, Core 2 tempranos |
+| v2 | SSE4.2, POPCNT, SSSE3 | Nehalem, Sandy/Ivy Bridge, Bulldozer (~2008–2012) |
+| v3 | AVX2, FMA, BMI1/2 | Haswell (2013) en adelante, Zen |
+| v4 | AVX-512 | Skylake-X, Zen 4/5 |
+
+> Dato relevante para hardware antiguo: los repositorios optimizados de CachyOS existen solo para v3, v4 y Zen 4; en CPUs v2 (como un Core i3 M 370 o un i7-2630QM), CachyOS instala sus paquetes genéricos. Es decir, en esa clase de equipos la ventaja de CachyOS por nivel de CPU no aplica, y Alpine no pierde nada en ese aspecto.
+
+### Bloque 15 — `setup_zram`
 Calcula la RAM física total (`/proc/meminfo`) y configura `zram-init` con un dispositivo swap comprimido (algoritmo `zstd`) de tamaño igual al 100% de esa RAM. Ajusta también `vm.swappiness=100` y `vm.page-cluster=0` en `/etc/sysctl.conf` (valores recomendados para swap sobre zram). Pensado para exprimir el máximo de memoria efectiva en equipos con poca RAM física.
 
-### Bloque 15 — `setup_earlyoom`
+### Bloque 16 — `setup_earlyoom`
 Instala `earlyoom` (+ su subpaquete `earlyoom-openrc`, necesario para que exista el script de arranque) y lo habilita. `earlyoom` monitorea la memoria en segundo plano y cierra el proceso responsable (ej. una pestaña de Chrome) segundos antes de que el sistema se quede sin memoria y se congele por completo.
 
-### Bloque 16 — `setup_power`
+### Bloque 17 — `setup_power`
 Instala y habilita `acpid` (+ `acpid-openrc`), para que Alpine reaccione a eventos físicos: cerrar la tapa de un laptop, presionar el botón de encendido, etc.
 
-### Bloque 17 — `optimize_hdd_storage`
+### Bloque 18 — `optimize_hdd_storage`
 Recorre `/sys/block/*/queue/rotational` para identificar discos **mecánicos** (excluyendo `loop`/`ram`/`zram`). Si encuentra alguno, configura el planificador de E/S vía una regla `udev` persistente (`/etc/udev/rules.d/60-ioscheduler.rules`): prioriza **BFQ** (diseñado para que un proceso con mucha carga de E/S no congele el resto del escritorio — la misma filosofía que `earlyoom` aplica a la memoria), verificando en tiempo de ejecución si el kernel actual lo tiene disponible y cayendo a `mq-deadline` si no.
 
 La regla de `udev` filtra **por atributo físico** (`rotational==1`), no por nombre de disco — esto es clave en configuraciones mixtas (ej. sistema instalado en SSD con un HDD auxiliar solo para datos): el SSD nunca recibe esta regla sin importar qué letra de disco (`sda`/`sdb`) le toque en un arranque dado, ya que el orden de asignación no está garantizado entre reinicios. El bloque también identifica cuál disco es la raíz del sistema (usando `mount`, sin depender de `findmnt`/`lsblk` para no sumar una dependencia nueva) y ajusta la sugerencia de `noatime` en consecuencia: si el disco mecánico detectado **no** es la raíz (es un disco de datos auxiliar), la sugerencia es más directa, ya que modificar `/etc/fstab` para una partición no-raíz tiene mucho menor riesgo que tocar la partición de arranque.
 
 **No modifica `/etc/fstab`** automáticamente en ningún caso — es un archivo crítico para el arranque y se deja como sugerencia manual en el log, no como cambio automático.
 
-### Bloque 18 — `setup_usb_automount`
+### Bloque 19 — `setup_usb_automount`
 Configura el montaje automático de memorias USB al conectarlas. Es el bloque con más piezas coordinadas:
 1. **`dbus`** (+ servicio `dbus`) — instalado primero porque todo lo demás en este bloque depende del bus de mensajes del sistema.
 2. **`udisks2`** — hace el montaje real. No tiene servicio OpenRC propio: se activa bajo demanda vía D-Bus.
 3. **`elogind` + `polkit-elogind`** (servicios `elogind` y `polkit`, nombres distintos a los paquetes) — autorización para que un usuario normal (no root) pueda montar sin contraseña, basada en detección de **sesión activa** (no en pertenencia a grupos Unix — ver [Limitaciones conocidas](#limitaciones-conocidas)).
 4. **Disparador según entorno:** `gvfs` + `thunar-volman` para XFCE; `gvfs` para GNOME/MATE; `gvfs` + `lxqt-policykit` para LXQt. Plasma no necesita nada adicional aquí porque Dolphin usa KIO/Solid + `udisks2` directamente.
 
-### Bloque 19 — `setup_printing`
+### Bloque 20 — `setup_printing`
 **Pregunta primero** (ver sección 5) si se desea soporte de impresión — no todo equipo "revivido" tiene o necesita una impresora. Si se acepta, instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
 
-### Bloque 20 — `install_archive_tools`
+### Bloque 21 — `install_archive_tools`
 Instala `zip`, `unzip`, `p7zip`. **`unrar` no se instala porque no existe como paquete en Alpine** (licencia no-libre, verificado en v3.24) — el script lo indica explícitamente en el log en vez de intentarlo y fallar en silencio, y apunta al binario oficial de `rarlab.com/download.htm` como única vía si de verdad se necesita soporte RAR (no automatizado por el script: cada versión de RARLAB cambia el nombre del archivo, y una URL fija quedaría rota con el tiempo).
 
-### Bloque 21 — `setup_locale_es`
+### Bloque 22 — `setup_locale_es`
 Configura español en tres capas independientes, porque ningún mecanismo por sí solo cubre todos los casos:
 1. **`/etc/profile.d/lang-es.sh`** — variables `LANG`/`LC_ALL`/`LC_MESSAGES=es_ES.UTF-8` para shells de login tradicionales.
 2. **`/etc/environment`** — las mismas variables, leídas por PAM (`pam_env`) en la mayoría de gestores de sesión gráficos (SDDM incluido), que no siempre pasan por `/etc/profile.d`.
@@ -167,37 +192,47 @@ También instala `musl-locales`/`musl-locales-lang` y el metapaquete `lang`, que
 
 > **Nota:** musl (la libc de Alpine) no tiene un locale `es_MX.UTF-8` — solo un conjunto reducido, entre ellos `es_ES.UTF-8`, que es el que usa el script. Para la traducción de interfaz esto no supone ninguna diferencia práctica (los paquetes de idioma no distinguen variantes regionales de español).
 
-### Bloque 22 — `install_fonts`
+### Bloque 23 — `install_fonts`
 Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) y `font-noto`. Se ejecuta antes de LibreOffice a propósito.
 
-### Bloque 23 — `install_libreoffice`
+### Bloque 24 — `install_libreoffice`
 **Pregunta primero** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
 
-### Bloque 24 — `setup_flatpak`
+### Bloque 25 — `setup_flatpak`
 **Pregunta primero** (ver sección 5) si se desea habilitar Flatpak/Flathub en absoluto — si se responde "no", no se instala nada de infraestructura (`flatpak`, portales XDG) ni se pregunta por apps individuales. Si se acepta: instala Flatpak y agrega el repositorio Flathub, instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego **pregunta** dos veces más si instalar OnlyOffice y Google Chrome desde Flathub.
 
-### Bloque 25 — `setup_display_manager`
+### Bloque 26 — `setup_display_manager`
 Habilita el gestor de inicio de sesión gráfico (`lightdm`/`sddm`/`gdm`) en el runlevel `default`. No basta con que `setup-desktop` lo haya instalado — hay casos reales donde el DM queda instalado pero no correctamente enganchado al arranque. En vez de una prioridad fija (que podría elegir el DM equivocado en equipos con más de un entorno instalado, como XFCE + Plasma a la vez), reutiliza las banderas `DE_*` del Bloque 4 para preferir el emparejamiento convencional — el mismo que usa el propio `setup-desktop` de Alpine internamente: Plasma → `sddm`, GNOME → `gdm`, cualquier otro (XFCE/MATE/LXQt) → `lightdm` si está instalado. Si hay más de un DM instalado, se advierte explícitamente cuál se eligió y por qué.
 
-### Bloque 26 — `setup_update_shortcut`
+### Bloque 27 — `setup_update_shortcut`
 **Pregunta primero** (ver sección 5) si se desea un botón en el menú de aplicaciones para actualizar el sistema (Alpine vía `apk` y Flatpak, si está instalado) con un clic. Usa dos piezas del ecosistema freedesktop.org que hacen esto trivialmente multi-entorno:
 
 - **Un único archivo `.desktop`** en `/usr/share/applications/` — el estándar XDG que XFCE, Plasma, GNOME, MATE y LXQt leen por igual, así que el botón aparece en el menú de **todos** los entornos detectados sin lógica separada por DE.
-- **`pkexec`** (parte de `polkit-elogind`, ya instalado en el Bloque 18) para pedir autenticación. Por defecto, sin ninguna regla de polkit adicional, si el usuario pertenece al grupo `wheel` (se agrega automáticamente si hace falta), `pkexec` pide **su propia contraseña** — igual que `doas` — nunca la de root.
+- **`pkexec`** (parte de `polkit-elogind`, ya instalado en el Bloque 19) para pedir autenticación. Por defecto, sin ninguna regla de polkit adicional, si el usuario pertenece al grupo `wheel` (se agrega automáticamente si hace falta), `pkexec` pide **su propia contraseña** — igual que `doas` — nunca la de root.
 
 El trabajo se divide en dos scripts. `alpine-update-root.sh` corre como root vía `pkexec` y solo imprime a stdout/stderr (`apk update`, `apk upgrade`, y `flatpak update -y` si Flatpak está instalado) — sin nada gráfico en el lado privilegiado, para no depender de que X11/Wayland se reenvíe correctamente a través del salto de privilegios. `alpine-update-launcher.sh` corre como el usuario normal, invoca el anterior, y **canaliza esa salida en vivo** (`| tee -a /var/log/alpine-update.log | zenity --text-info`) hacia una ventana con scroll que se va llenando mientras el proceso corre — así se ve exactamente qué paquetes se actualizaron o si no había ninguno disponible, en vez de solo un mensaje final de "listo". El propio script imprime una línea de resultado al final (éxito o error) como parte de ese mismo texto, así que no hace falta un diálogo de confirmación aparte.
 
 > **Nota técnica:** algunos programas cambian su propio buffering cuando su salida va a una tubería en vez de a una terminal, así que el texto puede llegar en bloques en vez de línea por línea perfectamente fluida — sigue siendo "en vivo" (no hay que esperar a que todo termine para ver algo), solo no es tan suave como una terminal real.
 
-### Bloque 27 — `setup_user_groups`
+**Detección de actualización del kernel.** En Alpine, actualizar el kernel *reemplaza* el paquete y borra los módulos del kernel anterior, así que hasta reiniciar, cargar módulos nuevos (por ejemplo, al conectar un USB) puede fallar. El botón lo maneja en dos capas:
+- Durante la actualización, `alpine-update-root.sh` compara `/lib/modules` antes y después de `apk upgrade` (en vez de la salida de `apk info`, cuyo formato cambió entre apk-tools v2 y v3). Si cambió, lo anuncia en la misma ventana, indicando la versión anterior y la nueva.
+- Al cerrar la ventana, `alpine-update-launcher.sh` comprueba si el kernel *que está corriendo* sigue instalado, y si no, muestra un aviso emergente pidiendo reiniciar. Para eso busca `/lib/modules/$(uname -r)/modules.order`, un archivo que pertenece al **paquete** del kernel y desaparece al desinstalarse, en vez de comprobar solo si existe el directorio: si al desinstalar el kernel viejo quedan residuos sin dueño (por ejemplo, archivos generados por `depmod`), el directorio seguiría existiendo y el aviso nunca aparecería. Si el sistema no usa `modules.order`, recurre a comprobar el directorio. Como se basa en el **estado** del sistema y no solo en la última ejecución, el aviso sigue apareciendo aunque se pulse el botón varias veces sin reiniciar.
+
+**Agente de autenticación polkit.** `pkexec` lanzado desde un menú gráfico, sin terminal, necesita un agente de autenticación **en ejecución** para dibujar la ventana de contraseña; sin él, falla con *"No authentication agent found"* y la actualización nunca empieza. Plasma, GNOME y LXQt (vía `lxqt-policykit`, Bloque 19) traen el suyo. Para XFCE el script instala `polkit-gnome`, y para MATE su agente nativo `mate-polkit`. Pero instalar el paquete **no garantiza que arranque**: el autoarranque de `polkit-gnome` suele estar restringido a ciertos escritorios según la distribución. Por eso el lanzador, en cada ejecución, comprueba si hay un agente del propio usuario corriendo (leyendo `/proc/*/comm` directamente, sin depender de las opciones de `pgrep`, que varían entre versiones) y, si no lo hay, lo inicia desde las rutas conocidas del binario, que también cambian entre distribuciones. Si no encuentra ninguno, continúa igual: puede tratarse de un escritorio con agente integrado, como GNOME Shell.
+
+**Cierre de la ventana a mitad del proceso.** Si el usuario cierra la ventana mientras `apk` trabaja, la tubería se rompe y el kernel envía `SIGPIPE` al siguiente proceso que escriba en ella — lo que, sin protección, **mata a `apk` a mitad de una transacción**. Ambos scripts ignoran esa señal (`trap '' PIPE`). La protección en el lanzador es la que realmente importa: `tee` la hereda, sobrevive al cierre de la ventana y sigue drenando la tubería y escribiendo el log, así que `apk` nunca se bloquea ni se interrumpe. Proteger solo el script raíz salvaría a `apk`, pero `tee` moriría igual y el log quedaría truncado. La protección en el script raíz queda como respaldo, por si `pkexec` restablece las señales heredadas, y va dentro del archivo — no como `pkexec sh -c "trap ..."` — para que `pkexec` siga autorizando este script concreto y no un `/bin/sh` con un comando arbitrario. Nota: con la ventana cerrada, la actualización continúa en segundo plano hasta terminar.
+
+**Permisos del log.** El lanzador corre como el usuario normal, que no puede escribir en `/var/log`. El script crea `/var/log/alpine-update.log` perteneciente al grupo `wheel` con permiso `664`, para que cada ejecución quede registrada. *(Una versión anterior de este bloque omitía este paso: la ventana funcionaba, pero el log nunca se guardaba.)*
+
+### Bloque 28 — `setup_user_groups`
 Agrega al usuario detectado en el Bloque 5 a los grupos `audio`, `video` y `lpadmin` (necesarios para acceso a hardware de sonido/video y administración de impresoras).
 
-### Bloque 28 — `main`
+### Bloque 29 — `main`
 Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
 
 ## Preguntas interactivas que hará el script
 
-El script se detiene a preguntar en ocho puntos, en este orden:
+El script se detiene a preguntar en nueve puntos, en este orden:
 
 1. **Distribución de teclado (Bloque 3):**
    > `¿Deseas configurar el teclado a distribución latinoamericana (latam)?`
@@ -209,31 +244,35 @@ El script se detiene a preguntar en ocho puntos, en este orden:
    - **`s`** → Bloquea `nouveau` por completo: `Option "NoAccel" "True"` en Xorg **+** `blacklist nouveau` a nivel de kernel (`/etc/modprobe.d`). La NVIDIA queda inactiva; el sistema usa solo la(s) GPU(s) restante(s). Recomendado en tarjetas Tesla/Fermi/Kepler o si notas pantalla negra/cuelgues.
    - **`n`** → Deja `nouveau` activo con aceleración 3D normal. Riesgo de cuelgue en hardware legacy.
 
-3. **Soporte de impresión / CUPS (Bloque 19):**
+3. **Capa de compatibilidad glibc (Bloque 13):**
+   > `¿Deseas instalar 'gcompat' (capa de compatibilidad glibc para programas propietarios de espacio de usuario, p.ej. plugins de impresora o DRM de video)?`
+   - Útil si vas a usar binarios propietarios compilados contra glibc. **No** aplica a módulos de kernel (ver la tabla del Bloque 13).
+
+4. **Soporte de impresión / CUPS (Bloque 20):**
    > `¿Deseas instalar soporte de impresión (CUPS)?`
    - **`n`** → Omite CUPS por completo (ni paquetes ni servicio).
 
-4. **LibreOffice (Bloque 23):**
+5. **LibreOffice (Bloque 24):**
    > `¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)`
    - Pensado para equipos con poco espacio en disco, o para quien prefiera usar únicamente OnlyOffice desde Flatpak.
 
-5. **Flatpak/Flathub como infraestructura base (Bloque 24):**
+6. **Flatpak/Flathub como infraestructura base (Bloque 25):**
    > `¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)`
    - **`n`** → No instala `flatpak` ni los portales XDG, y **no se preguntará** por OnlyOffice ni Chrome (bloque completo omitido).
    - **`s`** → Instala la infraestructura y continúa a las dos preguntas siguientes.
 
-6. **OnlyOffice vía Flatpak (Bloque 24, solo si se aceptó la pregunta 5):**
+7. **OnlyOffice vía Flatpak (Bloque 25, solo si se aceptó la pregunta 6):**
    > `¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?`
 
-7. **Google Chrome vía Flatpak (Bloque 24, solo si se aceptó la pregunta 5):**
+8. **Google Chrome vía Flatpak (Bloque 25, solo si se aceptó la pregunta 6):**
    > `¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?`
    - Se aclara explícitamente que es un empaquetado mantenido por la comunidad de Flathub, no publicado por Google.
 
-8. **Acceso directo de actualización en el menú (Bloque 26):**
+9. **Acceso directo de actualización en el menú (Bloque 27):**
    > `¿Deseas crear un botón en el menú de aplicaciones para actualizar Alpine (y Flatpak, si está instalado) con un clic?`
    - **`s`** → Crea el botón "Actualizar el sistema", visible en el menú de cualquier entorno detectado, que pide la contraseña del usuario (vía `pkexec`) y muestra la salida de `apk`/`flatpak` **en vivo** en una ventana con scroll — se ve exactamente qué se actualizó o si no había nada pendiente.
 
-Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no". La pregunta de NVIDIA solo aparece si el hardware detectado incluye una tarjeta NVIDIA; las preguntas 6 y 7 solo aparecen si se respondió "sí" a la pregunta 5.
+Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no". La pregunta de NVIDIA solo aparece si el hardware detectado incluye una tarjeta NVIDIA; las preguntas 7 y 8 solo aparecen si se respondió "sí" a la pregunta 6.
 
 ## Archivos que el script crea o modifica
 
@@ -242,19 +281,19 @@ Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío)
 | `/etc/X11/xorg.conf.d/00-keyboard.conf` | 3 | Layout de teclado latam en Xorg |
 | `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 12 | `NoAccel` para nouveau (solo si se acepta el modo seguro) |
 | `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo del módulo `nouveau` a nivel de kernel (solo si se acepta) |
-| `/etc/conf.d/zram-init` | 14 | Tamaño y algoritmo del dispositivo zram |
-| `/etc/sysctl.conf` | 14 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
-| `/etc/udev/rules.d/60-ioscheduler.rules` | 17 | Planificador de E/S (BFQ o mq-deadline) para discos mecánicos detectados |
-| `/etc/profile.d/lang-es.sh` | 21 | Variables de idioma para shells de login |
-| `/etc/environment` | 21 | Variables de idioma para PAM (se limpian líneas `LANG`/`LC_*` previas antes de reescribir) |
-| `/etc/xdg/plasma-localerc` | 21 | Idioma de Plasma, default de sistema (solo si se detecta Plasma) |
-| `$HOME/.config/plasma-localerc` | 21 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
-| `/etc/rc.conf` | 21 | Se agrega `unicode="YES"` si no estaba presente |
+| `/etc/conf.d/zram-init` | 15 | Tamaño y algoritmo del dispositivo zram |
+| `/etc/sysctl.conf` | 15 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
+| `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador de E/S (BFQ o mq-deadline) para discos mecánicos detectados |
+| `/etc/profile.d/lang-es.sh` | 22 | Variables de idioma para shells de login |
+| `/etc/environment` | 22 | Variables de idioma para PAM (se limpian líneas `LANG`/`LC_*` previas antes de reescribir) |
+| `/etc/xdg/plasma-localerc` | 22 | Idioma de Plasma, default de sistema (solo si se detecta Plasma) |
+| `$HOME/.config/plasma-localerc` | 22 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
+| `/etc/rc.conf` | 22 | Se agrega `unicode="YES"` si no estaba presente |
 | `/var/log/desktop-postinstall.log` | (todos) | Registro completo de la ejecución |
-| `/usr/local/bin/alpine-update-root.sh` | 26 | Script de trabajo (root, vía `pkexec`): `apk update`/`apk upgrade` + `flatpak update`, imprime a stdout/stderr |
-| `/usr/local/bin/alpine-update-launcher.sh` | 26 | Script lanzador (usuario normal): invoca `pkexec` y canaliza su salida en vivo hacia `zenity --text-info` |
-| `/usr/share/applications/alpine-update.desktop` | 26 | Entrada de menú "Actualizar el sistema", visible en todos los DE detectados |
-| `/var/log/alpine-update.log` | 26 | Registro de cada ejecución del botón de actualización (separado del log de instalación) |
+| `/usr/local/bin/alpine-update-root.sh` | 27 | Script de trabajo (root, vía `pkexec`): `apk update`/`apk upgrade` + `flatpak update`, imprime a stdout/stderr |
+| `/usr/local/bin/alpine-update-launcher.sh` | 27 | Script lanzador (usuario normal): invoca `pkexec` y canaliza su salida en vivo hacia `zenity --text-info` |
+| `/usr/share/applications/alpine-update.desktop` | 27 | Entrada de menú "Actualizar el sistema", visible en todos los DE detectados |
+| `/var/log/alpine-update.log` | 27 | Registro de cada ejecución del botón de actualización (grupo `wheel`, permiso `664`, para que el usuario normal pueda escribir) |
 
 ## Servicios OpenRC habilitados
 
@@ -262,7 +301,7 @@ Todos en el runlevel `default`, salvo aclaración:
 
 `networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 25).
 
-`udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 18 para el porqué de cada uno).
+`udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 19 para el porqué de cada uno).
 
 ## Registro de ejecución (log)
 
@@ -321,4 +360,4 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 ---
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional) y Flatpak (opcional).*
+*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*
