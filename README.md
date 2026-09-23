@@ -14,7 +14,7 @@ Detecta automáticamente qué tiene tu sistema (entorno de escritorio, GPU, CPU)
 2. [Cómo ejecutarlo](#cómo-ejecutarlo)
 3. [Filosofía del script](#filosofía-del-script)
 4. [Recorrido bloque por bloque](#recorrido-bloque-por-bloque)
-5. [Preguntas interactivas que hará el script](#preguntas-interactivas-que-hará-el-script)
+5. [Menú de opciones al inicio](#menú-de-opciones-al-inicio)
 6. [Archivos que el script crea o modifica](#archivos-que-el-script-crea-o-modifica)
 7. [Servicios OpenRC habilitados](#servicios-openrc-habilitados)
 8. [Registro de ejecución (log)](#registro-de-ejecución-log)
@@ -51,7 +51,7 @@ o, si ya estás en una sesión root:
 sh desktop-postinstall.sh
 ```
 
-El script pedirá confirmación en un puñado de puntos (ver [sección 5](#preguntas-interactivas-que-hará-el-script)); el resto corre sin intervención. Al finalizar, **reinicia el sistema** — varios cambios (bloqueo de módulos de kernel, servicios recién habilitados, variables de idioma) no toman efecto por completo hasta el próximo arranque.
+Al empezar, el script muestra **un menú de casillas** con todas las decisiones opcionales (ver [sección 5](#menú-de-opciones-al-inicio)). Después de confirmar, corre solo de principio a fin, sin más preguntas. Al finalizar, **reinicia el sistema** — varios cambios (bloqueo de módulos de kernel, servicios recién habilitados, variables de idioma) no toman efecto por completo hasta el próximo arranque.
 
 ## Filosofía del script
 
@@ -63,7 +63,7 @@ Tres principios guían todas las decisiones de diseño:
 
 ## Recorrido bloque por bloque
 
-El script se organiza en 29 bloques, ejecutados en este orden por la función `main()`:
+El script se organiza en 30 bloques. `main()` los ejecuta casi en el orden del archivo, con una excepción deliberada: `detect_hardware` (Bloque 11) y el menú de opciones (Bloque 29) corren **al principio**, justo después de actualizar los repositorios, para que todas las decisiones se tomen antes de empezar a instalar.
 
 ### Bloque 1 — `check_root`
 Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
@@ -72,7 +72,7 @@ Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un men
 `update_system` corre `apk update` una sola vez al principio. `install_pkg` instala **un** paquete con tolerancia a fallos (usado cuando el nombre del paquete depende de hardware detectado y no se quiere arriesgar una transacción en lote). `install_pkgs` instala **varios** paquetes en una sola transacción de `apk` (mucho más rápido: una sola resolución de dependencias en vez de una por paquete) — si la transacción en lote falla porque algún nombre no existe en tu rama/arquitectura, cae automáticamente a instalar cada paquete por separado con `install_pkg`, así se gana velocidad en el caso normal sin perder la tolerancia a fallos individuales en el caso excepcional.
 
 ### Bloque 3 — `setup_keyboard_layout`
-**Pregunta primero** (ver sección 5) si se desea configurar el teclado a distribución latam — no es una preferencia universal, así que no se aplica sin confirmar. Si se acepta, lo hace en dos capas independientes:
+**Depende de una casilla del menú inicial** (ver sección 5) si se desea configurar el teclado a distribución latam — no es una preferencia universal, así que no se aplica sin confirmar. Si se acepta, lo hace en dos capas independientes:
 - **Consola (TTY):** `setup-keymap latam latam`, ejecutado de forma no interactiva. El único prompt que sobrevive es la confirmación de OpenRC al reiniciar el servicio `loadkmap` ("you are stopping a boot service"), que se responde automáticamente vía `yes |`.
 - **Sesión gráfica (Xorg):** crea `/etc/X11/xorg.conf.d/00-keyboard.conf` con `Option "XkbLayout" "latam"`, para que XFCE, Plasma, GNOME, MATE o LXQt también arranquen en ese layout (la consola y Xorg son capas separadas; una no implica la otra).
 
@@ -99,7 +99,7 @@ Instala la base de red/audio (`networkmanager`, `wpa_supplicant`, `pulseaudio`) 
 Detecta adaptadores de red inalámbrica tanto por **PCI** (`lspci`, clase "Network controller"/"Wireless") como por **USB** (`lsusb`, instalando `usbutils` si falta). Es importante cubrir ambos: un adaptador WiFi conectado como dongle externo **no aparece en `lspci`**, solo en `lsusb`. El resultado combinado se guarda en `$WIFI_INFO` para que el bloque siguiente lo use.
 
 ### Bloque 8 — `install_wifi_firmware`
-Busca palabras clave de fabricante (Intel, Realtek, Atheros/Qualcomm, MediaTek/Ralink, Marvell, Broadcom) en `$WIFI_INFO` e instala el/los subpaquete(s) de firmware correspondientes — el paquete genérico `linux-firmware` **no** incluye el firmware específico de cada chipset WiFi, Alpine lo divide en decenas de subpaquetes por fabricante (`linux-firmware-intel`, `linux-firmware-realtek`, `linux-firmware-ath9k_htc`, etc.), igual que ocurre con las GPU. Si no se identifica el fabricante por nombre, instala un conjunto amplio como red de seguridad en vez de no instalar nada.
+Busca palabras clave de fabricante (Intel, Realtek, Atheros/Qualcomm, MediaTek/Ralink, Marvell, Broadcom) en `$WIFI_INFO` e instala el/los subpaquete(s) de firmware correspondientes (Alpine divide el firmware en decenas de subpaquetes por fabricante: `linux-firmware-intel`, `linux-firmware-realtek`, `linux-firmware-ath9k_htc`, etc.). En una instalación normal de Alpine ya están todos presentes (ver la nota del Bloque 12), así que este paso solo marca la diferencia en sistemas adelgazados. Si no se identifica el fabricante por nombre, instala un conjunto amplio como red de seguridad en vez de no instalar nada.
 
 > **Sobre el filtro de `lsusb`:** la primera versión de este bloque capturaba la salida completa de `lsusb` sin filtrar, lo que causaba falsos positivos — una cámara web Realtek, un teclado con chip MediaTek, o el hub USB interno de la placa (a menudo Intel) hacían que el script instalara firmware WiFi innecesario. Se corrigió filtrando por frases específicas de adaptador de red (`802.11`, `WLAN`, `Wi-Fi`, `wireless network`, `network adapter`) en vez de palabras sueltas como "wireless" o "adapter", que son demasiado amplias.
 
@@ -119,11 +119,11 @@ Instala controladores según las banderas del Bloque 11 (puede instalar más de 
 - **Intel:** `linux-firmware-i915`, `mesa-vulkan-intel`.
 - **AMD:** `linux-firmware-amdgpu`/`radeon`, `mesa-vulkan-ati`/`radeon`, `vulkan-loader`.
 - **Virtual (QEMU/VMware/VirtualBox):** drivers `xf86-video-*` + `spice-vdagent`.
-- **NVIDIA:** `linux-firmware-nvidia` (driver abierto `nouveau`). Aquí el script **pregunta** si quieres activar un modo seguro (ver [sección 5](#preguntas-interactivas-que-hará-el-script)) — importante en tarjetas antiguas (Tesla/Fermi/Kepler), donde `nouveau` puede colgar el arranque incluso si hay una GPU integrada de respaldo.
+- **NVIDIA:** `linux-firmware-nvidia` (driver abierto `nouveau`). El modo seguro se elige con una casilla del menú inicial, que solo aparece si se detectó una NVIDIA (ver [sección 5](#menú-de-opciones-al-inicio)) — importante en tarjetas antiguas (Tesla/Fermi/Kepler), donde `nouveau` puede colgar el arranque incluso si hay una GPU integrada de respaldo.
 
 Si no se detecta ninguna GPU reconocida, `mesa-dri-gallium` ya deja software rendering (`llvmpipe`) como respaldo funcional.
 
-> **Por qué no se instala el paquete genérico `linux-firmware`:** se verificó directamente en el repositorio de Alpine que ese paquete tiene **102 dependencias** — arrastra casi todos sus subpaquetes de fabricante por defecto. Instalarlo anularía todo el trabajo de selección específica de este bloque y de los Bloques 8/10 (WiFi/Bluetooth), sumando cientos de MB de firmware irrelevante. Por eso el script instala únicamente los subpaquetes que corresponden al hardware realmente detectado.
+> **Sobre el firmware (corrección):** una versión anterior de esta nota daba a entender que el script mantenía el sistema liviano al no instalar el metapaquete `linux-firmware` (que depende de todos los subpaquetes de fabricante). Pero la [documentación oficial de Alpine](https://wiki.alpinelinux.org/wiki/Kernels) indica que ese metapaquete **ya viene incluido en la instalación por defecto**. Por lo tanto, en un sistema recién instalado, los subpaquetes de firmware que piden los Bloques 8, 10 y 12 ya están presentes y `apk add` no hace nada con ellos: no cuesta nada, pero tampoco aporta. Solo marcan la diferencia en un sistema adelgazado con `linux-firmware-none`, donde falta todo el firmware y el script agrega únicamente el del hardware detectado. El script no intenta adelgazar el sistema por su cuenta: quitar firmware a ciegas podría dejar sin WiFi o sin video un equipo que hoy funciona.
 
 ### Bloque 13 — `check_unclaimed_devices`
 Cierra el ciclo de los bloques de firmware anteriores preguntando algo distinto: **¿quedó algún dispositivo sin ningún controlador del kernel enlazado?** Usa `lspci -k`, que añade una línea `Kernel driver in use:` a cada dispositivo que sí tiene driver; los que no la tienen se reportan (filtrando a clases de red, video y audio — muchos dispositivos como los *host bridges* legítimamente no llevan driver, y eso es normal). Un dispositivo de red o video sin driver es exactamente el síntoma de hardware que solo funciona con controladores propietarios o fuera del árbol del kernel.
@@ -135,12 +135,14 @@ En Alpine hay **dos caminos distintos y no intercambiables** para esos casos, y 
 | Módulo de **kernel** | NVIDIA `.ko`, Broadcom `wl`, varios Realtek USB | **AKMS** (Alpine Kernel Module Support) — el equivalente oficial de DKMS: compila el módulo desde fuente y lo **reconstruye solo** en cada actualización de kernel. Alpine empaqueta varios como `*-src` (`rtl8812au-src`, `rtl88x2bu-src`, `rtw89-src`…), casi todos en el repositorio `testing` |
 | Binario de **espacio de usuario** (glibc) | Plugins de impresora, DRM Widevine | **`gcompat`** — capa de compatibilidad glibc sobre musl. **No** sirve para módulos de kernel |
 
-El bloque **pregunta** (ver sección 5) si instalar `gcompat`, pero **no instala módulos propietarios ni habilita `testing` por su cuenta**: habilitar un repositorio inestable a nivel de sistema puede arrastrar paquetes rotos al resto de la instalación, y compilar un módulo equivocado puede dejar el equipo sin red o sin video. Reporta el diagnóstico con los comandos exactos y deja la decisión al usuario.
+Instalar `gcompat` depende de una casilla del menú inicial (ver sección 5), pero **no instala módulos propietarios ni habilita `testing` por su cuenta**: habilitar un repositorio inestable a nivel de sistema puede arrastrar paquetes rotos al resto de la instalación, y compilar un módulo equivocado puede dejar el equipo sin red o sin video. Reporta el diagnóstico con los comandos exactos y deja la decisión al usuario.
 
 > **Sobre NVIDIA:** los drivers propietarios de NVIDIA no están disponibles en Alpine por la incompatibilidad con musl libc — AKMS no cambia eso. Para GPU NVIDIA la única vía sigue siendo `nouveau` (ver Bloque 12).
 
 ### Bloque 14 — `detect_cpu` / `install_microcode`
-Lee `/proc/cpuinfo` para clasificar el fabricante (`GenuineIntel`/`AuthenticAMD`). Para Intel instala `intel-ucode`. **Para AMD no existe un paquete `amd-ucode` en Alpine** — el microcódigo viaja dentro de `linux-firmware-amd`, que es lo que se instala en su lugar. En ambos casos se advierte que el paquete instalado no garantiza por sí solo que el microcódigo se cargue en el arranque (Alpine no lo integra automáticamente al initramfs); verificar con `dmesg | grep -i microcode` tras reiniciar.
+Lee `/proc/cpuinfo` para clasificar el fabricante (`GenuineIntel`/`AuthenticAMD`). Instala `intel-ucode` o `amd-ucode` según el caso. Con syslinux (extlinux) o GRUB, el paquete **agrega solo** su imagen de microcódigo a la línea `INITRD` del cargador de arranque, así que basta con reiniciar; se puede verificar con `dmesg | grep -i microcode`. Alpine no instala el microcódigo por defecto: es la única pieza específica del fabricante de la CPU que falta tras la instalación, porque el resto (control de frecuencia, sensores de temperatura, virtualización) ya viene dentro del kernel genérico y se activa solo.
+
+> **Corrección:** una versión anterior de este bloque afirmaba que `amd-ucode` no existía en Alpine e instalaba `linux-firmware-amd` en su lugar, y advertía que el microcódigo podía requerir integración manual en el arranque. Ambas afirmaciones venían de información desactualizada; la [wiki oficial de Alpine](https://wiki.alpinelinux.org/wiki/CPU_Microcode) documenta `amd-ucode` y la integración automática.
 
 También detecta el **nivel de microarquitectura x86-64** (v1 a v4) a partir de los *flags* de `/proc/cpuinfo` — el método habitual (`/lib/ld-linux-x86-64.so.2 --help`) es propio de glibc y no existe en musl. **Es un dato solo informativo:** la optimización por nivel que hacen distribuciones como CachyOS ocurre al *compilar* los paquetes, no después de instalarlos, y Alpine distribuye un único juego de paquetes x86_64 para el nivel base. Saber el nivel sirve para entender qué rendimiento esperar, no cambia nada de lo que se instala.
 
@@ -177,7 +179,7 @@ Configura el montaje automático de memorias USB al conectarlas. Es el bloque co
 4. **Disparador según entorno:** `gvfs` + `thunar-volman` para XFCE; `gvfs` para GNOME/MATE; `gvfs` + `lxqt-policykit` para LXQt. Plasma no necesita nada adicional aquí porque Dolphin usa KIO/Solid + `udisks2` directamente.
 
 ### Bloque 20 — `setup_printing`
-**Pregunta primero** (ver sección 5) si se desea soporte de impresión — no todo equipo "revivido" tiene o necesita una impresora. Si se acepta, instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
+**Depende de una casilla del menú inicial** (ver sección 5) si se desea soporte de impresión — no todo equipo "revivido" tiene o necesita una impresora. Si se acepta, instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
 
 ### Bloque 21 — `install_archive_tools`
 Instala `zip`, `unzip`, `p7zip`. **`unrar` no se instala porque no existe como paquete en Alpine** (licencia no-libre, verificado en v3.24) — el script lo indica explícitamente en el log en vez de intentarlo y fallar en silencio, y apunta al binario oficial de `rarlab.com/download.htm` como única vía si de verdad se necesita soporte RAR (no automatizado por el script: cada versión de RARLAB cambia el nombre del archivo, y una URL fija quedaría rota con el tiempo).
@@ -196,16 +198,16 @@ También instala `musl-locales`/`musl-locales-lang` y el metapaquete `lang`, que
 Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) y `font-noto`. Se ejecuta antes de LibreOffice a propósito.
 
 ### Bloque 24 — `install_libreoffice`
-**Pregunta primero** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
+**Depende de una casilla del menú inicial** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
 
 ### Bloque 25 — `setup_flatpak`
-**Pregunta primero** (ver sección 5) si se desea habilitar Flatpak/Flathub en absoluto — si se responde "no", no se instala nada de infraestructura (`flatpak`, portales XDG) ni se pregunta por apps individuales. Si se acepta: instala Flatpak y agrega el repositorio Flathub, instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego **pregunta** dos veces más si instalar OnlyOffice y Google Chrome desde Flathub.
+**Depende de una casilla del menú inicial** (ver sección 5) si se desea habilitar Flatpak/Flathub en absoluto — si no se marca, no se instala nada de infraestructura (`flatpak`, portales XDG). Marcar OnlyOffice o Chrome en el menú activa Flatpak automáticamente. Si se acepta: instala Flatpak y agrega el repositorio Flathub, instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego instala OnlyOffice y/o Google Chrome desde Flathub, según las casillas marcadas.
 
 ### Bloque 26 — `setup_display_manager`
 Habilita el gestor de inicio de sesión gráfico (`lightdm`/`sddm`/`gdm`) en el runlevel `default`. No basta con que `setup-desktop` lo haya instalado — hay casos reales donde el DM queda instalado pero no correctamente enganchado al arranque. En vez de una prioridad fija (que podría elegir el DM equivocado en equipos con más de un entorno instalado, como XFCE + Plasma a la vez), reutiliza las banderas `DE_*` del Bloque 4 para preferir el emparejamiento convencional — el mismo que usa el propio `setup-desktop` de Alpine internamente: Plasma → `sddm`, GNOME → `gdm`, cualquier otro (XFCE/MATE/LXQt) → `lightdm` si está instalado. Si hay más de un DM instalado, se advierte explícitamente cuál se eligió y por qué.
 
 ### Bloque 27 — `setup_update_shortcut`
-**Pregunta primero** (ver sección 5) si se desea un botón en el menú de aplicaciones para actualizar el sistema (Alpine vía `apk` y Flatpak, si está instalado) con un clic. Usa dos piezas del ecosistema freedesktop.org que hacen esto trivialmente multi-entorno:
+**Depende de una casilla del menú inicial** (ver sección 5) si se desea un botón en el menú de aplicaciones para actualizar el sistema (Alpine vía `apk` y Flatpak, si está instalado) con un clic. Usa dos piezas del ecosistema freedesktop.org que hacen esto trivialmente multi-entorno:
 
 - **Un único archivo `.desktop`** en `/usr/share/applications/` — el estándar XDG que XFCE, Plasma, GNOME, MATE y LXQt leen por igual, así que el botón aparece en el menú de **todos** los entornos detectados sin lógica separada por DE.
 - **`pkexec`** (parte de `polkit-elogind`, ya instalado en el Bloque 19) para pedir autenticación. Por defecto, sin ninguna regla de polkit adicional, si el usuario pertenece al grupo `wheel` (se agrega automáticamente si hace falta), `pkexec` pide **su propia contraseña** — igual que `doas` — nunca la de root.
@@ -244,52 +246,37 @@ La barra animada de `--pulsate` transmite que el proceso sigue corriendo aunque 
 ### Bloque 28 — `setup_user_groups`
 Agrega al usuario detectado en el Bloque 5 a los grupos `audio`, `video` y `lpadmin` (necesarios para acceso a hardware de sonido/video y administración de impresoras).
 
-### Bloque 29 — `main`
+### Bloque 29 — `select_options_menu`
+Reúne **todas las decisiones opcionales en una sola pantalla** al inicio, usando `dialog` (se instala en ese momento; funciona tanto en una consola TTY como en una terminal gráfica). Se marca con la barra espaciadora, se continúa con Enter, y una segunda pantalla muestra un resumen con **Comenzar** o **Volver**; al volver, el menú conserva lo ya marcado. A partir de ahí el script corre solo. Aunque este bloque está al final del archivo, `main()` lo ejecuta al principio, justo después de `detect_hardware`, porque la casilla de NVIDIA solo se muestra si se detectó una NVIDIA.
+
+Cada decisión queda en una variable `OPT_*`, y los bloques que antes preguntaban ahora consultan esa variable mediante la función auxiliar `want`. El **respaldo** vive en esa misma función: si el menú no se pudo mostrar (sin terminal interactiva, o sin poder instalar `dialog`), las variables quedan vacías y `want` vuelve a preguntar cada opción por separado, como en versiones anteriores. Pulsar **Salir** en el menú termina el script sin haber hecho cambios de configuración.
+
+Los textos del menú van **sin acentos** a propósito: el menú aparece antes de que el script configure el idioma, y en una consola TTY recién instalada los acentos pueden verse como símbolos extraños.
+
+### Bloque 30 — `main`
 Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
 
-## Preguntas interactivas que hará el script
+## Menú de opciones al inicio
 
-El script se detiene a preguntar en nueve puntos, en este orden:
+Al empezar, el script muestra una pantalla de casillas con todas las decisiones opcionales. Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se continúa con **Enter**. Después aparece un resumen con lo que se va a instalar, con dos botones: **Comenzar** (el script corre solo desde ahí hasta el final) o **Volver** (regresa al menú conservando lo ya marcado).
 
-1. **Distribución de teclado (Bloque 3):**
-   > `¿Deseas configurar el teclado a distribución latinoamericana (latam)?`
-   - **`s`** → Configura "latam" en consola (TTY) y en Xorg.
-   - **`n`** → No toca la configuración de teclado; se deja el layout por defecto del sistema/instalación.
+| Casilla | Marcada por defecto | Bloque | Qué hace |
+|---|---|---|---|
+| Teclado latinoamericano | Sí | 3 | Configura `latam` en consola (TTY) y en Xorg |
+| NVIDIA en modo seguro | Sí | 12 | **Solo aparece si se detectó una NVIDIA.** Bloquea `nouveau` (Xorg + kernel) y usa la otra GPU |
+| gcompat | No | 13 | Compatibilidad con programas propietarios compilados contra glibc |
+| Impresoras (CUPS) | Sí | 20 | Instala CUPS y habilita su servicio |
+| LibreOffice | Sí | 24 | LibreOffice con paquete de idioma español |
+| Flatpak/Flathub | No | 25 | Infraestructura de Flatpak y portales XDG |
+| OnlyOffice | No | 25 | Vía Flatpak; **marcarla activa Flatpak automáticamente** |
+| Google Chrome | No | 25 | Vía Flatpak (empaquetado comunitario, no oficial de Google); también activa Flatpak |
+| Botón "Actualizar el sistema" | Sí | 27 | Acceso directo en el menú de aplicaciones |
 
-2. **NVIDIA detectada (Bloque 12):**
-   > `¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?`
-   - **`s`** → Bloquea `nouveau` por completo: `Option "NoAccel" "True"` en Xorg **+** `blacklist nouveau` a nivel de kernel (`/etc/modprobe.d`). La NVIDIA queda inactiva; el sistema usa solo la(s) GPU(s) restante(s). Recomendado en tarjetas Tesla/Fermi/Kepler o si notas pantalla negra/cuelgues.
-   - **`n`** → Deja `nouveau` activo con aceleración 3D normal. Riesgo de cuelgue en hardware legacy.
+**Por qué estos valores por defecto:** el modo seguro de NVIDIA viene marcado porque, en el hardware antiguo al que apunta este proyecto, dejarlo desmarcado puede terminar en pantalla negra, mientras que marcarlo solo cuesta la aceleración de la NVIDIA. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación sería infraestructura sin uso; por eso marcar una de sus aplicaciones lo activa sola.
 
-3. **Capa de compatibilidad glibc (Bloque 13):**
-   > `¿Deseas instalar 'gcompat' (capa de compatibilidad glibc para programas propietarios de espacio de usuario, p.ej. plugins de impresora o DRM de video)?`
-   - Útil si vas a usar binarios propietarios compilados contra glibc. **No** aplica a módulos de kernel (ver la tabla del Bloque 13).
+**Respaldo:** si el menú no se puede mostrar (por ejemplo, si el script se ejecuta sin una terminal interactiva, o si `dialog` no se pudo instalar), el script vuelve al comportamiento anterior y hace cada pregunta por separado en el momento en que la necesita, respondiendo `s` o `n`. Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no".
 
-4. **Soporte de impresión / CUPS (Bloque 20):**
-   > `¿Deseas instalar soporte de impresión (CUPS)?`
-   - **`n`** → Omite CUPS por completo (ni paquetes ni servicio).
-
-5. **LibreOffice (Bloque 24):**
-   > `¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)`
-   - Pensado para equipos con poco espacio en disco, o para quien prefiera usar únicamente OnlyOffice desde Flatpak.
-
-6. **Flatpak/Flathub como infraestructura base (Bloque 25):**
-   > `¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)`
-   - **`n`** → No instala `flatpak` ni los portales XDG, y **no se preguntará** por OnlyOffice ni Chrome (bloque completo omitido).
-   - **`s`** → Instala la infraestructura y continúa a las dos preguntas siguientes.
-
-7. **OnlyOffice vía Flatpak (Bloque 25, solo si se aceptó la pregunta 6):**
-   > `¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?`
-
-8. **Google Chrome vía Flatpak (Bloque 25, solo si se aceptó la pregunta 6):**
-   > `¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?`
-   - Se aclara explícitamente que es un empaquetado mantenido por la comunidad de Flathub, no publicado por Google.
-
-9. **Acceso directo de actualización en el menú (Bloque 27):**
-   > `¿Deseas crear un botón en el menú de aplicaciones para actualizar Alpine (y Flatpak, si está instalado) con un clic?`
-   - **`s`** → Crea el botón "Actualizar el sistema", visible en el menú de cualquier entorno detectado, que pide la contraseña del usuario (vía `pkexec`) y muestra la salida de `apk`/`flatpak` **en vivo** en una ventana con scroll — se ve exactamente qué se actualizó o si no había nada pendiente.
-
-Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no". La pregunta de NVIDIA solo aparece si el hardware detectado incluye una tarjeta NVIDIA; las preguntas 7 y 8 solo aparecen si se respondió "sí" a la pregunta 6.
+**Salir:** pulsar **Salir** en el menú termina el script sin haber hecho cambios de configuración (hasta ese punto solo se actualizó el índice de paquetes y se instalaron las herramientas de detección y el propio `dialog`).
 
 ## Archivos que el script crea o modifica
 
@@ -377,4 +364,4 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 ---
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*
+*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, menú de casillas al inicio con respaldo a preguntas individuales, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*

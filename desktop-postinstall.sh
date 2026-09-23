@@ -27,6 +27,23 @@ ask_yes_no() {
     esac
 }
 
+# Consulta una decision tomada en el menu de casillas del inicio
+# (Bloque 29, select_options_menu). $1 es el nombre de la variable
+# (p. ej. OPT_CUPS) y $2 la pregunta de respaldo. Si el menu no se pudo
+# mostrar (sin terminal interactiva, o sin poder instalar 'dialog'), la
+# variable queda vacia y se pregunta como siempre, una por una: el
+# respaldo vive aqui, en un solo lugar, en vez de repetirse en cada
+# bloque. El nombre de la variable siempre viene del propio script,
+# nunca de la entrada del usuario, asi que el 'eval' es seguro.
+want() {
+    eval "want_val=\${$1:-}"
+    case "$want_val" in
+        yes) return 0 ;;
+        no)  return 1 ;;
+        *)   ask_yes_no "$2" ;;
+    esac
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 1: Validación de permisos de superusuario
 # ------------------------------------------------------------------------------
@@ -60,8 +77,7 @@ install_pkg() {
 # (rapido: una sola resolucion de dependencias/descarga/bloqueo de base
 # de datos, en vez de una por paquete). Si la transaccion en lote falla
 # -- por ejemplo, uno de los nombres no existe en esta rama/arquitectura,
-# algo que ha pasado varias veces con este script (amd-ucode, unrar,
-# mesa-dri...) -- cae automaticamente a instalar cada paquete por
+# algo que ha pasado varias veces con este script (unrar, mesa-dri...) -- cae automaticamente a instalar cada paquete por
 # separado con install_pkg, que SI tolera fallos individuales. Asi se
 # gana velocidad en el caso normal sin sacrificar la resiliencia.
 install_pkgs() {
@@ -84,7 +100,7 @@ install_pkgs() {
 setup_keyboard_layout() {
     log_info "== Distribución de teclado =="
 
-    if ! ask_yes_no "¿Deseas configurar el teclado a distribución latinoamericana (latam)?"; then
+    if ! want OPT_KEYBOARD "¿Deseas configurar el teclado a distribución latinoamericana (latam)?"; then
         log_info "Se omite la configuración de teclado. Se deja el layout por defecto del sistema/instalación."
         return 0
     fi
@@ -265,14 +281,17 @@ $net_usb"
 # ------------------------------------------------------------------------------
 # BLOQUE 8: Firmware de adaptadores WiFi segun fabricante detectado
 # ------------------------------------------------------------------------------
-# El paquete generico "linux-firmware" (instalado en el bloque de drivers
-# de GPU) NO incluye el firmware especifico de cada chipset WiFi -- Alpine
-# lo divide en decenas de subpaquetes por fabricante (linux-firmware-intel,
-# linux-firmware-realtek, linux-firmware-ath9k_htc, etc.), igual que ya
-# pasaba con las GPU. Sin el subpaquete correcto, el driver del kernel
-# puede cargar pero la tarjeta jamas asocia a una red (o ni siquiera
-# aparece), y NetworkManager/wpa_supplicant (instalados en el bloque de
-# applets) no tienen nada que hacer sin el firmware presente.
+# Alpine divide el firmware en decenas de subpaquetes por fabricante
+# (linux-firmware-intel, linux-firmware-realtek, linux-firmware-ath9k_htc,
+# etc.). Sin el subpaquete correcto, el driver del kernel puede cargar
+# pero la tarjeta jamas asocia a una red (o ni siquiera aparece).
+# NOTA SOBRE EL FIRMWARE: la instalacion normal de Alpine YA incluye el
+# metapaquete "linux-firmware", que depende de todos los subpaquetes de
+# fabricante. En ese caso, los subpaquetes que este script instala segun
+# el hardware detectado ya estan presentes y 'apk add' simplemente no hace
+# nada (sin costo). Solo marcan la diferencia en un sistema adelgazado
+# con 'linux-firmware-none', donde falta todo el firmware y este script
+# agrega unicamente el del hardware realmente detectado.
 install_wifi_firmware() {
     log_info "== Instalando firmware de adaptadores WiFi =="
 
@@ -464,12 +483,10 @@ detect_hardware() {
 install_drivers() {
     log_info "== Instalando firmware y controladores =="
 
-    # NOTA IMPORTANTE: NO se instala el paquete generico "linux-firmware".
-    # Se confirmo que ese paquete DEPENDE de (arrastra) practicamente
-    # todos sus ~113 subpaquetes de fabricante -- instalarlo anularia
-    # todo el trabajo de deteccion especifica de este bloque y traeria
-    # cientos de MB de firmware irrelevante. Solo se instalan los
-    # subpaquetes que corresponden al hardware realmente detectado.
+    # El script no pide el metapaquete "linux-firmware" (depende de todos
+    # los subpaquetes de fabricante); solo pide los del hardware detectado.
+    # Ver la NOTA SOBRE EL FIRMWARE del Bloque 8: en una instalacion
+    # normal de Alpine ese metapaquete ya viene incluido.
     install_pkgs mesa-dri-gallium mesa-gl mesa-egl
 
     if [ "$GPU_HAS_INTEL" = "yes" ]; then
@@ -503,7 +520,7 @@ install_drivers() {
         log_info "Opción 's': bloquea la NVIDIA por completo (kernel + Xorg) y usa solo la GPU restante. Modo seguro, recomendado en hardware Legacy."
         log_info "Opción 'n': deja Nouveau activo con aceleración 3D normal en la NVIDIA. Riesgo de pantalla negra/cuelgue en tarjetas antiguas."
 
-        if ask_yes_no "¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?"; then
+        if want OPT_NVIDIA_SAFE "¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?"; then
             log_info "Aplicando protección: NoAccel en Xorg + bloqueo del módulo nouveau en el kernel..."
 
             install_pkg "xf86-video-nouveau"
@@ -605,7 +622,7 @@ check_unclaimed_devices() {
     # gcompat: util para binarios de espacio de usuario compilados contra
     # glibc (plugins de impresoras HP, DRM Widevine de Netflix, etc.).
     # No tiene relacion con los modulos de kernel de arriba.
-    if ask_yes_no "¿Deseas instalar 'gcompat' (capa de compatibilidad glibc para programas propietarios de espacio de usuario, p.ej. plugins de impresora o DRM de video)?"; then
+    if want OPT_GCOMPAT "¿Deseas instalar 'gcompat' (capa de compatibilidad glibc para programas propietarios de espacio de usuario, p.ej. plugins de impresora o DRM de video)?"; then
         install_pkgs gcompat
         log_ok "gcompat instalado. Los binarios compilados contra glibc pueden ejecutarse normalmente."
     else
@@ -667,14 +684,23 @@ install_microcode() {
             install_pkg "intel-ucode"
             ;;
         amd)
-            install_pkg "linux-firmware-amd"
-            log_info "AMD no tiene paquete 'amd-ucode' en Alpine; el microcódigo viene en linux-firmware-amd*."
+            # CORRECCION: una version anterior afirmaba que 'amd-ucode' no
+            # existia en Alpine e instalaba linux-firmware-amd en su lugar.
+            # Eso venia de un hilo antiguo de la lista de desarrollo, de
+            # cuando el paquete efectivamente faltaba. Hoy la wiki oficial
+            # (wiki.alpinelinux.org/wiki/CPU_Microcode) lo documenta, y
+            # las imagenes oficiales de Alpine ya lo incluyen.
+            install_pkg "amd-ucode"
             ;;
         *)
             log_warn "Fabricante de CPU no identificado. Se omite instalación de microcódigo."
+            return 0
             ;;
     esac
-    log_warn "Verifica que se cargó en el arranque con: dmesg | grep -i microcode"
+    # Con syslinux (extlinux) o GRUB, el paquete agrega solo su imagen de
+    # microcodigo a la linea INITRD del cargador de arranque: basta con
+    # reiniciar.
+    log_info "El microcodigo se cargara en el proximo arranque. Verificalo despues con: dmesg | grep -i microcode"
 }
 
 # ------------------------------------------------------------------------------
@@ -882,7 +908,7 @@ setup_usb_automount() {
 setup_printing() {
     log_info "== Soporte de impresión (CUPS) =="
 
-    if ! ask_yes_no "¿Deseas instalar soporte de impresión (CUPS)?"; then
+    if ! want OPT_CUPS "¿Deseas instalar soporte de impresión (CUPS)?"; then
         log_info "Se omite CUPS."
         return 0
     fi
@@ -991,7 +1017,7 @@ install_fonts() {
 install_libreoffice() {
     log_info "== LibreOffice =="
 
-    if ! ask_yes_no "¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)"; then
+    if ! want OPT_LIBREOFFICE "¿Deseas instalar LibreOffice? (paquete pesado; si prefieres OnlyOffice vía Flatpak, puedes responder 'n' aquí y aceptarlo más adelante)"; then
         log_info "Se omite LibreOffice."
         return 0
     fi
@@ -1007,7 +1033,7 @@ install_libreoffice() {
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
 
-    if ! ask_yes_no "¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)"; then
+    if ! want OPT_FLATPAK "¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)"; then
         log_info "Se omite Flatpak por completo (no se instala infraestructura ni se preguntará por apps individuales)."
         return 0
     fi
@@ -1053,13 +1079,13 @@ setup_flatpak() {
         return 0
     fi
 
-    if ask_yes_no "¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?"; then
+    if want OPT_ONLYOFFICE "¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?"; then
         $remote_add_cmd install -y flathub org.onlyoffice.desktopeditors && log_ok "OnlyOffice instalado." || log_warn "Fallo al instalar OnlyOffice."
     else
         log_info "Se omite OnlyOffice."
     fi
 
-    if ask_yes_no "¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?"; then
+    if want OPT_CHROME "¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?"; then
         $remote_add_cmd install -y flathub com.google.Chrome && log_ok "Google Chrome instalado." || log_warn "Fallo al instalar Google Chrome."
     else
         log_info "Se omite Google Chrome."
@@ -1138,7 +1164,7 @@ setup_display_manager() {
 setup_update_shortcut() {
     log_info "== Acceso directo de actualizacion en el menu =="
 
-    if ! ask_yes_no "¿Deseas crear un boton en el menu de aplicaciones para actualizar Alpine (y Flatpak, si esta instalado) con un clic?"; then
+    if ! want OPT_UPDATE_SHORTCUT "¿Deseas crear un boton en el menu de aplicaciones para actualizar Alpine (y Flatpak, si esta instalado) con un clic?"; then
         log_info "Se omite el acceso directo de actualizacion."
         return 0
     fi
@@ -1445,13 +1471,148 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 29: Función principal
+# BLOQUE 29: Menu de casillas con todas las decisiones al inicio
+# ------------------------------------------------------------------------------
+# Antes, las 9 preguntas aparecian repartidas a lo largo de una ejecucion
+# larga, obligando a vigilar la terminal de principio a fin. Aqui se
+# reunen en UNA pantalla al inicio (casillas con 'dialog', que funciona
+# tanto en una consola TTY como en una terminal grafica), se confirma un
+# resumen, y el resto del script corre solo, sin volver a preguntar.
+#
+# Aunque este bloque esta al final del archivo, main() lo ejecuta al
+# principio, justo despues de detect_hardware(): la opcion de NVIDIA
+# solo tiene sentido mostrarla si hay una NVIDIA.
+#
+# Los textos del menu van SIN acentos a proposito: el menu aparece antes
+# de que el script configure el idioma, y en una consola TTY recien
+# instalada los acentos pueden verse como simbolos extranos.
+#
+# Si el menu no se puede mostrar (sin terminal interactiva, o sin poder
+# instalar 'dialog'), las variables OPT_* quedan vacias y want() vuelve
+# a preguntar cada opcion por separado, como antes.
+MENU_USED="no"
+
+# Convierte yes/no al formato de estado de una casilla de dialog.
+menu_state() {
+    if [ "$1" = "yes" ]; then echo on; else echo off; fi
+}
+
+select_options_menu() {
+    log_info "== Seleccion de acciones =="
+
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        log_warn "No hay una terminal interactiva: se preguntara cada opcion por separado durante la ejecucion."
+        return 0
+    fi
+
+    command -v dialog >/dev/null 2>&1 || install_pkgs dialog
+    if ! command -v dialog >/dev/null 2>&1; then
+        log_warn "No se pudo instalar 'dialog': se preguntara cada opcion por separado durante la ejecucion."
+        return 0
+    fi
+
+    # Valores por defecto (casillas premarcadas). Criterios:
+    #  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
+    #    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
+    #    negra) es mucho peor que el de marcarlo (perder la aceleracion
+    #    de la NVIDIA, usando la otra GPU).
+    #  - Flatpak y sus aplicaciones: desmarcados. Instalar Flatpak sin
+    #    ninguna aplicacion seria infraestructura para nada; marcar
+    #    OnlyOffice o Chrome activa Flatpak automaticamente.
+    OPT_KEYBOARD=yes
+    OPT_NVIDIA_SAFE=yes
+    OPT_GCOMPAT=no
+    OPT_CUPS=yes
+    OPT_LIBREOFFICE=yes
+    OPT_FLATPAK=no
+    OPT_ONLYOFFICE=no
+    OPT_CHROME=no
+    OPT_UPDATE_SHORTCUT=yes
+
+    while :; do
+        # Se arma la lista de casillas con los valores ACTUALES: si el
+        # usuario vuelve desde el resumen, encuentra lo que ya habia
+        # marcado, no los valores por defecto.
+        set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
+        if [ "$GPU_HAS_NVIDIA" = "yes" ]; then
+            set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
+        fi
+        set -- "$@" \
+            GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
+            CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
+            LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
+            FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
+            ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
+            CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+            UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
+
+        if ! sel="$(dialog --stdout --separate-output \
+                --backtitle "Configuracion post-instalacion de Alpine Linux" \
+                --title "Acciones a realizar" \
+                --ok-label "Continuar" --cancel-label "Salir" \
+                --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
+                20 72 10 "$@")"; then
+            clear 2>/dev/null || true
+            log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
+            trap - EXIT INT TERM
+            exit 0
+        fi
+
+        # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
+        # Las etiquetas se validan contra una lista fija antes del eval.
+        for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
+            eval "OPT_$k=no"
+        done
+        for tag in $sel; do
+            case "$tag" in
+                KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
+                    eval "OPT_$tag=yes" ;;
+            esac
+        done
+
+        # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
+        if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ]; then
+            OPT_FLATPAK=yes
+        fi
+
+        summary=""
+        [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
+        [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
+        [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
+        [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
+        [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
+        [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
+        [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
+        [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
+        [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
+        [ -z "$summary" ] && summary="\n  (ninguna opcional)"
+
+        if dialog --title "Confirmar" \
+                --yes-label "Comenzar" --no-label "Volver" \
+                --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
+                20 72; then
+            break
+        fi
+        # "Volver" (o ESC): se repite el menu con las marcas actuales.
+    done
+
+    clear 2>/dev/null || true
+    MENU_USED="yes"
+    log_ok "Opciones elegidas en el menu:$(printf "$summary" | tr '\n' ' ')"
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 30: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
 
     check_root
     update_system
+    # detect_hardware se ejecuta ANTES del menu (Bloque 29) para que la
+    # opcion de NVIDIA solo aparezca si hay una NVIDIA.
+    detect_hardware
+    select_options_menu
     setup_keyboard_layout
     detect_desktop_environment
     detect_target_user
@@ -1460,7 +1621,6 @@ main() {
     install_wifi_firmware
     detect_bluetooth_hardware
     install_bluetooth
-    detect_hardware
     install_drivers
     check_unclaimed_devices
     detect_cpu
