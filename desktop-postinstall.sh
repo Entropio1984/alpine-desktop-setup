@@ -94,6 +94,27 @@ install_pkgs() {
     fi
 }
 
+# ensure_hw_tools: garantiza las versiones COMPLETAS de lspci y lsusb.
+# CORRECCION: antes se usaba "command -v lspci || install_pkg pciutils",
+# pero BusyBox (base de Alpine) trae sus propios 'lspci' y 'lsusb', y
+# esos solo muestran codigos numericos ("Class 0300: 8086:0116"), sin
+# los nombres ("VGA compatible controller", "Network controller"...)
+# que buscan los bloques de deteccion. Como 'command -v' encontraba el
+# de BusyBox, pciutils nunca se instalaba y la deteccion de WiFi,
+# Bluetooth y dispositivos sin driver podia fallar en silencio en una
+# instalacion recien hecha. Ahora se pregunta por el PAQUETE, no por el
+# comando.
+HW_TOOLS_READY="no"
+ensure_hw_tools() {
+    [ "$HW_TOOLS_READY" = "yes" ] && return 0
+    apk info -e pciutils >/dev/null 2>&1 || install_pkg "pciutils"
+    apk info -e usbutils >/dev/null 2>&1 || install_pkg "usbutils"
+    # El shell recuerda la ruta de los comandos ya usados; se olvida para
+    # que 'lspci' apunte al recien instalado y no al de BusyBox.
+    hash -r 2>/dev/null || true
+    HW_TOOLS_READY="yes"
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 3: Distribución de teclado a "latam" (consola + sesión gráfica)
 # ------------------------------------------------------------------------------
@@ -247,8 +268,7 @@ WIFI_INFO=""
 detect_wifi_hardware() {
     log_info "== Detectando adaptadores de red inalambrica (PCI + USB) =="
 
-    command -v lspci >/dev/null 2>&1 || install_pkg "pciutils"
-    command -v lsusb >/dev/null 2>&1 || install_pkg "usbutils"
+    ensure_hw_tools
 
     net_pci=""
     net_usb=""
@@ -355,8 +375,7 @@ BT_INFO=""
 detect_bluetooth_hardware() {
     log_info "== Detectando hardware Bluetooth (PCI + USB) =="
 
-    command -v lspci >/dev/null 2>&1 || install_pkg "pciutils"
-    command -v lsusb >/dev/null 2>&1 || install_pkg "usbutils"
+    ensure_hw_tools
 
     bt_pci=""
     bt_usb=""
@@ -434,36 +453,81 @@ GPU_HAS_AMD="no"
 GPU_HAS_NVIDIA="no"
 GPU_HAS_VIRTUAL="no"
 GPU_COUNT=0
+NVIDIA_COUNT=0
+NVIDIA_SLOT=""      # ranura PCI de la NVIDIA, p. ej. 0000:01:00.0
+PRIMARY_SLOT=""     # GPU que el firmware uso al arrancar (boot_vga)
+PRIMARY_VENDOR=""
+IS_LAPTOP="no"
+OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
 
 detect_hardware() {
     log_info "== Detectando hardware gráfico =="
-    command -v lspci >/dev/null 2>&1 || install_pkg "pciutils"
+    ensure_hw_tools
 
-    if ! command -v lspci >/dev/null 2>&1; then
-        log_error "No fue posible obtener 'lspci'. Se omitirá la detección automática de GPU."
+    if command -v lspci >/dev/null 2>&1; then
+        log_info "Componentes PCI detectados:"
+        lspci 2>/dev/null | tee -a "$LOG_FILE" || true
+    fi
+
+    # La clasificacion se hace leyendo /sys (clase y fabricante en
+    # numeros), no el texto de lspci: funciona aunque lspci falte o sea
+    # la version reducida de BusyBox, y no depende de como cada version
+    # de la base de datos de nombres describa el dispositivo.
+    #   Clases: 0x0300 VGA, 0x0302 3D (tipico de la NVIDIA en Optimus),
+    #           0x0380 otro controlador de pantalla.
+    #   Fabricantes: 0x8086 Intel, 0x1002 AMD, 0x10de NVIDIA; virtuales:
+    #           0x1af4 virtio, 0x15ad VMware, 0x80ee VirtualBox,
+    #           0x1b36 QXL, 0x1234 QEMU.
+    for dev in /sys/bus/pci/devices/*; do
+        [ -r "$dev/class" ] || continue
+        case "$(cat "$dev/class")" in
+            0x0300*|0x0302*|0x0380*) ;;
+            *) continue ;;
+        esac
+        slot="${dev##*/}"
+        vendor="$(cat "$dev/vendor" 2>/dev/null || echo desconocido)"
+        boot_vga="$(cat "$dev/boot_vga" 2>/dev/null || echo 0)"
+        GPU_COUNT=$((GPU_COUNT + 1))
+        case "$vendor" in
+            0x8086) GPU_HAS_INTEL="yes" ;;
+            0x1002) GPU_HAS_AMD="yes" ;;
+            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot" ;;
+            0x1af4|0x15ad|0x80ee|0x1b36|0x1234) GPU_HAS_VIRTUAL="yes" ;;
+        esac
+        if [ "$boot_vga" = "1" ]; then
+            PRIMARY_SLOT="$slot"
+            PRIMARY_VENDOR="$vendor"
+        fi
+        log_info "GPU en $slot: fabricante $vendor, dispositivo $(cat "$dev/device" 2>/dev/null)$( [ "$boot_vga" = "1" ] && echo ' (principal al arrancar)')"
+    done
+
+    if [ "$GPU_COUNT" -eq 0 ]; then
+        log_warn "No se detectó ningún controlador de video."
         return 0
     fi
 
-    log_info "Componentes PCI detectados:"
-    lspci | tee -a "$LOG_FILE"
-
-    vga_line="$(lspci | grep -Ei 'VGA compatible controller|3D controller' || true)"
-    GPU_COUNT="$(lspci | grep -cEi 'VGA compatible controller|3D controller' || true)"
-
-    if [ -z "$vga_line" ]; then
-        log_warn "No se detectó ningún controlador de video vía lspci."
-        return 0
+    # Portatil: tipo de chasis del firmware (8 portatil, 9 laptop,
+    # 10 notebook, 14 sub-notebook, 30-32 tableta/convertible) o, como
+    # respaldo, la presencia de una bateria.
+    case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in
+        8|9|10|11|14|30|31|32) IS_LAPTOP="yes" ;;
+    esac
+    if [ "$IS_LAPTOP" = "no" ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1; then
+        IS_LAPTOP="yes"
     fi
 
-    log_info "Controlador(es) de video encontrado(s):"
-    log_info "$vga_line"
+    # Optimus: portatil donde la pantalla la maneja la grafica integrada
+    # (Intel o AMD, la principal al arrancar) y hay UNA NVIDIA adicional.
+    # Si la principal fuera la NVIDIA (escritorios, o portatiles con
+    # conmutador en modo "solo dedicada"), el modo de ahorro no aplica:
+    # apagarla dejaria sin imagen las salidas conectadas a ella.
+    if [ "$IS_LAPTOP" = "yes" ] && [ "$NVIDIA_COUNT" -eq 1 ]; then
+        case "$PRIMARY_VENDOR" in
+            0x8086|0x1002) OPTIMUS_LAPTOP="yes" ;;
+        esac
+    fi
 
-    echo "$vga_line" | grep -qi "intel" && GPU_HAS_INTEL="yes"
-    echo "$vga_line" | grep -Eq "AMD|ATI|Radeon" && GPU_HAS_AMD="yes"
-    echo "$vga_line" | grep -qi "nvidia" && GPU_HAS_NVIDIA="yes"
-    echo "$vga_line" | grep -Eqi "virtio|vmware|virtualbox|qxl" && GPU_HAS_VIRTUAL="yes"
-
-    log_ok "Resumen GPU -> Intel:$GPU_HAS_INTEL AMD:$GPU_HAS_AMD NVIDIA:$GPU_HAS_NVIDIA Virtual:$GPU_HAS_VIRTUAL (adaptadores detectados: $GPU_COUNT)"
+    log_ok "Resumen GPU -> Intel:$GPU_HAS_INTEL AMD:$GPU_HAS_AMD NVIDIA:$GPU_HAS_NVIDIA Virtual:$GPU_HAS_VIRTUAL (adaptadores: $GPU_COUNT; portatil: $IS_LAPTOP; Optimus: $OPTIMUS_LAPTOP)"
 
     # Adaptadores de video por USB (docks para multiples monitores) no
     # aparecen en lspci. DisplayLink es el fabricante mas comun. NO se
@@ -478,7 +542,7 @@ detect_hardware() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 12: Firmware y controladores de video (protección NVIDIA Legacy)
+# BLOQUE 12: Firmware y controladores de video (NVIDIA: modos ahorro Optimus, seguro y activo)
 # ------------------------------------------------------------------------------
 install_drivers() {
     log_info "== Instalando firmware y controladores =="
@@ -491,12 +555,16 @@ install_drivers() {
 
     if [ "$GPU_HAS_INTEL" = "yes" ]; then
         log_info "Instalando firmware Intel..."
-        install_pkgs linux-firmware-i915 mesa-vulkan-intel
+        # libva-intel-driver: GPU Intel antiguas (hasta ~2016).
+        # intel-media-driver: GPU Intel de Broadwell (2014) en adelante.
+        # Se instalan ambos: libva prueba el moderno y, si la GPU no lo
+        # soporta, recurre al antiguo.
+        install_pkgs linux-firmware-i915 mesa-vulkan-intel libva-intel-driver intel-media-driver libva-utils
     fi
 
     if [ "$GPU_HAS_AMD" = "yes" ]; then
         log_info "Instalando firmware y Vulkan para AMD/Radeon..."
-        install_pkgs linux-firmware-amdgpu linux-firmware-radeon mesa-vulkan-ati mesa-vulkan-radeon vulkan-loader
+        install_pkgs linux-firmware-amdgpu linux-firmware-radeon mesa-vulkan-ati mesa-vulkan-radeon vulkan-loader mesa-va-gallium libva-utils
     fi
 
     if [ "$GPU_HAS_VIRTUAL" = "yes" ]; then
@@ -509,40 +577,46 @@ install_drivers() {
         log_info "Instalando soporte NVIDIA (driver abierto Nouveau, vía Gallium)..."
         install_pkgs linux-firmware-nvidia
 
-        if [ "$GPU_COUNT" -gt 1 ]; then
-            log_warn "Configuración híbrida detectada ($GPU_COUNT adaptadores, ej. Optimus)."
-            log_warn "Aunque exista una GPU integrada de respaldo, Xorg puede seguir intentando inicializar aceleración 3D sobre nouveau y colgar el arranque en tarjetas Fermi/Kepler antiguas."
+        nvidia_mode=""
+        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+            log_info "Portatil con graficos hibridos (Optimus): pantalla en la grafica integrada ($PRIMARY_SLOT), NVIDIA en $NVIDIA_SLOT."
+            nvidia_mode="${OPT_NVIDIA_MODE:-}"
+            if [ -z "$nvidia_mode" ]; then
+                log_info "Opciones: apagar la NVIDIA y usar la integrada (ahorro, recomendado) / bloquearla por completo / dejarla activa."
+                if ask_yes_no "¿Apagar la NVIDIA cuando no se usa y dejar escritorio y video en la grafica integrada (recomendado)?"; then
+                    nvidia_mode="optimus"
+                elif ask_yes_no "¿Bloquear la NVIDIA por completo (modo seguro)?"; then
+                    nvidia_mode="safe"
+                else
+                    nvidia_mode="active"
+                fi
+            fi
         else
-            log_warn "Se detectó NVIDIA como única tarjeta gráfica (sin gráfica integrada de respaldo)."
+            if [ "$GPU_COUNT" -gt 1 ]; then
+                log_warn "Varias GPU ($GPU_COUNT adaptadores), pero no es un portatil Optimus (o la NVIDIA es la principal)."
+            else
+                log_warn "Se detectó NVIDIA como única tarjeta gráfica (sin gráfica integrada de respaldo)."
+            fi
+            log_warn "En tarjetas NVIDIA antiguas (Tesla/Fermi/Kepler), Nouveau puede causar pantalla negra o cuelgues."
+            log_info "Opción 's': bloquea el módulo nouveau y usa la GPU restante (o la imagen básica del firmware). Modo seguro."
+            log_info "Opción 'n': deja Nouveau activo con aceleración 3D normal en la NVIDIA."
+            if want OPT_NVIDIA_SAFE "¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?"; then
+                nvidia_mode="safe"
+            else
+                nvidia_mode="active"
+            fi
         fi
-        log_warn "En tarjetas NVIDIA antiguas (Tesla/Fermi/Kepler), Nouveau puede causar pantalla negra o cuelgues al iniciar Xorg."
 
-        log_info "Opción 's': bloquea la NVIDIA por completo (kernel + Xorg) y usa solo la GPU restante. Modo seguro, recomendado en hardware Legacy."
-        log_info "Opción 'n': deja Nouveau activo con aceleración 3D normal en la NVIDIA. Riesgo de pantalla negra/cuelgue en tarjetas antiguas."
-
-        if want OPT_NVIDIA_SAFE "¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?"; then
-            log_info "Aplicando protección: NoAccel en Xorg + bloqueo del módulo nouveau en el kernel..."
-
-            install_pkg "xf86-video-nouveau"
-            mkdir -p /etc/X11/xorg.conf.d
-            cat > /etc/X11/xorg.conf.d/20-nouveau-safe.conf <<EOF
-Section "Device"
-    Identifier "Nvidia Legacy Failsafe"
-    Driver "nouveau"
-    Option "NoAccel" "True"
-EndSection
-EOF
-
-            mkdir -p /etc/modprobe.d
-            cat > /etc/modprobe.d/blacklist-nouveau.conf <<'EOF'
-blacklist nouveau
-options nouveau modeset=0
-EOF
-
-            log_ok "Protección aplicada: /etc/X11/xorg.conf.d/20-nouveau-safe.conf + /etc/modprobe.d/blacklist-nouveau.conf"
-            log_info "La NVIDIA quedará inactiva; el sistema usará solo la(s) GPU(s) restante(s). Para revertir: borra ambos archivos y reinicia."
-        else
-            log_info "Se mantiene Nouveau activo sin restricciones (NVIDIA con aceleración 3D normal)."
+        case "$nvidia_mode" in
+            optimus) nvidia_apply_optimus ;;
+            safe)    nvidia_apply_safe ;;
+            *)
+                nvidia_clean_modes
+                log_info "Se mantiene Nouveau activo sin restricciones (NVIDIA con aceleración 3D normal)."
+                ;;
+        esac
+        if [ "$INITRAMFS_DIRTY" = "yes" ]; then
+            regen_initramfs
         fi
     fi
 
@@ -550,7 +624,203 @@ EOF
         log_warn "GPU no identificada. mesa-dri-gallium ya cubre software rendering (llvmpipe) de respaldo."
     fi
 
+    check_vaapi
     log_ok "Instalación de firmware y controladores finalizada."
+}
+
+# --- Modos de la NVIDIA --------------------------------------------------------
+# Cada modo empieza borrando los archivos de los otros (nvidia_clean_modes),
+# asi que volver a correr el script y elegir otro modo cambia de verdad la
+# configuracion en vez de mezclar restos de la anterior.
+NV_BLACKLIST="/etc/modprobe.d/blacklist-nouveau.conf"
+NV_XORG_SAFE="/etc/X11/xorg.conf.d/20-nouveau-safe.conf"   # de la version anterior del modo seguro
+NV_XORG_IGPU="/etc/X11/xorg.conf.d/20-gpu-integrada.conf"
+NV_LOCAL="/etc/local.d/nvidia-optimus.start"
+NV_ENV_PLASMA="/etc/xdg/plasma-workspace/env/gpu-integrada.sh"
+NV_ENV_PROFILE="/etc/profile.d/gpu-integrada.sh"
+INITRAMFS_DIRTY="no"
+
+nvidia_clean_modes() {
+    for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE"; do
+        if [ -e "$f" ]; then
+            if [ "$f" = "$NV_BLACKLIST" ]; then
+                INITRAMFS_DIRTY="yes"
+            fi
+            rm -f "$f"
+            log_info "Eliminado (configuracion NVIDIA anterior): $f"
+        fi
+    done
+}
+
+# Modo seguro: bloquea el modulo nouveau en el kernel.
+# CORRECCION: la version anterior escribia ademas 20-nouveau-safe.conf, una
+# seccion "Device" de Xorg con Driver "nouveau" y NoAccel, SIN indicar a que
+# tarjeta aplicaba. Esa combinacion se contradice: con el modulo bloqueado,
+# el driver nouveau de Xorg no puede funcionar, y como la seccion no tenia
+# BusID, Xorg la aplicaba a la tarjeta principal -- en un portatil Optimus,
+# la Intel -- intentando manejarla con el driver de NVIDIA. Es una causa
+# probable de la "pantalla negra persistente" registrada en el README (en
+# Wayland no se nota, porque Wayland no lee esos archivos). Ahora solo se
+# bloquea el modulo, y Xorg detecta por si mismo la grafica que queda.
+nvidia_apply_safe() {
+    nvidia_clean_modes
+    mkdir -p /etc/modprobe.d
+    cat > "$NV_BLACKLIST" <<'EOF'
+blacklist nouveau
+options nouveau modeset=0
+EOF
+    INITRAMFS_DIRTY="yes"
+    log_ok "Modo seguro aplicado: $NV_BLACKLIST"
+    log_info "La NVIDIA quedara sin driver. Ojo: sin driver tampoco se apaga y sigue consumiendo energia."
+    log_info "Para revertir: borra ese archivo, ejecuta 'mkinitfs <version-del-kernel>' y reinicia."
+}
+
+# Modo ahorro (portatiles Optimus): nouveau se carga para poder APAGAR la
+# NVIDIA (solo nouveau sabe hacer la llamada al firmware que la apaga), y
+# el escritorio y el video se mantienen en la grafica integrada para que
+# nada la despierte. Probado en un ASUS K53SV (Intel HD 3000 + GT 540M,
+# Fermi) con Plasma en Wayland: la NVIDIA queda en D3cold (sin corriente).
+# Tres obstaculos encontrados en esas pruebas, y como se resuelven:
+#   1. KWin, Firefox y otros programas abren todas las GPU que encuentran.
+#      -> Variables de sesion KWIN_DRM_DEVICES y MOZ_DRM_DEVICE apuntando a
+#         la integrada; en Xorg, AutoAddGPU desactivado.
+#   2. La funcion de audio HDMI de la NVIDIA quedaba activa y mantenia
+#      despierta a la grafica. Las salidas de video del portatil estan en
+#      la integrada, asi que ese audio no sirve para nada.
+#      -> Se desvincula de su driver al arrancar.
+#   3. nouveau detectaba una pantalla "fantasma" en su salida VGA analogica
+#      (que en un portatil Optimus no esta cableada) y la mantenia
+#      encendida con una consola de texto.
+#      -> Se desconectan al arrancar las salidas ANALOGICAS de la NVIDIA
+#         (VGA/TV) que figuren como conectadas. Las digitales no se tocan.
+nvidia_apply_optimus() {
+    nvidia_clean_modes
+    aud_slot="${NVIDIA_SLOT%.*}.1"
+
+    # 1) Script de arranque (servicio 'local' de OpenRC).
+    mkdir -p /etc/local.d
+    {
+        printf '#!/bin/sh\n'
+        printf '# Generado por desktop-postinstall.sh (modo ahorro para portatiles Optimus).\n'
+        printf '# Permite que nouveau apague la NVIDIA cuando no se usa.\n'
+        printf 'GPU=%s\n' "$NVIDIA_SLOT"
+        printf 'AUD=%s\n' "$aud_slot"
+        cat <<'EOF'
+
+# Soltar el audio HDMI de la NVIDIA: mientras siga activo, la grafica no
+# puede apagarse. Las salidas de video estan en la grafica integrada.
+if [ -e "/sys/bus/pci/drivers/snd_hda_intel/$AUD" ]; then
+    echo "$AUD" > /sys/bus/pci/drivers/snd_hda_intel/unbind 2>/dev/null
+fi
+
+# Esperar a que nouveau registre la tarjeta (hasta 15 s).
+i=0
+while ! ls -d /sys/bus/pci/devices/"$GPU"/drm/card* >/dev/null 2>&1 && [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+
+# Desconectar salidas analogicas "fantasma" (VGA/TV) que nouveau cree
+# conectadas: mientras haya una, mantiene la tarjeta encendida.
+for c in /sys/bus/pci/devices/"$GPU"/drm/card*/card*-*; do
+    [ -f "$c/status" ] || continue
+    case "${c##*/}" in
+        *-VGA-*|*-TV-*|*-SVIDEO-*|*-Composite-*|*-Component-*) ;;
+        *) continue ;;
+    esac
+    if [ "$(cat "$c/status")" = "connected" ]; then
+        echo off > "$c/status"
+    fi
+done
+exit 0
+EOF
+    } > "$NV_LOCAL"
+    chmod +x "$NV_LOCAL"
+    rc-update add local default >/dev/null 2>&1 || log_warn "No se pudo habilitar el servicio 'local' de OpenRC."
+    log_ok "Script de arranque creado: $NV_LOCAL (servicio 'local' habilitado)."
+
+    # 2) Variables de sesion: escritorio y video en la integrada. El numero
+    #    de dispositivo (card0, card1...) se busca en cada inicio de sesion a
+    #    partir de la ranura PCI fija, porque puede cambiar entre arranques.
+    mkdir -p "${NV_ENV_PLASMA%/*}" /etc/profile.d
+    for envf in "$NV_ENV_PLASMA" "$NV_ENV_PROFILE"; do
+        {
+            printf '# Generado por desktop-postinstall.sh (modo ahorro para portatiles Optimus).\n'
+            printf '# Deja el escritorio (KWin) y el video de Firefox en la grafica integrada\n'
+            printf '# para que ningun programa despierte a la NVIDIA.\n'
+            printf '_igpu=/sys/bus/pci/devices/%s/drm\n' "$PRIMARY_SLOT"
+            cat <<'EOF'
+for _p in "$_igpu"/card*; do [ -e "$_p" ] && export KWIN_DRM_DEVICES="/dev/dri/${_p##*/}"; done
+for _p in "$_igpu"/renderD*; do [ -e "$_p" ] && export MOZ_DRM_DEVICE="/dev/dri/${_p##*/}"; done
+unset _igpu _p
+EOF
+        } > "$envf"
+    done
+    log_ok "Variables de sesion: $NV_ENV_PLASMA (Plasma) y $NV_ENV_PROFILE (demas sesiones)."
+
+    # 3) Xorg (Xfce, MATE, LXQt o una pantalla de inicio en X11): que no
+    #    agregue la NVIDIA como GPU secundaria; usa solo la principal.
+    mkdir -p /etc/X11/xorg.conf.d
+    cat > "$NV_XORG_IGPU" <<'EOF'
+# Generado por desktop-postinstall.sh (modo ahorro para portatiles Optimus).
+# Xorg usa solo la grafica principal (la integrada) y no abre la NVIDIA.
+Section "ServerFlags"
+    Option "AutoAddGPU" "off"
+EndSection
+EOF
+    log_ok "Xorg limitado a la grafica principal: $NV_XORG_IGPU"
+    log_warn "La parte de Xorg (escritorios distintos de Plasma en Wayland) aun no se ha probado en un equipo real."
+
+    log_info "Despues de reiniciar, verifica que la NVIDIA quedo apagada (debe decir D3cold):"
+    log_info "  cat /sys/bus/pci/devices/$NVIDIA_SLOT/power_state"
+    log_info "Limite: si algun puerto de video del portatil estuviera cableado a la NVIDIA, no daria imagen en este modo (en la mayoria de portatiles Optimus todos van a la integrada)."
+}
+
+# Regenera el initramfs de cada kernel instalado, para que el cambio en el
+# bloqueo de nouveau aplique desde las primeras etapas del arranque.
+regen_initramfs() {
+    if ! command -v mkinitfs >/dev/null 2>&1; then
+        log_warn "mkinitfs no disponible; no se regenero el initramfs."
+        return 0
+    fi
+    for kdir in /lib/modules/*; do
+        [ -d "$kdir/kernel" ] || continue
+        kver="${kdir##*/}"
+        if mkinitfs "$kver" >>"$LOG_FILE" 2>&1; then
+            log_ok "initramfs regenerado para el kernel $kver."
+        else
+            log_warn "No se pudo regenerar el initramfs de $kver. Ejecuta manualmente: mkinitfs $kver"
+        fi
+    done
+    INITRAMFS_DIRTY="no"
+}
+
+# Comprueba que la decodificacion de video por hardware (VA-API) responde
+# en la grafica principal y lo deja en el log. Solo informa, no cambia
+# nada. Se consulta el dispositivo de esa grafica por su ranura PCI (y no
+# "el primero" de /dev/dri), porque en equipos hibridos el primero puede
+# ser la NVIDIA: justo eso le paso a Firefox en las pruebas del K53SV.
+check_vaapi() {
+    command -v vainfo >/dev/null 2>&1 || return 0
+    [ -n "$PRIMARY_SLOT" ] || return 0
+    [ "$GPU_HAS_VIRTUAL" = "yes" ] && return 0
+    render=""
+    for r in /sys/bus/pci/devices/"$PRIMARY_SLOT"/drm/renderD*; do
+        [ -e "$r" ] && render="/dev/dri/${r##*/}"
+    done
+    if [ -z "$render" ]; then
+        log_info "VA-API: la grafica principal aun no tiene dispositivo de video; verificalo tras reiniciar con: vainfo"
+        return 0
+    fi
+    va_out="$(vainfo --display drm --device "$render" 2>&1 || true)"
+    va_drv="$(printf '%s\n' "$va_out" | grep -m1 'Driver version' | sed 's/.*Driver version: *//' || true)"
+    if printf '%s\n' "$va_out" | grep -q 'VAProfileH264'; then
+        log_ok "VA-API funciona en la grafica principal (${va_drv:-driver desconocido}): H.264 se decodifica por hardware."
+    elif printf '%s\n' "$va_out" | grep -q 'VAProfile'; then
+        log_ok "VA-API funciona en la grafica principal (${va_drv:-driver desconocido}), pero sin H.264."
+    else
+        log_warn "VA-API no respondio en $render: el video se decodificara con el procesador. Revisa con: vainfo --display drm --device $render"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -1007,7 +1277,10 @@ EOF
 # ------------------------------------------------------------------------------
 install_fonts() {
     log_info "== Instalando tipografías base =="
-    install_pkgs ttf-dejavu font-liberation font-liberation-sans-narrow font-noto
+    # font-noto-emoji va aparte de font-noto: sin el, paginas como
+    # WhatsApp Web muestran cuadritos en lugar de emojis. (Plasma ya lo
+    # trae como dependencia; los demas escritorios no.)
+    install_pkgs ttf-dejavu font-liberation font-liberation-sans-narrow font-noto font-noto-emoji
     log_ok "Tipografías base instaladas."
 }
 
@@ -1521,9 +1794,15 @@ select_options_menu() {
     #    OnlyOffice o Chrome activa Flatpak automaticamente.
     OPT_KEYBOARD=yes
     OPT_NVIDIA_SAFE=yes
+    # Portatiles Optimus: en vez de la casilla de modo seguro se muestra
+    # una segunda pantalla con tres modos; por defecto, el de ahorro
+    # (probado en el K53SV, ver nvidia_apply_optimus).
+    OPT_NVIDIA_MODE=""
+    [ "$OPTIMUS_LAPTOP" = "yes" ] && OPT_NVIDIA_MODE="optimus"
     OPT_GCOMPAT=no
     OPT_CUPS=yes
     OPT_LIBREOFFICE=yes
+    OPT_FIREFOX=yes
     OPT_FLATPAK=no
     OPT_ONLYOFFICE=no
     OPT_CHROME=no
@@ -1534,24 +1813,36 @@ select_options_menu() {
         # usuario vuelve desde el resumen, encuentra lo que ya habia
         # marcado, no los valores por defecto.
         set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
-        if [ "$GPU_HAS_NVIDIA" = "yes" ]; then
+        if [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ]; then
             set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
         fi
         set -- "$@" \
             GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
             CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
             LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
+            FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
             FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
             ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
             CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
             UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
 
-        if ! sel="$(dialog --stdout --separate-output \
+        # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
+        # segun el contenido y la pantalla disponible. Con un tamano fijo
+        # (antes 20x72), en pantallas amplias las descripciones quedaban
+        # cortadas; en pantallas chicas dialog igual recorta la ventana y
+        # la lista se vuelve desplazable, asi que no se pierde ninguna
+        # opcion.
+        # --no-tags: oculta los nombres internos (KEYBOARD, CUPS...), que
+        # no le dicen nada al usuario y ocupaban ~17 columnas -- sin ellos,
+        # todas las descripciones caben completas en una consola de 80
+        # columnas. dialog SIGUE devolviendo esos nombres al confirmar, que
+        # es lo que el script lee mas abajo (verificado).
+        if ! sel="$(dialog --stdout --separate-output --no-tags \
                 --backtitle "Configuracion post-instalacion de Alpine Linux" \
                 --title "Acciones a realizar" \
                 --ok-label "Continuar" --cancel-label "Salir" \
                 --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
-                20 72 10 "$@")"; then
+                0 0 0 "$@")"; then
             clear 2>/dev/null || true
             log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
             trap - EXIT INT TERM
@@ -1560,12 +1851,12 @@ select_options_menu() {
 
         # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
         # Las etiquetas se validan contra una lista fija antes del eval.
-        for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
+        for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
             eval "OPT_$k=no"
         done
         for tag in $sel; do
             case "$tag" in
-                KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
+                KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
                     eval "OPT_$tag=yes" ;;
             esac
         done
@@ -1575,12 +1866,37 @@ select_options_menu() {
             OPT_FLATPAK=yes
         fi
 
+        # Portatil Optimus: elegir que hacer con la NVIDIA. "Volver"
+        # regresa a la pantalla de casillas.
+        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+            if ! nv_sel="$(dialog --stdout --no-tags \
+                    --backtitle "Configuracion post-instalacion de Alpine Linux" \
+                    --title "Grafica NVIDIA (portatil con graficos hibridos)" \
+                    --ok-label "Continuar" --cancel-label "Volver" \
+                    --radiolist "Este portatil tiene una grafica integrada y una NVIDIA.\nFLECHAS para moverse, ESPACIO elige, ENTER continua." \
+                    0 0 0 \
+                    optimus "Apagarla y usar la integrada (ahorro, recomendado)" "$( [ "$OPT_NVIDIA_MODE" = optimus ] && echo on || echo off)" \
+                    safe "Bloquearla por completo (sin driver)" "$( [ "$OPT_NVIDIA_MODE" = safe ] && echo on || echo off)" \
+                    active "Dejarla activa con nouveau (riesgo en tarjetas viejas)" "$( [ "$OPT_NVIDIA_MODE" = active ] && echo on || echo off)")"; then
+                continue
+            fi
+            case "$nv_sel" in
+                optimus|safe|active) OPT_NVIDIA_MODE="$nv_sel" ;;
+            esac
+        fi
+
         summary=""
         [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
-        [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
+        [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
+        case "$OPT_NVIDIA_MODE" in
+            optimus) summary="$summary\n  - NVIDIA apagada, todo en la grafica integrada (ahorro)" ;;
+            safe)    summary="$summary\n  - NVIDIA bloqueada (modo seguro)" ;;
+            active)  summary="$summary\n  - NVIDIA activa con nouveau" ;;
+        esac
         [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
         [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
         [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
+        [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
         [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
         [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
         [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
@@ -1590,7 +1906,7 @@ select_options_menu() {
         if dialog --title "Confirmar" \
                 --yes-label "Comenzar" --no-label "Volver" \
                 --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
-                20 72; then
+                0 0; then
             break
         fi
         # "Volver" (o ESC): se repite el menu con las marcas actuales.
@@ -1598,11 +1914,130 @@ select_options_menu() {
 
     clear 2>/dev/null || true
     MENU_USED="yes"
-    log_ok "Opciones elegidas en el menu:$(printf "$summary" | tr '\n' ' ')"
+    # '%b' interpreta los \n del resumen sin usarlo como cadena de
+    # formato: si una descripcion llegara a contener un '%', printf no
+    # lo confundiria con una directiva (antes: error y linea cortada).
+    log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 30: Función principal
+# BLOQUE 30: Aplicaciones de uso diario y aplicaciones predeterminadas
+# ------------------------------------------------------------------------------
+# Pensado para el usuario comun al que apunta el script: leer PDFs,
+# reproducir audios y videos locales, y navegar. Cada aplicacion se
+# registra ademas como PREDETERMINADA: instalarla no basta, porque varias
+# aplicaciones se declaran capaces de abrir el mismo tipo de archivo (por
+# ejemplo, LibreOffice Draw tambien abre PDF) y cual gana depende del
+# escritorio. Los valores se escriben en /etc/xdg/mimeapps.list, el
+# archivo de preferencias a nivel de sistema del estandar freedesktop.
+# Limite conocido: si el usuario ya eligio otra aplicacion por su cuenta,
+# su eleccion personal (~/.config/mimeapps.list) tiene prioridad.
+MIMEAPPS="/etc/xdg/mimeapps.list"
+
+# Imprime el primer archivo .desktop existente de la lista. Los nombres
+# cambian entre versiones (evince, por ejemplo, usa org.gnome.Evince.desktop),
+# asi que nunca se apunta a una aplicacion que no esta instalada.
+find_desktop_file() {
+    for d in "$@"; do
+        if [ -f "/usr/share/applications/$d" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Registra $1 (archivo .desktop) como predeterminado para los tipos MIME
+# restantes, en la seccion [Default Applications]. Reemplaza una entrada
+# previa del mismo tipo y conserva el resto del archivo intacto.
+set_default_app() {
+    app="$1"; shift
+    mkdir -p /etc/xdg
+    [ -f "$MIMEAPPS" ] || printf '[Default Applications]\n' > "$MIMEAPPS"
+    grep -qx '\[Default Applications\]' "$MIMEAPPS" || printf '\n[Default Applications]\n' >> "$MIMEAPPS"
+    for mime in "$@"; do
+        awk -v m="$mime" -v a="$app" '
+            /^\[/ { insec = ($0 == "[Default Applications]") }
+            insec && index($0, m "=") == 1 { next }
+            { print }
+            $0 == "[Default Applications]" { print m "=" a }
+        ' "$MIMEAPPS" > "$MIMEAPPS.tmp" && mv "$MIMEAPPS.tmp" "$MIMEAPPS"
+    done
+}
+
+install_daily_apps() {
+    log_info "== Aplicaciones de uso diario =="
+
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ]; then
+        log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
+        return 0
+    fi
+
+    # --- Visor de PDF ---
+    # Okular en Plasma (se integra con el resto del escritorio); evince en
+    # los demas (GTK, liviano). Si conviven Plasma y otro escritorio, se
+    # instalan ambos y el predeterminado de sistema es evince.
+    if [ "$DE_PLASMA" = "yes" ]; then
+        install_pkgs okular
+    fi
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+        install_pkgs evince
+    fi
+    if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
+        set_default_app "$pdf_app" application/pdf
+        log_ok "Visor de PDF predeterminado: $pdf_app"
+    else
+        log_warn "No se encontro el visor de PDF instalado; no se cambio la aplicacion predeterminada para PDF."
+    fi
+
+    # --- Reproductor multimedia ---
+    # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
+    # de video por hardware (VA-API) instalada en el Bloque 12. Cubre los
+    # audios de WhatsApp (.ogg/.opus) y los videos descargados habituales.
+    install_pkgs mpv
+    if media_app="$(find_desktop_file mpv.desktop io.mpv.Mpv.desktop)"; then
+        set_default_app "$media_app" \
+            audio/ogg audio/x-opus+ogg audio/opus audio/mpeg audio/mp4 audio/aac \
+            audio/x-wav audio/wav audio/flac audio/webm \
+            video/mp4 video/webm video/x-matroska video/quicktime \
+            video/x-msvideo video/3gpp video/mpeg video/ogg
+        log_ok "Reproductor multimedia predeterminado: $media_app"
+    else
+        log_warn "No se encontro el reproductor instalado; no se cambiaron las aplicaciones predeterminadas de audio y video."
+    fi
+
+    # --- Navegador ---
+    if want OPT_FIREFOX "¿Deseas instalar el navegador Firefox?"; then
+        install_pkgs firefox
+        if web_app="$(find_desktop_file firefox.desktop org.mozilla.firefox.desktop)"; then
+            set_default_app "$web_app" x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml
+            log_ok "Navegador predeterminado: $web_app"
+        else
+            log_warn "No se encontro Firefox instalado; no se cambio el navegador predeterminado."
+        fi
+        # No se fuerza el idioma: en su primer arranque, Firefox ofrece
+        # descargar el paquete de idioma que coincide con el del sistema
+        # (es_ES). Forzar otra variante requeriria descargas atadas a la
+        # version exacta del navegador, que se romperian al actualizarlo.
+        log_info "En su primer arranque, Firefox ofrecera cambiar su interfaz al idioma del sistema (espanol)."
+    else
+        log_info "Se omite Firefox."
+    fi
+}
+
+# Recomendaciones que el script NO aplica por su cuenta (instalar
+# extensiones sin que el usuario lo vea no es buena practica). Se
+# muestran al final para que las vea quien ejecuto el script.
+print_browser_recommendations() {
+    command -v firefox >/dev/null 2>&1 || return 0
+    log_info "== Recomendaciones para Firefox (instalar desde addons.mozilla.org) =="
+    log_info "  - uBlock Origin: bloquea publicidad y rastreadores, lo que reduce la carga del procesador al navegar."
+    log_info "  - enhanced-h264ify: en equipos antiguos, pide a YouTube video H.264, que la GPU puede decodificar"
+    log_info "    por hardware; los formatos por defecto (VP9/AV1) terminan decodificandose en el procesador."
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 31: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
@@ -1635,11 +2070,13 @@ main() {
     setup_locale_es
     install_fonts
     install_libreoffice
+    install_daily_apps
     setup_flatpak
     setup_display_manager
     setup_update_shortcut
     setup_user_groups
 
+    print_browser_recommendations
     log_ok "===== Proceso completado exitosamente ====="
     log_info "Reinicia el sistema para que todos los cambios surtan efecto."
 

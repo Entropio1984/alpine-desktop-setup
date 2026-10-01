@@ -4,7 +4,7 @@ Script de shell POSIX (`ash`, compatible con BusyBox) que automatiza la configur
 
 Detecta automáticamente qué tiene tu sistema (entorno de escritorio, GPU, CPU) y adapta lo que instala en consecuencia, en vez de asumir una configuración fija.
 
-> ⚠️ **Problema conocido sin resolver — GPU NVIDIA.** En las pruebas realizadas hasta ahora, el modo seguro del Bloque 12 (bloqueo de `nouveau` vía Xorg + `/etc/modprobe.d`) **no ha sido suficiente en todos los casos**: tras reiniciar, el equipo puede seguir mostrando pantalla negra en hardware con tarjeta NVIDIA. Esto sigue bajo investigación y **no debe darse por resuelto** solo por haber respondido "sí" a la pregunta del Bloque 12. Ver la sección [Limitaciones conocidas](#limitaciones-conocidas) para más detalle.
+> ⚠️ **GPU NVIDIA — causa probable de la pantalla negra corregida, pendiente de confirmar en Xorg.** El modo seguro anterior del Bloque 12 escribía, además del bloqueo de `nouveau`, un archivo de Xorg (`20-nouveau-safe.conf`) que le pedía usar el driver `nouveau` sin indicar en qué tarjeta. Con el módulo bloqueado ese driver no puede funcionar, y en un portátil híbrido Xorg lo aplicaba a la Intel: una causa probable de la pantalla negra persistente. El modo seguro ya no crea ese archivo (y lo borra si existe). En **portátiles Optimus** hay además un modo nuevo, **probado en un equipo real**, que apaga la NVIDIA y deja todo en la gráfica integrada. Lo que aún no se ha probado es el comportamiento en escritorios que usan Xorg (Xfce, MATE, LXQt). Ver [Limitaciones conocidas](#limitaciones-conocidas).
 
 ---
 
@@ -63,7 +63,7 @@ Tres principios guían todas las decisiones de diseño:
 
 ## Recorrido bloque por bloque
 
-El script se organiza en 30 bloques. `main()` los ejecuta casi en el orden del archivo, con una excepción deliberada: `detect_hardware` (Bloque 11) y el menú de opciones (Bloque 29) corren **al principio**, justo después de actualizar los repositorios, para que todas las decisiones se tomen antes de empezar a instalar.
+El script se organiza en 31 bloques. `main()` los ejecuta casi en el orden del archivo, con una excepción deliberada: `detect_hardware` (Bloque 11) y el menú de opciones (Bloque 29) corren **al principio**, justo después de actualizar los repositorios, para que todas las decisiones se tomen antes de empezar a instalar.
 
 ### Bloque 1 — `check_root`
 Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
@@ -96,7 +96,7 @@ Instala la base de red/audio (`networkmanager`, `wpa_supplicant`, `pulseaudio`) 
 `wpa_supplicant` y `pulseaudio` **no** se registran como servicios OpenRC de arranque: `wpa_supplicant` lo invoca NetworkManager internamente vía D-Bus, y PulseAudio se gestiona por sesión de usuario en cada entorno, no como demonio de sistema.
 
 ### Bloque 7 — `detect_wifi_hardware`
-Detecta adaptadores de red inalámbrica tanto por **PCI** (`lspci`, clase "Network controller"/"Wireless") como por **USB** (`lsusb`, instalando `usbutils` si falta). Es importante cubrir ambos: un adaptador WiFi conectado como dongle externo **no aparece en `lspci`**, solo en `lsusb`. El resultado combinado se guarda en `$WIFI_INFO` para que el bloque siguiente lo use.
+Detecta adaptadores de red inalámbrica tanto por **PCI** (`lspci`, clase "Network controller"/"Wireless") como por **USB** (`lsusb`). Antes de usarlos, la función `ensure_hw_tools` instala `pciutils` y `usbutils` si **el paquete** no está: BusyBox trae sus propios `lspci` y `lsusb`, pero solo muestran códigos numéricos, sin los nombres que buscan estos bloques. *(Corrección: antes se comprobaba con `command -v lspci`, que encontraba la versión de BusyBox, así que `pciutils` nunca se instalaba y la detección podía fallar en silencio en una instalación recién hecha.)* Es importante cubrir ambos: un adaptador WiFi conectado como dongle externo **no aparece en `lspci`**, solo en `lsusb`. El resultado combinado se guarda en `$WIFI_INFO` para que el bloque siguiente lo use.
 
 ### Bloque 8 — `install_wifi_firmware`
 Busca palabras clave de fabricante (Intel, Realtek, Atheros/Qualcomm, MediaTek/Ralink, Marvell, Broadcom) en `$WIFI_INFO` e instala el/los subpaquete(s) de firmware correspondientes (Alpine divide el firmware en decenas de subpaquetes por fabricante: `linux-firmware-intel`, `linux-firmware-realtek`, `linux-firmware-ath9k_htc`, etc.). En una instalación normal de Alpine ya están todos presentes (ver la nota del Bloque 12), así que este paso solo marca la diferencia en sistemas adelgazados. Si no se identifica el fabricante por nombre, instala un conjunto amplio como red de seguridad en vez de no instalar nada.
@@ -110,16 +110,44 @@ Detecta adaptadores Bluetooth por **PCI** y **USB** (`lsusb`, ya que la inmensa 
 Instala `bluez` + `bluez-openrc` + `pulseaudio-bluez` y habilita el servicio `bluetooth`. **`pulseaudio-bluez` es el eslabón que suele faltar:** sin él, `bluez` permite emparejar audífonos o altavoces Bluetooth, pero PulseAudio no tiene el módulo necesario para enrutar el perfil A2DP — el dispositivo se empareja pero no emite sonido. Si `$BT_INFO` identificó un fabricante, instala también el firmware Bluetooth correspondiente — **importante:** no existe un paquete genérico `linux-firmware-bluetooth` en Alpine; el firmware de Bluetooth está fragmentado por fabricante igual que el de WiFi (`linux-firmware-rtl_bt` para Realtek, `linux-firmware-ar3k` para Atheros/Qualcomm; Broadcom e Intel reutilizan `linux-firmware-brcm`/`linux-firmware-intel`, que ya cubren el combo WiFi+Bluetooth). Si no se detectó ningún adaptador Bluetooth, el bloque no instala nada (evita dejar `bluez` corriendo sin hardware que gestionar).
 
 ### Bloque 11 — `detect_hardware`
-Ejecuta `lspci` y clasifica **todos** los adaptadores de video presentes en banderas independientes: `GPU_HAS_INTEL`, `GPU_HAS_AMD`, `GPU_HAS_NVIDIA`, `GPU_HAS_VIRTUAL` (más `GPU_COUNT` con el total). Esto es deliberado: en un laptop con gráficos híbridos (Optimus, Intel+NVIDIA) `lspci` devuelve más de una línea, y el script necesita saber de **todas** las GPU presentes, no solo la primera que coincida.
+Clasifica **todos** los adaptadores de video presentes en banderas independientes: `GPU_HAS_INTEL`, `GPU_HAS_AMD`, `GPU_HAS_NVIDIA`, `GPU_HAS_VIRTUAL` (más `GPU_COUNT` con el total). Esto es deliberado: en un laptop con gráficos híbridos (Optimus, Intel+NVIDIA) hay más de una GPU, y el script necesita saber de **todas**, no solo de la primera que coincida.
+
+La clasificación se hace leyendo `/sys/bus/pci/devices` (clase y fabricante en números), no el texto de `lspci`, que solo se guarda en el log. Así funciona aunque `lspci` sea la versión reducida de BusyBox. Además registra:
+
+- **La GPU principal** (`PRIMARY_SLOT`): la que el firmware usó al arrancar (`boot_vga`). En un portátil Optimus es la integrada.
+- **Si el equipo es portátil** (`IS_LAPTOP`): por el tipo de chasis del firmware o, como respaldo, por la presencia de una batería.
+- **Si es un portátil Optimus** (`OPTIMUS_LAPTOP`): portátil, una sola NVIDIA, y la principal es Intel o AMD. Solo en ese caso se ofrece el modo de ahorro del Bloque 12.
 
 También revisa `lsusb` en busca de adaptadores de video **DisplayLink** (docks USB para múltiples monitores, invisibles para `lspci`). Solo se registra una advertencia informativa — **no se intenta instalar nada automáticamente**, porque el driver que necesitan (`evdi`) no está empaquetado en Alpine (solo existe vía DKMS en otras distros) y, aun así, `evdi` por sí solo no es un driver completo: DisplayLink exige además su propio userspace binario cerrado, no distribuible por un gestor de paquetes.
 
 ### Bloque 12 — `install_drivers`
 Instala controladores según las banderas del Bloque 11 (puede instalar más de un fabricante a la vez, si el hardware es híbrido):
-- **Intel:** `linux-firmware-i915`, `mesa-vulkan-intel`.
-- **AMD:** `linux-firmware-amdgpu`/`radeon`, `mesa-vulkan-ati`/`radeon`, `vulkan-loader`.
+- **Intel:** `linux-firmware-i915`, `mesa-vulkan-intel`, `libva-intel-driver`, `intel-media-driver`, `libva-utils`.
+- **AMD:** `linux-firmware-amdgpu`/`radeon`, `mesa-vulkan-ati`/`radeon`, `vulkan-loader`, `mesa-va-gallium`, `libva-utils`.
 - **Virtual (QEMU/VMware/VirtualBox):** drivers `xf86-video-*` + `spice-vdagent`.
-- **NVIDIA:** `linux-firmware-nvidia` (driver abierto `nouveau`). El modo seguro se elige con una casilla del menú inicial, que solo aparece si se detectó una NVIDIA (ver [sección 5](#menú-de-opciones-al-inicio)) — importante en tarjetas antiguas (Tesla/Fermi/Kepler), donde `nouveau` puede colgar el arranque incluso si hay una GPU integrada de respaldo.
+- **NVIDIA:** `linux-firmware-nvidia` (driver abierto `nouveau`) y uno de tres modos:
+
+| Modo | Cuándo se ofrece | Qué hace |
+|---|---|---|
+| **Ahorro (Optimus)** | Solo en portátiles Optimus; es el predeterminado ahí | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
+| **Seguro** | Siempre | Bloquea el módulo `nouveau` (`/etc/modprobe.d`). La NVIDIA queda sin driver, pero **encendida** |
+| **Activa** | Siempre | `nouveau` con aceleración 3D normal. Riesgo de pantalla negra en tarjetas antiguas (Tesla/Fermi/Kepler) |
+
+Cada modo empieza borrando los archivos de los otros, así que volver a correr el script y elegir otro modo cambia de verdad la configuración. Si cambia el bloqueo de `nouveau`, se regenera el initramfs (`mkinitfs`).
+
+**El modo de ahorro** salió de pruebas en un ASUS K53SV (Intel HD 3000 + GeForce GT 540M, Fermi) con Plasma en Wayland: la NVIDIA queda en `D3cold` (sin corriente), el escritorio fluido y el video de YouTube decodificado por la Intel. Hubo que resolver tres obstáculos, que el script aplica así:
+
+1. **KWin, Firefox y otros programas abren todas las GPU que encuentran.** Las variables `KWIN_DRM_DEVICES` y `MOZ_DRM_DEVICE` apuntan a la gráfica integrada. Se calculan en cada inicio de sesión a partir de su ranura PCI, porque `card0`/`card1` pueden cambiar entre arranques. En Xorg se desactiva `AutoAddGPU`.
+2. **El audio HDMI de la NVIDIA mantenía despierta a la gráfica.** Al arrancar se desvincula de su driver. No se pierde nada: las salidas de video del portátil están en la integrada.
+3. **`nouveau` detectaba una pantalla "fantasma" en su salida VGA** (que en un portátil Optimus no está cableada) y la mantenía encendida con una consola de texto. Al arrancar se desconectan las salidas **analógicas** (VGA/TV) de la NVIDIA que figuren como conectadas. Las digitales no se tocan.
+
+Para comprobar después de reiniciar: `cat /sys/bus/pci/devices/<ranura-NVIDIA>/power_state` debe decir `D3cold`. El script imprime el comando exacto.
+
+**Por qué el modo seguro cambió:** antes escribía también `20-nouveau-safe.conf`, una sección de Xorg con `Driver "nouveau"` y `NoAccel`, sin `BusID`. Con el módulo bloqueado, ese driver de Xorg no puede funcionar, y sin `BusID` Xorg lo aplicaba a la tarjeta principal (en un portátil híbrido, la Intel). Es una causa probable de la pantalla negra registrada en [Limitaciones conocidas](#limitaciones-conocidas). Ahora solo se bloquea el módulo.
+
+Además de la aceleración 3D (OpenGL y Vulkan), instala la **decodificación de video por hardware (VA-API)**, que es la que alivia al procesador al reproducir video en el navegador o en `mpv`: `mesa-va-gallium` en AMD, y en Intel tanto `libva-intel-driver` (GPU antiguas) como `intel-media-driver` (de 2014 en adelante). Se instalan ambos en Intel porque la librería VA-API prueba el moderno y, si la GPU no lo soporta, recurre al antiguo. Al final del bloque, `check_vaapi` ejecuta `vainfo` sobre la gráfica principal (elegida por su ranura PCI, no "la primera" de `/dev/dri`, que en un equipo híbrido puede ser la NVIDIA) y deja en el log si H.264 se decodifica por hardware.
+
+> **Límite en GPU antiguas:** las GPU Intel de la era Sandy Bridge o anteriores solo decodifican por hardware el formato H.264, mientras que YouTube entrega por defecto VP9 o AV1, que terminan decodificándose en el procesador. Por eso el script recomienda al final la extensión *enhanced-h264ify* para Firefox (ver Bloque 30).
 
 Si no se detecta ninguna GPU reconocida, `mesa-dri-gallium` ya deja software rendering (`llvmpipe`) como respaldo funcional.
 
@@ -195,7 +223,7 @@ También instala `musl-locales`/`musl-locales-lang` y el metapaquete `lang`, que
 > **Nota:** musl (la libc de Alpine) no tiene un locale `es_MX.UTF-8` — solo un conjunto reducido, entre ellos `es_ES.UTF-8`, que es el que usa el script. Para la traducción de interfaz esto no supone ninguna diferencia práctica (los paquetes de idioma no distinguen variantes regionales de español).
 
 ### Bloque 23 — `install_fonts`
-Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) y `font-noto`. Se ejecuta antes de LibreOffice a propósito.
+Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) `font-noto` y `font-noto-emoji`. La fuente de emojis va en un paquete aparte de `font-noto`: sin ella, páginas como WhatsApp Web muestran cuadritos en lugar de emojis (Plasma ya la trae como dependencia; los demás escritorios no). Se ejecuta antes de LibreOffice a propósito.
 
 ### Bloque 24 — `install_libreoffice`
 **Depende de una casilla del menú inicial** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
@@ -251,9 +279,28 @@ Reúne **todas las decisiones opcionales en una sola pantalla** al inicio, usand
 
 Cada decisión queda en una variable `OPT_*`, y los bloques que antes preguntaban ahora consultan esa variable mediante la función auxiliar `want`. El **respaldo** vive en esa misma función: si el menú no se pudo mostrar (sin terminal interactiva, o sin poder instalar `dialog`), las variables quedan vacías y `want` vuelve a preguntar cada opción por separado, como en versiones anteriores. Pulsar **Salir** en el menú termina el script sin haber hecho cambios de configuración.
 
+El tamaño de ambas ventanas se calcula **automáticamente** según el contenido y la pantalla disponible (`0 0 0`), y el menú oculta los nombres internos de cada opción (`--no-tags`). Con un tamaño fijo, en pantallas amplias las descripciones quedaban cortadas; así, todas caben completas en una consola estándar de 80 columnas, y en pantallas muy pequeñas la lista y el resumen se vuelven desplazables sin ocultar los botones.
+
 Los textos del menú van **sin acentos** a propósito: el menú aparece antes de que el script configure el idioma, y en una consola TTY recién instalada los acentos pueden verse como símbolos extraños.
 
-### Bloque 30 — `main`
+### Bloque 30 — `install_daily_apps`
+Instala las aplicaciones que un usuario común necesita para el uso diario, y las registra como **predeterminadas**:
+
+| Uso | Aplicación | Detalle |
+|---|---|---|
+| Leer PDF | `evince` (u `okular` en Plasma) | Evince es liviano y de estilo GTK; en Plasma se usa Okular, que se integra con el resto del escritorio. Si conviven Plasma y otro escritorio, se instalan ambos y el predeterminado es Evince |
+| Audio y video locales | `mpv` | Bajo consumo, controles en pantalla, y usa la decodificación por hardware del Bloque 12. Cubre los audios de WhatsApp (`.ogg`/`.opus`) y los videos descargados habituales |
+| Navegar | `firefox` | Casilla del menú inicial, marcada por defecto |
+
+**Por qué registrar predeterminadas:** instalar una aplicación no garantiza que el doble clic la use, porque varias se declaran capaces de abrir el mismo tipo de archivo (por ejemplo, LibreOffice Draw también abre PDF) y cuál gana depende del escritorio. El script escribe la preferencia en `/etc/xdg/mimeapps.list`, el archivo de preferencias a nivel de sistema del estándar freedesktop, sin tocar las demás entradas que ya hubiera. Solo registra una aplicación si encuentra su archivo `.desktop` instalado, así que nunca apunta a algo que no existe. **Límite:** si el usuario ya eligió otra aplicación por su cuenta, su elección personal (`~/.config/mimeapps.list`) tiene prioridad.
+
+**Idioma de Firefox:** en Alpine no existe un paquete de idioma de Firefox separado. En su primer arranque, Firefox ofrece cambiar su interfaz al idioma del sistema, que es español de España (`es_ES`). No se fuerza el español latinoamericano porque requeriría descargas atadas a la versión exacta del navegador, que se romperían con cada actualización.
+
+**Recomendaciones al final:** si Firefox quedó instalado, el script termina mostrando dos extensiones recomendadas, sin instalarlas por su cuenta (instalar extensiones sin que el usuario lo vea no es buena práctica):
+- **uBlock Origin:** bloquea publicidad y rastreadores, lo que reduce la carga del procesador al navegar. Además, la versión completa solo sigue disponible en Firefox; Chrome retiró el soporte para el tipo de extensiones en el que se basa.
+- **enhanced-h264ify:** en equipos antiguos, pide a YouTube video H.264, que la GPU puede decodificar por hardware (ver el límite descrito en el Bloque 12).
+
+### Bloque 31 — `main`
 Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
 
 ## Menú de opciones al inicio
@@ -263,14 +310,17 @@ Al empezar, el script muestra una pantalla de casillas con todas las decisiones 
 | Casilla | Marcada por defecto | Bloque | Qué hace |
 |---|---|---|---|
 | Teclado latinoamericano | Sí | 3 | Configura `latam` en consola (TTY) y en Xorg |
-| NVIDIA en modo seguro | Sí | 12 | **Solo aparece si se detectó una NVIDIA.** Bloquea `nouveau` (Xorg + kernel) y usa la otra GPU |
+| NVIDIA en modo seguro | Sí | 12 | **Solo aparece si hay una NVIDIA y el equipo no es un portátil Optimus.** Bloquea el módulo `nouveau` y usa la otra GPU |
 | gcompat | No | 13 | Compatibilidad con programas propietarios compilados contra glibc |
 | Impresoras (CUPS) | Sí | 20 | Instala CUPS y habilita su servicio |
 | LibreOffice | Sí | 24 | LibreOffice con paquete de idioma español |
+| Firefox | Sí | 30 | Navegador, registrado como predeterminado |
 | Flatpak/Flathub | No | 25 | Infraestructura de Flatpak y portales XDG |
 | OnlyOffice | No | 25 | Vía Flatpak; **marcarla activa Flatpak automáticamente** |
 | Google Chrome | No | 25 | Vía Flatpak (empaquetado comunitario, no oficial de Google); también activa Flatpak |
 | Botón "Actualizar el sistema" | Sí | 27 | Acceso directo en el menú de aplicaciones |
+
+**Portátiles Optimus:** en lugar de la casilla de NVIDIA, después del menú aparece una segunda pantalla para elegir el modo: *ahorro* (marcado por defecto), *seguro* o *activa* (ver Bloque 12). **Volver** regresa a las casillas.
 
 **Por qué estos valores por defecto:** el modo seguro de NVIDIA viene marcado porque, en el hardware antiguo al que apunta este proyecto, dejarlo desmarcado puede terminar en pantalla negra, mientras que marcarlo solo cuesta la aceleración de la NVIDIA. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación sería infraestructura sin uso; por eso marcar una de sus aplicaciones lo activa sola.
 
@@ -283,8 +333,12 @@ Al empezar, el script muestra una pantalla de casillas con todas las decisiones 
 | Archivo | Bloque | Propósito |
 |---|---|---|
 | `/etc/X11/xorg.conf.d/00-keyboard.conf` | 3 | Layout de teclado latam en Xorg |
-| `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 12 | `NoAccel` para nouveau (solo si se acepta el modo seguro) |
-| `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo del módulo `nouveau` a nivel de kernel (solo si se acepta) |
+| `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo del módulo `nouveau` (solo modo seguro) |
+| `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 12 | **Ya no se crea.** Lo escribía el modo seguro anterior; el script lo borra si lo encuentra |
+| `/etc/local.d/nvidia-optimus.start` | 12 | Modo ahorro: suelta el audio HDMI de la NVIDIA y desconecta sus salidas analógicas fantasma al arrancar |
+| `/etc/xdg/plasma-workspace/env/gpu-integrada.sh` | 12 | Modo ahorro: `KWIN_DRM_DEVICES` y `MOZ_DRM_DEVICE` hacia la gráfica integrada (Plasma) |
+| `/etc/profile.d/gpu-integrada.sh` | 12 | Modo ahorro: las mismas variables para las demás sesiones |
+| `/etc/X11/xorg.conf.d/20-gpu-integrada.conf` | 12 | Modo ahorro: `AutoAddGPU off` para que Xorg no abra la NVIDIA |
 | `/etc/conf.d/zram-init` | 15 | Tamaño y algoritmo del dispositivo zram |
 | `/etc/sysctl.conf` | 15 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
 | `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador de E/S (BFQ o mq-deadline) para discos mecánicos detectados |
@@ -294,6 +348,7 @@ Al empezar, el script muestra una pantalla de casillas con todas las decisiones 
 | `$HOME/.config/plasma-localerc` | 22 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
 | `/etc/rc.conf` | 22 | Se agrega `unicode="YES"` si no estaba presente |
 | `/var/log/desktop-postinstall.log` | (todos) | Registro completo de la ejecución |
+| `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas del sistema (PDF, audio, video, navegador); se conservan las entradas existentes |
 | `/usr/local/bin/alpine-update-root.sh` | 27 | Script de trabajo (root, vía `pkexec`): `apk update`/`apk upgrade` + `flatpak update`, imprime a stdout/stderr |
 | `/usr/local/bin/alpine-update-launcher.sh` | 27 | Script lanzador (usuario normal): invoca `pkexec` y canaliza su salida en vivo hacia `zenity --text-info` |
 | `/usr/share/applications/alpine-update.desktop` | 27 | Entrada de menú "Actualizar el sistema", visible en todos los DE detectados |
@@ -303,7 +358,7 @@ Al empezar, el script muestra una pantalla de casillas con todas las decisiones 
 
 Todos en el runlevel `default`, salvo aclaración:
 
-`networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 25).
+`networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `local` (solo en el modo de ahorro de NVIDIA, para ejecutar `/etc/local.d/nvidia-optimus.start`), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 25).
 
 `udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 19 para el porqué de cada uno).
 
@@ -331,7 +386,7 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 ## Limitaciones conocidas
 
-- **⚠️ Pantalla negra persistente en hardware NVIDIA, incluso con el modo seguro activado.** Pruebas realizadas hasta ahora muestran que, en al menos algunos equipos con tarjeta NVIDIA, el problema de pantalla negra **reaparece tras reiniciar** aunque se haya respondido "sí" a la pregunta del Bloque 12 (bloqueo de `nouveau` vía `NoAccel` en Xorg + `blacklist` en `/etc/modprobe.d`). Esto indica que la causa raíz **no está completamente resuelta** con el enfoque actual — es un pendiente abierto, no una solución garantizada. Si te encuentras en este caso:
+- **⚠️ Pantalla negra persistente en hardware NVIDIA, incluso con el modo seguro activado.** En versiones anteriores, en al menos algunos equipos con NVIDIA, la pantalla negra **reaparecía tras reiniciar** aunque se hubiera aceptado el modo seguro. La causa probable era el archivo de Xorg `20-nouveau-safe.conf` (ver Bloque 12), que esta versión ya no crea y borra si existe. Falta confirmarlo en un equipo que arranque con Xorg. Si te encuentras en este caso:
   - No asumas que el equipo quedó "arreglado" solo por haber aceptado el modo seguro; verifica el arranque real tras reiniciar.
   - Si necesitas recuperar acceso, entra por una TTY (consola de texto, sin arrancar Xorg) para revisar `dmesg | grep -i nouveau` y `cat /var/log/desktop-postinstall.log`, y confirmar si `/etc/modprobe.d/blacklist-nouveau.conf` realmente se aplicó y si el módulo sigue cargado (`lsmod | grep nouveau`).
   - Si el bloqueo del módulo no fue suficiente, puede que el cuelgue ocurra en una etapa aún más temprana que la cubierta por este script (por ejemplo, en el propio firmware/KMS antes de que OpenRC llegue a iniciar servicios) — este escenario requiere más diagnóstico específico por equipo y todavía no tiene una solución generalizada incorporada al script.
@@ -339,13 +394,16 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 - **El microcódigo de AMD no se garantiza cargado en el arranque** solo con instalar el paquete; Alpine no lo integra automáticamente al initramfs.
 - **El montaje de USB depende de `elogind` reconociendo la sesión como activa.** Si en algún momento el montaje pide contraseña de root inesperadamente, el problema casi seguro está en que la sesión gráfica no está siendo reconocida como activa por `elogind` — **no** es un problema de pertenencia a grupos Unix (`plugdev`/`storage`), que es el mecanismo de un backend distinto (`seatd`) que este script no usa.
 - **El script asume que el entorno de escritorio ya fue instalado por separado** (vía `setup-desktop`). No instala XFCE, Plasma, GNOME, MATE ni LXQt desde cero.
-- **Hardware NVIDIA legacy:** el modo seguro del Bloque 12 deshabilita la NVIDIA por completo (a nivel de kernel). Si más adelante necesitas usarla (por ejemplo, para decodificación de video), tendrás que revertir manualmente (ver siguiente sección).
+- **Hardware NVIDIA legacy:** el modo seguro del Bloque 12 deshabilita la NVIDIA por completo (a nivel de kernel), pero sin driver la tarjeta **sigue encendida**. En un portátil Optimus conviene más el modo de ahorro, que sí la apaga.
+- **Modo de ahorro de NVIDIA:** probado en Plasma con Wayland en un solo modelo (ASUS K53SV). En escritorios con Xorg (Xfce, MATE, LXQt) y en otros modelos no se ha probado. Si un portátil tuviera algún puerto de video cableado a la NVIDIA, ese puerto no daría imagen en este modo. Tampoco se probó la suspensión.
 
 ## Solución de problemas
 
 **El teclado sigue en inglés dentro de la sesión gráfica.** Algunos entornos (especialmente XFCE) cachean su propia configuración de teclado la primera vez que arrancan. Abre el panel de configuración de teclado del entorno una sola vez y confirma que "latam" ya aparece preseleccionado.
 
-**Pantalla negra o cuelgue al iniciar Xorg con NVIDIA.** Si respondiste "no" a la pregunta del Bloque 12 y ahora tienes problemas, vuelve a correr el script y responde "sí" esta vez — o edita manualmente `/etc/modprobe.d/blacklist-nouveau.conf` (ver contenido en la [tabla de archivos](#archivos-que-el-script-crea-o-modifica)).
+**Pantalla negra o cuelgue al iniciar Xorg con NVIDIA.** Entra a una consola de texto (Ctrl+Alt+F2) y revisa si existe `/etc/X11/xorg.conf.d/20-nouveau-safe.conf`, de una versión anterior del script: bórralo y reinicia. Si dejaste la NVIDIA activa, vuelve a correr el script y elige el modo seguro (o el de ahorro, en un portátil Optimus).
+
+**En el modo de ahorro, la NVIDIA sigue en `D0`.** Revisa que el servicio `local` haya arrancado (`rc-status default | grep local`), que `nouveau` esté cargado (`lspci -k -s <ranura-NVIDIA>`) y qué programas tienen abierta la NVIDIA. En las pruebas del K53SV, los culpables fueron el audio HDMI de la NVIDIA y una salida VGA fantasma (ver Bloque 12).
 
 **Flatpak no se instaló / falló el `remote-add`.** Verifica que el repositorio `community` esté habilitado (`grep -v '^#' /etc/apk/repositories`) y que haya conexión a internet.
 
@@ -355,7 +413,8 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 | Para revertir... | Hacer esto |
 |---|---|
-| Bloqueo de NVIDIA | Borrar `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` y `/etc/modprobe.d/blacklist-nouveau.conf`, luego reiniciar |
+| Bloqueo de NVIDIA (modo seguro) | Borrar `/etc/modprobe.d/blacklist-nouveau.conf` (y `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` si existe), ejecutar `mkinitfs $(uname -r)` y reiniciar |
+| Modo de ahorro de NVIDIA | Borrar `/etc/local.d/nvidia-optimus.start`, `/etc/xdg/plasma-workspace/env/gpu-integrada.sh`, `/etc/profile.d/gpu-integrada.sh` y `/etc/X11/xorg.conf.d/20-gpu-integrada.conf`, luego reiniciar |
 | Idioma del sistema | Borrar `/etc/profile.d/lang-es.sh`, quitar las líneas `LANG`/`LC_*` de `/etc/environment`, y (si aplica) `/etc/xdg/plasma-localerc` y `$HOME/.config/plasma-localerc` |
 | zram | `rc-service zram-init stop`, `rc-update del zram-init`, borrar `/etc/conf.d/zram-init` |
 | EarlyOOM | `rc-update del earlyoom`, `apk del earlyoom earlyoom-openrc` |
@@ -364,4 +423,4 @@ Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de
 
 ---
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos, protección NVIDIA legacy, menú de casillas al inicio con respaldo a preguntas individuales, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías, LibreOffice (opcional), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*
+*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos (con modo de ahorro que apaga la NVIDIA en portátiles Optimus), protección NVIDIA legacy, menú de casillas al inicio con respaldo a preguntas individuales, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías (incluida la de emojis), LibreOffice (opcional), visor de PDF, reproductor `mpv` y Firefox (opcional) registrados como aplicaciones predeterminadas, decodificación de video por hardware (VA-API), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*
