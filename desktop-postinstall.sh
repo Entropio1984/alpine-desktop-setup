@@ -77,7 +77,8 @@ install_pkg() {
 # (rapido: una sola resolucion de dependencias/descarga/bloqueo de base
 # de datos, en vez de una por paquete). Si la transaccion en lote falla
 # -- por ejemplo, uno de los nombres no existe en esta rama/arquitectura,
-# algo que ha pasado varias veces con este script (unrar, mesa-dri...) -- cae automaticamente a instalar cada paquete por
+# algo que ha pasado varias veces con este script (mesa-vulkan-radeon,
+# mesa-dri...) -- cae automaticamente a instalar cada paquete por
 # separado con install_pkg, que SI tolera fallos individuales. Asi se
 # gana velocidad en el caso normal sin sacrificar la resiliencia.
 install_pkgs() {
@@ -95,22 +96,21 @@ install_pkgs() {
 }
 
 # ensure_hw_tools: garantiza las versiones COMPLETAS de lspci y lsusb.
-# CORRECCION: antes se usaba "command -v lspci || install_pkg pciutils",
-# pero BusyBox (base de Alpine) trae sus propios 'lspci' y 'lsusb', y
-# esos solo muestran codigos numericos ("Class 0300: 8086:0116"), sin
-# los nombres ("VGA compatible controller", "Network controller"...)
-# que buscan los bloques de deteccion. Como 'command -v' encontraba el
-# de BusyBox, pciutils nunca se instalaba y la deteccion de WiFi,
-# Bluetooth y dispositivos sin driver podia fallar en silencio en una
-# instalacion recien hecha. Ahora se pregunta por el PAQUETE, no por el
-# comando.
+# CORRECCION: antes se usaba "command -v lsusb || install_pkg usbutils".
+# El BusyBox de Alpine trae su propio 'lsusb' (verificado en la
+# configuracion de BusyBox de 3.24 y edge; 'lspci' en cambio NO viene en
+# BusyBox), y ese lsusb solo muestra codigos numericos ("ID 8087:0024"),
+# sin los nombres ("Bluetooth", "802.11"...) que buscan los bloques de
+# deteccion de WiFi y Bluetooth por USB. Como 'command -v' lo encontraba,
+# usbutils nunca se instalaba y esa deteccion podia fallar en silencio.
+# Ahora se pregunta por el PAQUETE, no por el comando.
 HW_TOOLS_READY="no"
 ensure_hw_tools() {
     [ "$HW_TOOLS_READY" = "yes" ] && return 0
     apk info -e pciutils >/dev/null 2>&1 || install_pkg "pciutils"
     apk info -e usbutils >/dev/null 2>&1 || install_pkg "usbutils"
     # El shell recuerda la ruta de los comandos ya usados; se olvida para
-    # que 'lspci' apunte al recien instalado y no al de BusyBox.
+    # que 'lsusb' apunte al recien instalado y no al de BusyBox.
     hash -r 2>/dev/null || true
     HW_TOOLS_READY="yes"
 }
@@ -147,6 +147,49 @@ Section "InputClass"
 EndSection
 EOF
     log_ok "Teclado de sesión gráfica (Xorg) configurado a 'latam' en /etc/X11/xorg.conf.d/00-keyboard.conf"
+
+    # Wayland NO lee /etc/X11/: cada compositor toma la distribucion de
+    # teclado de su propia configuracion. Desde Alpine 3.22, Plasma solo
+    # tiene sesion Wayland, y GNOME 50 (Alpine 3.24) tambien. Sin estas
+    # tres capas, esos escritorios arrancarian con teclado en ingles.
+    #
+    # 1) Variable XKB_DEFAULT_LAYOUT: la leen KWin (cuando el usuario no
+    #    ha elegido distribucion; verificado en el codigo de KWin,
+    #    src/xkb.cpp) y los compositores basados en wlroots (sway, labwc,
+    #    el de "xfce-wayland"). Va en las variables de sesion de Plasma y
+    #    en /etc/profile.d para los demas.
+    for kbf in /etc/xdg/plasma-workspace/env/teclado-latam.sh /etc/profile.d/teclado-latam.sh; do
+        mkdir -p "${kbf%/*}"
+        cat > "$kbf" <<'EOF'
+# Generado por desktop-postinstall.sh: teclado latinoamericano en Wayland
+# (KWin, sway, labwc). Una distribucion elegida por el usuario en la
+# configuracion del escritorio tiene prioridad sobre esta variable.
+export XKB_DEFAULT_LAYOUT=latam
+EOF
+    done
+
+    # 2) Plasma: valor por defecto de sistema en kxkbrc (/etc/xdg). Asi la
+    #    distribucion aparece tambien en Preferencias del sistema > Teclado.
+    #    La configuracion propia del usuario (~/.config/kxkbrc) manda.
+    cat > /etc/xdg/kxkbrc <<'EOF'
+[Layout]
+LayoutList=latam
+Use=true
+EOF
+
+    # 3) GNOME: valor por defecto de gsettings (aplica tambien a la pantalla
+    #    de inicio de GDM). Sin systemd-localed, GNOME no tiene otra fuente.
+    if [ -d /usr/share/glib-2.0/schemas ]; then
+        cat > /usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override <<'EOF'
+[org.gnome.desktop.input-sources]
+sources=[('xkb', 'latam')]
+EOF
+        if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas >>"$LOG_FILE" 2>&1 \
+                || log_warn "No se pudieron recompilar los esquemas de GNOME (glib-compile-schemas)."
+        fi
+    fi
+    log_ok "Teclado 'latam' para sesiones Wayland: XKB_DEFAULT_LAYOUT, /etc/xdg/kxkbrc (Plasma) y esquema de GNOME."
 }
 
 # ------------------------------------------------------------------------------
@@ -210,10 +253,52 @@ detect_target_user() {
 # ------------------------------------------------------------------------------
 # BLOQUE 6: Applets de red y audio (enrutamiento dinámico según DE)
 # ------------------------------------------------------------------------------
+# Servidor de audio: PulseAudio o PipeWire.
+# En Alpine, "pulseaudio" es tambien un nombre VIRTUAL: lo provee el
+# paquete real pulseaudio (prioridad mas alta) y pipewire-pulse. Los dos
+# se excluyen entre si (apk instala solo uno). Por eso el script ya no
+# fuerza PulseAudio: si el sistema ya tiene un servidor, lo respeta; asi,
+# si algun dia Alpine cambia el predeterminado a PipeWire, el script no
+# lo revierte.
+#   - pipewire-pulse instalado      -> PipeWire.
+#   - pulseaudio (real) instalado    -> PulseAudio (hoy, lo que instala
+#     setup-desktop con Plasma; PipeWire corre igual al lado, para
+#     compartir pantalla, y coordinan el uso de la tarjeta).
+#   - ninguno: Plasma o GNOME -> PipeWire (su ecosistema ya lo usa);
+#     Xfce, MATE, LXQt o sin escritorio -> PulseAudio.
+AUDIO_SERVER=""
+choose_audio_server() {
+    if apk info -e pipewire-pulse >/dev/null 2>&1; then
+        AUDIO_SERVER="pipewire"
+    elif apk info -e pulseaudio >/dev/null 2>&1; then
+        AUDIO_SERVER="pulseaudio"
+    elif [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ]; then
+        AUDIO_SERVER="pipewire"
+    else
+        AUDIO_SERVER="pulseaudio"
+    fi
+    log_info "Servidor de audio: $AUDIO_SERVER"
+}
+
 setup_applets() {
     log_info "== Configurando servicios base de red y audio =="
 
-    install_pkgs networkmanager networkmanager-wifi wpa_supplicant pulseaudio pulseaudio-alsa
+    install_pkgs networkmanager networkmanager-wifi wpa_supplicant
+
+    choose_audio_server
+    if [ "$AUDIO_SERVER" = "pipewire" ]; then
+        install_pkgs pipewire wireplumber pipewire-pulse pipewire-alsa
+        # Arranque por sesion: el paquete de Alpine trae un lanzador por
+        # autoarranque XDG, marcado como obsoleto en favor de los
+        # "servicios de usuario" de OpenRC (rc-update -U). Si el lanzador
+        # desaparece en una version futura, se avisa como activarlo.
+        if [ ! -f /etc/xdg/autostart/pipewire.desktop ]; then
+            log_warn "PipeWire ya no trae lanzador automatico en esta version de Alpine."
+            log_info "Activalo para tu usuario (una sola vez, sin doas): rc-update -U add pipewire && rc-update -U add wireplumber && rc-update -U add pipewire-pulse"
+        fi
+    else
+        install_pkgs pulseaudio pulseaudio-alsa
+    fi
 
     log_info "Inyectando applets de interfaz específicos..."
 
@@ -419,10 +504,15 @@ install_bluetooth() {
 
     log_info "== Instalando pila Bluetooth (bluez) =="
 
-    # pulseaudio-bluez es el "puente" que enruta el perfil A2DP hacia
-    # PulseAudio -- sin este paquete, bluez permite emparejar el
-    # dispositivo pero los audifonos/altavoces Bluetooth no emiten sonido.
-    install_pkgs bluez bluez-openrc pulseaudio-bluez
+    # El "puente" que enruta el perfil A2DP hacia el servidor de audio:
+    # sin el, bluez permite emparejar el dispositivo pero los
+    # audifonos/altavoces Bluetooth no emiten sonido. Depende del servidor
+    # elegido en el Bloque 6.
+    if [ "$AUDIO_SERVER" = "pipewire" ]; then
+        install_pkgs bluez bluez-openrc pipewire-spa-bluez
+    else
+        install_pkgs bluez bluez-openrc pulseaudio-bluez
+    fi
 
     if echo "$BT_INFO" | grep -Eqi "realtek|rtl[0-9]"; then
         install_pkgs linux-firmware-rtl_bt
@@ -564,7 +654,7 @@ install_drivers() {
 
     if [ "$GPU_HAS_AMD" = "yes" ]; then
         log_info "Instalando firmware y Vulkan para AMD/Radeon..."
-        install_pkgs linux-firmware-amdgpu linux-firmware-radeon mesa-vulkan-ati mesa-vulkan-radeon vulkan-loader mesa-va-gallium libva-utils
+        install_pkgs linux-firmware-amdgpu linux-firmware-radeon mesa-vulkan-ati vulkan-loader mesa-va-gallium libva-utils
     fi
 
     if [ "$GPU_HAS_VIRTUAL" = "yes" ]; then
@@ -758,8 +848,11 @@ EOF
     done
     log_ok "Variables de sesion: $NV_ENV_PLASMA (Plasma) y $NV_ENV_PROFILE (demas sesiones)."
 
-    # 3) Xorg (Xfce, MATE, LXQt o una pantalla de inicio en X11): que no
-    #    agregue la NVIDIA como GPU secundaria; usa solo la principal.
+    # 3) Xorg: que no agregue la NVIDIA como GPU secundaria. No afecta a
+    #    sesiones Wayland ni a Xwayland (Plasma solo tiene sesion Wayland en
+    #    Alpine desde 3.22), pero sigue sirviendo para la pantalla de inicio
+    #    de SDDM, que en Alpine corre sobre Xorg por defecto, y para Xfce,
+    #    MATE y LXQt.
     mkdir -p /etc/X11/xorg.conf.d
     cat > "$NV_XORG_IGPU" <<'EOF'
 # Generado por desktop-postinstall.sh (modo ahorro para portatiles Optimus).
@@ -769,7 +862,7 @@ Section "ServerFlags"
 EndSection
 EOF
     log_ok "Xorg limitado a la grafica principal: $NV_XORG_IGPU"
-    log_warn "La parte de Xorg (escritorios distintos de Plasma en Wayland) aun no se ha probado en un equipo real."
+    log_warn "La parte de Xorg (pantalla de inicio de SDDM, Xfce, MATE, LXQt) aun no se ha probado en un equipo real."
 
     log_info "Despues de reiniciar, verifica que la NVIDIA quedo apagada (debe decir D3cold):"
     log_info "  cat /sys/bus/pci/devices/$NVIDIA_SLOT/power_state"
@@ -1019,11 +1112,25 @@ setup_earlyoom() {
 # ------------------------------------------------------------------------------
 # BLOQUE 17: Gestión de energía básica (ACPI)
 # ------------------------------------------------------------------------------
+# CORRECCION: antes se habilitaba acpid siempre. Desde mayo de 2025,
+# setup-desktop (alpine-conf) lo DESHABILITA a proposito en los equipos
+# de escritorio, porque podia apagar el sistema por accidente: con un
+# escritorio, elogind ya atiende el boton de encendido y la tapa, y acpid
+# respondia al mismo evento por su cuenta. Este script instala elogind
+# siempre (Bloque 19), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+        if rc-update show default 2>/dev/null | grep -q '^ *acpid '; then
+            rc-update del acpid default >/dev/null 2>&1 || true
+            log_info "acpid quitado del arranque: con escritorio, elogind maneja el boton de encendido y la tapa (igual que hace setup-desktop)."
+        fi
+        log_ok "Gestion de energia a cargo de elogind."
+        return 0
+    fi
     install_pkgs acpid acpid-openrc
     rc-update add acpid default || log_warn "No se pudo agregar 'acpid' al runlevel default."
-    log_ok "acpid configurado."
+    log_ok "acpid configurado (sistema sin escritorio)."
 }
 
 # ------------------------------------------------------------------------------
@@ -1192,16 +1299,9 @@ setup_printing() {
 # ------------------------------------------------------------------------------
 # BLOQUE 21: Backends de compresión
 # ------------------------------------------------------------------------------
-# NOTA: "unrar" NO existe como paquete en Alpine (ni en main ni en
-# community, verificado en v3.24) - es de licencia no-libre y Alpine no
-# lo empaqueta. No se automatiza su instalación manual porque cada
-# versión de rarlab.com cambia de nombre de archivo y una URL fija en
-# el script quedaría rota sin previo aviso.
 install_archive_tools() {
     log_info "== Instalando utilidades de compresión =="
-    install_pkgs zip unzip p7zip
-    log_warn "'unrar' no está disponible en los repos de Alpine (licencia no-libre)."
-    log_info "Para soporte de RAR, instala manualmente el binario oficial desde https://www.rarlab.com/download.htm"
+    install_pkgs zip unzip 7zip
     log_ok "Backends de compresión instalados (zip/unzip/7z)."
 }
 
@@ -1280,7 +1380,7 @@ install_fonts() {
     # font-noto-emoji va aparte de font-noto: sin el, paginas como
     # WhatsApp Web muestran cuadritos en lugar de emojis. (Plasma ya lo
     # trae como dependencia; los demas escritorios no.)
-    install_pkgs ttf-dejavu font-liberation font-liberation-sans-narrow font-noto font-noto-emoji
+    install_pkgs font-dejavu font-liberation font-liberation-sans-narrow font-noto font-noto-emoji
     log_ok "Tipografías base instaladas."
 }
 
@@ -1420,7 +1520,7 @@ setup_display_manager() {
 # logica especifica por DE -- es justamente para eso que existe el
 # estandar.
 #
-# Autenticacion via pkexec (parte de polkit-elogind, Bloque 18). Por
+# Autenticacion via pkexec (parte de polkit-elogind, Bloque 19). Por
 # defecto, SIN necesidad de ninguna regla de polkit personalizada: si el
 # usuario objetivo esta en el grupo "wheel", pkexec pide UNICAMENTE su
 # propia contrasena (igual que doas), nunca la de root. Es el
@@ -1519,6 +1619,45 @@ prefixed() {
 
 EXIT_TMP="/tmp/.alpine-update-exit"
 
+# Ejecuta un paso, muestra su salida y deja su codigo en $step_status.
+run_step() {
+    run_raw "$1; echo \$? > $EXIT_TMP" | prefixed
+    step_status="$(cat "$EXIT_TMP" 2>/dev/null || echo 1)"
+    rm -f "$EXIT_TMP"
+    return "$step_status"
+}
+
+# --- Siguiente version estable de Alpine ----------------------------------
+# Imprime "ACTUAL SIGUIENTE ESPEJO" (p. ej. "3.23 3.24 https://dl-cdn...")
+# si hay una version estable mas nueva que la instalada, o nada (y
+# devuelve 1) si no la hay, si no hay internet o si los repositorios no
+# usan una version fija (edge, latest-stable).
+#   - La version actual se lee de /etc/apk/repositories (la que de verdad
+#     usa apk), no de /etc/alpine-release.
+#   - La ultima estable se lee del archivo latest-releases.yaml que publica
+#     cada espejo (campo "branch: v3.NN").
+#   - Se propone solo la INMEDIATAMENTE siguiente (3.23 -> 3.24), aunque
+#     haya otra mas nueva: un salto a la vez es el camino mas probado. Si
+#     falta otra, el boton la ofrece en la siguiente ejecucion.
+#   - Antes de proponerla se confirma que el espejo ya tiene su repositorio.
+next_release() {
+    repo_line="$(grep -m1 -E '^[[:space:]]*https?://[^[:space:]]+/v3\.[0-9]+/main' /etc/apk/repositories 2>/dev/null)" || return 1
+    nr_cur="$(printf '%s\n' "$repo_line" | sed -E 's#.*/v(3\.[0-9]+)/main.*#\1#')"
+    nr_base="$(printf '%s\n' "$repo_line" | sed -E 's#^[[:space:]]*(https?://[^[:space:]]+)/v3\.[0-9]+/main.*#\1#')"
+    nr_arch="$(apk --print-arch 2>/dev/null)"
+    [ -n "$nr_cur" ] && [ -n "$nr_base" ] && [ -n "$nr_arch" ] || return 1
+    nr_latest="$(wget -q -T 15 -O - "$nr_base/latest-stable/releases/$nr_arch/latest-releases.yaml" 2>/dev/null \
+        | sed -n -E 's/^[[:space:]]*branch:[[:space:]]*v(3\.[0-9]+).*/\1/p' | head -n1)"
+    [ -n "$nr_latest" ] || return 1
+    nr_cur_minor="${nr_cur#3.}"
+    nr_latest_minor="${nr_latest#3.}"
+    case "$nr_cur_minor$nr_latest_minor" in *[!0-9]*) return 1 ;; esac
+    [ "$nr_latest_minor" -gt "$nr_cur_minor" ] || return 1
+    nr_next="3.$((nr_cur_minor + 1))"
+    wget -q -T 15 --spider "$nr_base/v$nr_next/main/$nr_arch/APKINDEX.tar.gz" 2>/dev/null || return 1
+    echo "$nr_cur $nr_next $nr_base"
+}
+
 echo "# ===== Actualizando Alpine (apk) ====="
 
 # Kernels instalados ANTES de actualizar. Se compara /lib/modules (un
@@ -1526,10 +1665,60 @@ echo "# ===== Actualizando Alpine (apk) ====="
 # cuyo formato cambio entre apk-tools v2 y v3.
 modules_before="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
 
-run_raw "apk update --no-progress; echo \$? > $EXIT_TMP" | prefixed
-run_raw "apk upgrade --no-progress; echo \$? > $EXIT_TMP" | prefixed
-apk_status="$(cat "$EXIT_TMP" 2>/dev/null || echo 1)"
-rm -f "$EXIT_TMP"
+apk_status=0
+run_step "apk update --no-progress" || apk_status=$step_status
+run_step "apk upgrade --no-progress" || apk_status=$step_status
+
+# --- Cambio a la siguiente version estable (solo si se pidio) ---------
+# El lanzador solo pasa la opcion; la version de destino se vuelve a
+# calcular aqui, como root, en vez de aceptar un valor que llegue desde
+# fuera. Procedimiento oficial de Alpine: cambiar la version en
+# /etc/apk/repositories, actualizar apk-tools y luego
+# 'apk upgrade --available'.
+if [ "${1:-}" = "--nueva-version" ]; then
+    if [ "$apk_status" -ne 0 ]; then
+        echo "# "
+        echo "# No se cambia de version porque la actualizacion normal fallo. Revisa la conexion e intentalo de nuevo."
+    elif ! nr_info="$(next_release)"; then
+        echo "# "
+        echo "# No se encontro una version nueva disponible; se hizo solo la actualizacion normal."
+    else
+        # shellcheck disable=SC2086
+        set -- $nr_info
+        v_cur="$1"
+        v_next="$2"
+        echo "# "
+        echo "# ===== Cambiando de Alpine $v_cur a Alpine $v_next ====="
+        mkdir -p /var/backups/alpine-update
+        backup="/var/backups/alpine-update/repositories.v$v_cur.$(date +%Y%m%d-%H%M%S)"
+        cp /etc/apk/repositories "$backup"
+        echo "# Copia de los repositorios anteriores: $backup"
+        cur_re="$(printf '%s' "$v_cur" | sed 's/\./\\./g')"
+        sed -i "s#/v$cur_re/#/v$v_next/#g" /etc/apk/repositories
+        if ! run_step "apk update --no-progress"; then
+            cp "$backup" /etc/apk/repositories
+            run_step "apk update --no-progress" || true
+            apk_status=1
+            echo "# No se pudo leer el repositorio de Alpine $v_next. Se restauraron los repositorios de $v_cur: el sistema no cambio."
+        else
+            run_step "apk add --upgrade --no-progress apk-tools" || true
+            if run_step "apk upgrade --available --no-progress"; then
+                echo "# "
+                echo "# Alpine quedo actualizado a la version $v_next."
+            else
+                apk_status=$step_status
+                echo "# "
+                echo "# *** El cambio a Alpine $v_next quedo INCOMPLETO (codigo $apk_status). ***"
+                echo "# No reinicies todavia: conectate a internet y vuelve a usar este boton,"
+                echo "# o ejecuta en una terminal: doas apk upgrade --available"
+            fi
+            if [ -d /boot/grub ] && command -v grub-install >/dev/null 2>&1; then
+                echo "# AVISO: este equipo arranca con GRUB. Antes de reiniciar, revisa en las"
+                echo "# notas de la version si hay que ejecutar grub-install (en 3.24 si hacia falta)."
+            fi
+        fi
+    fi
+fi
 
 modules_after="$(ls /lib/modules 2>/dev/null | tr '\n' ' ')"
 if [ -n "$modules_after" ] && [ "$modules_before" != "$modules_after" ]; then
@@ -1612,9 +1801,61 @@ fi
 # conectado a el, asi que ese riesgo desaparecio por diseno, no hace
 # falta blindarse contra el.
 
+# --- Siguiente version estable de Alpine ----------------------------------
+# Imprime "ACTUAL SIGUIENTE ESPEJO" (p. ej. "3.23 3.24 https://dl-cdn...")
+# si hay una version estable mas nueva que la instalada, o nada (y
+# devuelve 1) si no la hay, si no hay internet o si los repositorios no
+# usan una version fija (edge, latest-stable).
+#   - La version actual se lee de /etc/apk/repositories (la que de verdad
+#     usa apk), no de /etc/alpine-release.
+#   - La ultima estable se lee del archivo latest-releases.yaml que publica
+#     cada espejo (campo "branch: v3.NN").
+#   - Se propone solo la INMEDIATAMENTE siguiente (3.23 -> 3.24), aunque
+#     haya otra mas nueva: un salto a la vez es el camino mas probado. Si
+#     falta otra, el boton la ofrece en la siguiente ejecucion.
+#   - Antes de proponerla se confirma que el espejo ya tiene su repositorio.
+next_release() {
+    repo_line="$(grep -m1 -E '^[[:space:]]*https?://[^[:space:]]+/v3\.[0-9]+/main' /etc/apk/repositories 2>/dev/null)" || return 1
+    nr_cur="$(printf '%s\n' "$repo_line" | sed -E 's#.*/v(3\.[0-9]+)/main.*#\1#')"
+    nr_base="$(printf '%s\n' "$repo_line" | sed -E 's#^[[:space:]]*(https?://[^[:space:]]+)/v3\.[0-9]+/main.*#\1#')"
+    nr_arch="$(apk --print-arch 2>/dev/null)"
+    [ -n "$nr_cur" ] && [ -n "$nr_base" ] && [ -n "$nr_arch" ] || return 1
+    nr_latest="$(wget -q -T 15 -O - "$nr_base/latest-stable/releases/$nr_arch/latest-releases.yaml" 2>/dev/null \
+        | sed -n -E 's/^[[:space:]]*branch:[[:space:]]*v(3\.[0-9]+).*/\1/p' | head -n1)"
+    [ -n "$nr_latest" ] || return 1
+    nr_cur_minor="${nr_cur#3.}"
+    nr_latest_minor="${nr_latest#3.}"
+    case "$nr_cur_minor$nr_latest_minor" in *[!0-9]*) return 1 ;; esac
+    [ "$nr_latest_minor" -gt "$nr_cur_minor" ] || return 1
+    nr_next="3.$((nr_cur_minor + 1))"
+    wget -q -T 15 --spider "$nr_base/v$nr_next/main/$nr_arch/APKINDEX.tar.gz" 2>/dev/null || return 1
+    echo "$nr_cur $nr_next $nr_base"
+}
+
+# --- Ofrecer el cambio de version ----------------------------------------
+# Alpine publica una version estable cada seis meses, y el repositorio
+# 'community' (escritorio, Firefox, LibreOffice...) solo recibe
+# actualizaciones hasta la siguiente. Si hay una version nueva, se
+# pregunta antes de pedir la contrasena. Sin internet, o si el usuario
+# elige "Solo actualizar" o cierra la ventana, se hace la actualizacion
+# normal de siempre.
+MODE=""
+release_before="$(cat /etc/alpine-release 2>/dev/null)"
+if nr_info="$(next_release)"; then
+    # shellcheck disable=SC2086
+    set -- $nr_info
+    if zenity --question --title="Nueva version de Alpine" --width=440 \
+        --ok-label="Cambiar a Alpine $2" --cancel-label="Solo actualizar" \
+        --text="Hay una version nueva de Alpine: $2 (tienes $1).\n\nLa version actual pronto dejara de recibir actualizaciones de seguridad para el navegador y el escritorio.\n\nEl cambio descarga bastante y puede tardar. Mantén el equipo conectado a la corriente y a internet, y reinicia al terminar.\n\nNotas de cada version: https://alpinelinux.org/releases/" \
+        2>/dev/null; then
+        MODE="--nueva-version"
+    fi
+fi
+
 {
     echo "===== Actualizacion iniciada: $(date) ====="
-    pkexec /usr/local/bin/alpine-update-root.sh
+    # shellcheck disable=SC2086
+    pkexec /usr/local/bin/alpine-update-root.sh $MODE
 } >> "$LOG" 2>&1 &
 BGPID=$!
 
@@ -1693,7 +1934,12 @@ else
     [ -d "/lib/modules/$running" ] || reboot_needed="yes"
 fi
 
-if [ "$reboot_needed" = "yes" ]; then
+release_after="$(cat /etc/alpine-release 2>/dev/null)"
+if [ -n "$release_after" ] && [ "$release_after" != "$release_before" ] && [ "${release_after%.*}" != "${release_before%.*}" ]; then
+    zenity --info --title="Alpine actualizado" \
+        --text="El sistema ahora es Alpine $release_after.\n\nReinicia el equipo para terminar el cambio de version." \
+        --width=380 2>/dev/null
+elif [ "$reboot_needed" = "yes" ]; then
     zenity --warning --title="Reinicio necesario" \
         --text="Se instalo una version nueva del kernel (el nucleo del sistema).\n\nReinicia el equipo cuando puedas para empezar a usarla." \
         --width=380 2>/dev/null
@@ -1716,7 +1962,7 @@ INNEREOF
 [Desktop Entry]
 Type=Application
 Name=Actualizar el sistema
-Comment=Actualiza Alpine Linux y las aplicaciones Flatpak instaladas
+Comment=Actualiza Alpine Linux y las aplicaciones Flatpak; ofrece pasar a la siguiente version estable
 Exec=/usr/local/bin/alpine-update-launcher.sh
 Icon=system-software-update
 Terminal=false
@@ -1726,6 +1972,7 @@ INNEREOF
 
     log_ok "Acceso directo creado: aparecera como 'Actualizar el sistema' en el menu de aplicaciones."
     log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
+    log_info "Si hay una version estable nueva de Alpine, el boton preguntara antes si se quiere cambiar a ella."
 }
 
 # BLOQUE 28: Permisos de grupo para Audio/Video/Impresión

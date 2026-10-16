@@ -1,39 +1,40 @@
-# desktop-postinstall.sh — Script de post-instalación de escritorio para Alpine Linux
+# desktop-postinstall.sh — configuración de escritorio para Alpine Linux
 
-Script de shell POSIX (`ash`, compatible con BusyBox) que automatiza la configuración de un entorno de escritorio recién instalado en Alpine Linux: red, audio, idioma, controladores de video, energía, impresión, ofimática y estabilidad general del sistema. Está pensado especialmente para revivir equipos antiguos o con recursos limitados (2-8 GB de RAM), pero funciona igual de bien en hardware moderno.
+Script de shell POSIX (`ash` de BusyBox, el shell de Alpine) que termina de configurar un escritorio recién instalado en Alpine Linux: red, audio, teclado, idioma, controladores de video, energía, impresión, aplicaciones de uso diario y estabilidad del sistema.
 
-Detecta automáticamente qué tiene tu sistema (entorno de escritorio, GPU, CPU) y adapta lo que instala en consecuencia, en vez de asumir una configuración fija.
+Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM), pero sirve igual en equipos modernos. No asume nada: detecta el escritorio, la tarjeta gráfica y el procesador, e instala solo lo que corresponde.
 
-> ⚠️ **GPU NVIDIA — causa probable de la pantalla negra corregida, pendiente de confirmar en Xorg.** El modo seguro anterior del Bloque 12 escribía, además del bloqueo de `nouveau`, un archivo de Xorg (`20-nouveau-safe.conf`) que le pedía usar el driver `nouveau` sin indicar en qué tarjeta. Con el módulo bloqueado ese driver no puede funcionar, y en un portátil híbrido Xorg lo aplicaba a la Intel: una causa probable de la pantalla negra persistente. El modo seguro ya no crea ese archivo (y lo borra si existe). En **portátiles Optimus** hay además un modo nuevo, **probado en un equipo real**, que apaga la NVIDIA y deja todo en la gráfica integrada. Lo que aún no se ha probado es el comportamiento en escritorios que usan Xorg (Xfce, MATE, LXQt). Ver [Limitaciones conocidas](#limitaciones-conocidas).
+> ⚠️ **Tarjetas NVIDIA.** Versiones anteriores del modo seguro podían dejar la pantalla en negro en algunos equipos. La causa probable ya se corrigió (ver [Bloque 12](#bloque-12--install_drivers)), pero falta confirmarlo en un equipo que arranque con Xorg. En portátiles Optimus hay un modo nuevo, probado en un equipo real, que apaga la NVIDIA y deja todo en la gráfica integrada.
 
 ---
 
-## Tabla de contenidos
+## Contenido
 
-1. [Requisitos previos](#requisitos-previos)
+1. [Requisitos](#requisitos)
 2. [Cómo ejecutarlo](#cómo-ejecutarlo)
-3. [Filosofía del script](#filosofía-del-script)
-4. [Recorrido bloque por bloque](#recorrido-bloque-por-bloque)
-5. [Menú de opciones al inicio](#menú-de-opciones-al-inicio)
-6. [Archivos que el script crea o modifica](#archivos-que-el-script-crea-o-modifica)
-7. [Servicios OpenRC habilitados](#servicios-openrc-habilitados)
-8. [Registro de ejecución (log)](#registro-de-ejecución-log)
-9. [Reejecución / idempotencia](#reejecución--idempotencia)
+3. [Menú de opciones](#menú-de-opciones)
+4. [El botón "Actualizar el sistema"](#el-botón-actualizar-el-sistema)
+5. [Qué hace cada bloque](#qué-hace-cada-bloque)
+6. [Archivos que crea o modifica](#archivos-que-crea-o-modifica)
+7. [Servicios que habilita](#servicios-que-habilita)
+8. [Registro (log) y reejecución](#registro-log-y-reejecución)
+9. [Compatibilidad con futuras versiones de Alpine](#compatibilidad-con-futuras-versiones-de-alpine)
 10. [Limitaciones conocidas](#limitaciones-conocidas)
 11. [Solución de problemas](#solución-de-problemas)
-12. [Cómo revertir cambios específicos](#cómo-revertir-cambios-específicos)
+12. [Cómo revertir cambios](#cómo-revertir-cambios)
+13. [Historial de correcciones](#historial-de-correcciones)
 
 ---
 
-## Requisitos previos
+## Requisitos
 
-- Alpine Linux ya instalado (`setup-alpine` ejecutado).
-- Un entorno de escritorio ya instalado mediante `setup-desktop` (XFCE, KDE Plasma, GNOME, MATE o LXQt) — el script **no instala el entorno de escritorio en sí**, solo lo complementa y corrige detalles que Alpine deja sin configurar por defecto.
-- Repositorios `main` **y** `community` habilitados en `/etc/apk/repositories` (varios paquetes que el script instala, como `flatpak`, `libreoffice` o `earlyoom`, viven en `community`).
-- Conexión a internet activa.
-- Acceso como `root` (directamente o vía `doas`).
+- Alpine Linux instalado con `setup-alpine`.
+- Un escritorio instalado con `setup-desktop`: XFCE, KDE Plasma, GNOME, MATE o LXQt. El script **no instala el escritorio**; lo complementa.
+- Repositorios `main` y `community` habilitados en `/etc/apk/repositories`. Casi todo lo que instala el script está en `community`.
+- Conexión a internet.
+- Acceso de administrador (`doas` o una sesión de `root`).
 
-Puedes verificar los repositorios con:
+Para revisar los repositorios:
 
 ```sh
 grep -v '^#' /etc/apk/repositories
@@ -45,382 +46,351 @@ grep -v '^#' /etc/apk/repositories
 doas sh desktop-postinstall.sh
 ```
 
-o, si ya estás en una sesión root:
+Si ya estás como `root`, basta con `sh desktop-postinstall.sh`.
 
-```sh
-sh desktop-postinstall.sh
-```
+Al empezar aparece un menú con todas las opciones. Después de confirmarlo, el script trabaja solo hasta el final. Al terminar, **reinicia el equipo**: varios cambios (servicios nuevos, módulos del kernel, idioma) solo se aplican en el siguiente arranque.
 
-Al empezar, el script muestra **un menú de casillas** con todas las decisiones opcionales (ver [sección 5](#menú-de-opciones-al-inicio)). Después de confirmar, corre solo de principio a fin, sin más preguntas. Al finalizar, **reinicia el sistema** — varios cambios (bloqueo de módulos de kernel, servicios recién habilitados, variables de idioma) no toman efecto por completo hasta el próximo arranque.
+## Menú de opciones
 
-## Filosofía del script
+Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se continúa con **Enter**. Después aparece un resumen con dos botones: **Comenzar** o **Volver** (vuelve al menú sin perder lo marcado). **Salir** termina el script sin cambiar la configuración del sistema.
 
-Tres principios guían todas las decisiones de diseño:
+| Opción | Marcada por defecto | Qué hace |
+|---|---|---|
+| Teclado latinoamericano | Sí | Distribución `latam` en la consola, en Xorg y en sesiones Wayland |
+| NVIDIA en modo seguro | Sí | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau` |
+| gcompat | No | Permite ejecutar programas propietarios compilados para otras distribuciones (glibc) |
+| Impresoras (CUPS) | Sí | Instala el sistema de impresión |
+| LibreOffice | Sí | Suite de oficina en español (paquete pesado) |
+| Firefox | Sí | Navegador, registrado como predeterminado |
+| Flatpak/Flathub | No | Tienda de aplicaciones Flatpak |
+| OnlyOffice | No | Por Flatpak; marcarla activa Flatpak |
+| Google Chrome | No | Por Flatpak (paquete comunitario, no oficial de Google); marcarla activa Flatpak |
+| Botón "Actualizar el sistema" | Sí | Acceso directo en el menú de aplicaciones |
 
-- **Detectar antes de asumir.** El script nunca asume qué entorno de escritorio, GPU o CPU tienes — los detecta con `apk info -e`, `lspci` y `/proc/cpuinfo`, y adapta cada bloque al resultado real.
-- **Nunca abortar por un paquete faltante.** Cada instalación pasa por la función `install_pkg()`, que registra un `WARN` y continúa si un paquete no existe en tu rama/arquitectura, en vez de detener todo el script (`set -e` sigue activo para errores verdaderamente graves, como quedarte sin permisos de root).
-- **Honestidad sobre las limitaciones de Alpine.** Cuando algo no tiene una solución limpia en Alpine (por ejemplo, `unrar` no está empaquetado por ser de licencia no-libre, o el microcódigo de AMD no tiene paquete dedicado), el script lo dice explícitamente en el log en vez de fingir que lo resolvió.
+**Portátiles Optimus** (gráfica integrada más una NVIDIA): en lugar de la casilla de NVIDIA aparece una segunda pantalla con tres modos: *ahorro* (recomendado y marcado por defecto), *seguro* o *activa*. Ver [Bloque 12](#bloque-12--install_drivers).
 
-## Recorrido bloque por bloque
+**Por qué esos valores por defecto:** en el hardware viejo al que apunta el proyecto, dejar `nouveau` activo puede terminar en pantalla negra, así que el modo seguro viene marcado. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice o Chrome.
 
-El script se organiza en 31 bloques. `main()` los ejecuta casi en el orden del archivo, con una excepción deliberada: `detect_hardware` (Bloque 11) y el menú de opciones (Bloque 29) corren **al principio**, justo después de actualizar los repositorios, para que todas las decisiones se tomen antes de empezar a instalar.
+**Si el menú no se puede mostrar** (por ejemplo, sin una terminal interactiva), el script hace cada pregunta por separado cuando la necesita. Solo las respuestas que empiezan por `s` o `y` cuentan como "sí"; Enter vacío es "no".
+
+Los textos del menú van sin tildes a propósito: aparece antes de configurar el idioma, y en una consola recién instalada las tildes pueden verse como símbolos extraños.
+
+## El botón "Actualizar el sistema"
+
+Si se marca en el menú, aparece **"Actualizar el sistema"** en el menú de aplicaciones de cualquier escritorio. Al pulsarlo:
+
+1. **Si hay una versión estable nueva de Alpine**, pregunta primero: *"Cambiar a Alpine 3.NN"* o *"Solo actualizar"*. Sin internet, o si se cierra la ventana, hace solo la actualización normal.
+2. Pide **la contraseña del propio usuario** (no la de root). El usuario debe estar en el grupo `wheel`; el script lo agrega si hace falta.
+3. Muestra una ventana con el paso en curso. Al terminar, la ventana queda abierta con el resultado hasta que se cierra.
+4. Si se instaló un kernel nuevo, o si se cambió de versión de Alpine, avisa que hay que reiniciar.
+
+**Actualización normal:** `apk update`, `apk upgrade` y, si está instalado, `flatpak update`. No cambia de versión de Alpine.
+
+**Cambio de versión** (procedimiento oficial de Alpine):
+
+1. Primero hace la actualización normal. Si falla, no sigue.
+2. Guarda una copia de `/etc/apk/repositories` en `/var/backups/alpine-update/`.
+3. Cambia la versión en ese archivo, por ejemplo de `v3.24` a `v3.25`.
+4. Lee el repositorio nuevo. Si no lo consigue, **restaura la copia**: el sistema queda como estaba.
+5. Actualiza `apk-tools` y ejecuta `apk upgrade --available`.
+
+Detalles importantes:
+
+- **Avanza una versión a la vez** (3.24 → 3.25), aunque haya otra más nueva. Si falta otra, el botón la ofrece la próxima vez que se use.
+- La versión de destino la calcula el propio proceso con permisos de administrador; no acepta un número que llegue de fuera.
+- Si `apk upgrade --available` falla a mitad de camino, **no se revierte nada**: el sistema queda a medio actualizar y el mensaje pide no reiniciar, conectarse a internet y volver a pulsar el botón (o ejecutar `doas apk upgrade --available`).
+- Si el equipo arranca con **GRUB**, avisa que puede hacer falta ejecutar `grub-install` (Alpine lo pidió en 3.24). Con `extlinux`, el cargador habitual de Alpine en equipos con BIOS, no hace falta nada.
+- Solo funciona si `/etc/apk/repositories` usa una versión fija (`v3.NN`). Con `edge` o `latest-stable` no ofrece el cambio.
+- Antes de aceptar conviene leer las [notas de la versión](https://alpinelinux.org/releases/): a veces piden un paso manual.
+
+**Por qué importa:** el repositorio `community` (escritorio, Firefox, LibreOffice...) solo recibe actualizaciones durante unos seis meses, hasta que sale la siguiente versión. Ver [Compatibilidad](#compatibilidad-con-futuras-versiones-de-alpine).
+
+Cada ejecución queda registrada en `/var/log/alpine-update.log`.
+
+## Qué hace cada bloque
+
+El script tiene 31 bloques. `main()` los ejecuta casi en orden, con una excepción: la detección de gráficas (Bloque 11) y el menú (Bloque 29) van al principio, para tomar todas las decisiones antes de instalar nada.
+
+Principios que siguen todos los bloques:
+
+- **Detectar antes de asumir:** el escritorio se averigua con `apk info -e`, las gráficas leyendo `/sys`, el procesador con `/proc/cpuinfo`.
+- **No abortar por un paquete que falta:** si un paquete no existe en la versión instalada, se anota un aviso y el script sigue.
+- **Decir la verdad sobre los límites:** si algo no tiene solución en Alpine (por ejemplo, los controladores propietarios de NVIDIA), el log lo dice en vez de fingir que lo resolvió.
 
 ### Bloque 1 — `check_root`
-Verifica que el script corre como `root` (`id -u` = 0). Si no, aborta con un mensaje claro.
+Comprueba que el script corre como administrador; si no, se detiene con un mensaje claro.
 
-### Bloque 2 — `update_system` / `install_pkg` / `install_pkgs`
-`update_system` corre `apk update` una sola vez al principio. `install_pkg` instala **un** paquete con tolerancia a fallos (usado cuando el nombre del paquete depende de hardware detectado y no se quiere arriesgar una transacción en lote). `install_pkgs` instala **varios** paquetes en una sola transacción de `apk` (mucho más rápido: una sola resolución de dependencias en vez de una por paquete) — si la transacción en lote falla porque algún nombre no existe en tu rama/arquitectura, cae automáticamente a instalar cada paquete por separado con `install_pkg`, así se gana velocidad en el caso normal sin perder la tolerancia a fallos individuales en el caso excepcional.
+### Bloque 2 — `update_system`, `install_pkg`, `install_pkgs`
+`update_system` ejecuta `apk update` una vez al principio. `install_pkgs` instala varios paquetes en una sola operación de `apk`, que es mucho más rápido. Si esa operación falla (por ejemplo, porque un nombre no existe en esta versión), reintenta paquete por paquete con `install_pkg`, que tolera fallos individuales.
+
+`ensure_hw_tools` instala `pciutils` y `usbutils`. El BusyBox de Alpine trae un `lsusb` reducido que solo muestra códigos numéricos, sin los nombres que necesitan los bloques de detección.
 
 ### Bloque 3 — `setup_keyboard_layout`
-**Depende de una casilla del menú inicial** (ver sección 5) si se desea configurar el teclado a distribución latam — no es una preferencia universal, así que no se aplica sin confirmar. Si se acepta, lo hace en dos capas independientes:
-- **Consola (TTY):** `setup-keymap latam latam`, ejecutado de forma no interactiva. El único prompt que sobrevive es la confirmación de OpenRC al reiniciar el servicio `loadkmap` ("you are stopping a boot service"), que se responde automáticamente vía `yes |`.
-- **Sesión gráfica (Xorg):** crea `/etc/X11/xorg.conf.d/00-keyboard.conf` con `Option "XkbLayout" "latam"`, para que XFCE, Plasma, GNOME, MATE o LXQt también arranquen en ese layout (la consola y Xorg son capas separadas; una no implica la otra).
+Solo si se marcó en el menú. Configura la distribución latinoamericana (`latam`) en cuatro lugares, porque cada uno la lee por su cuenta:
+
+- **Consola de texto:** `setup-keymap latam latam`.
+- **Xorg** (XFCE, MATE, LXQt y la pantalla de inicio de SDDM, que en Alpine usa Xorg): `/etc/X11/xorg.conf.d/00-keyboard.conf`.
+- **Wayland** (Plasma desde Alpine 3.22, GNOME desde 3.24, sway, labwc): Wayland no lee `/etc/X11/`. Se agregan:
+  - la variable `XKB_DEFAULT_LAYOUT=latam`, que KWin usa cuando el usuario no ha elegido distribución (comprobado en el código de KWin), igual que los compositores basados en wlroots;
+  - `/etc/xdg/kxkbrc`, el valor por defecto de Plasma, que se ve en Preferencias del sistema;
+  - un esquema de `gsettings` para GNOME, que también aplica a su pantalla de inicio.
+
+Lo que el usuario elija después en la configuración del escritorio tiene prioridad sobre estos valores.
 
 ### Bloque 4 — `detect_desktop_environment`
-Pregunta a `apk` (no a variables de entorno, que no existen en una shell root fuera de sesión gráfica) qué entornos están instalados: `xfce4-session`, `plasma-desktop-meta`/`plasma-desktop`, `gnome-shell`, `mate-session-manager`, `lxqt-session`. Guarda el resultado en las variables `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE`, `DE_LXQT` (cada una `"yes"`/`"no"`), que usan todos los bloques posteriores para decidir qué instalar. Si tienes más de un entorno instalado simultáneamente, el script configura ambos sin conflicto.
+Pregunta a `apk` qué escritorios están instalados y guarda el resultado en `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE` y `DE_LXQT`. Si hay más de uno, configura todos.
 
 ### Bloque 5 — `detect_target_user`
-Identifica al usuario real del sistema (no root) para poder aplicarle configuración de idioma y grupos más adelante. Usa `$DOAS_USER` (Alpine usa `doas`, no `sudo`) con `logname` como respaldo, y resuelve su directorio home vía `getent passwd`. Si no logra determinar un usuario, los bloques que lo necesitan simplemente avisan y continúan sin fallar.
+Identifica al usuario real (no root) a partir de `$DOAS_USER` o `logname`, para aplicarle el idioma y los grupos más adelante. Si no lo encuentra, los bloques que lo necesitan avisan y siguen.
 
 ### Bloque 6 — `setup_applets`
-Instala la base de red/audio (`networkmanager`, `wpa_supplicant`, `pulseaudio`) siempre, sin importar el entorno gráfico. Luego, según las banderas `DE_*` detectadas en el Bloque 4, instala el "applet" nativo correspondiente:
+Instala NetworkManager y un servidor de audio:
 
-| Entorno | WiFi | Volumen |
+- Si el sistema ya tiene **PipeWire** (`pipewire-pulse`) o **PulseAudio**, lo respeta.
+- Si no tiene ninguno: PipeWire en Plasma y GNOME; PulseAudio en XFCE, MATE y LXQt.
+
+En Alpine, el paquete real `pulseaudio` y `pipewire-pulse` se excluyen entre sí. Hoy, al instalar Plasma, Alpine elige PulseAudio, y PipeWire corre al lado para compartir pantalla. Respetar lo instalado evita que el script contradiga a Alpine si algún día cambia su elección.
+
+Alpine arranca PipeWire con un lanzador automático que marcó como obsoleto. Si en una versión futura desaparece, el log indica cómo activarlo con los servicios de usuario de OpenRC (`rc-update -U add pipewire`).
+
+Luego instala los indicadores de red y volumen de cada escritorio:
+
+| Escritorio | Red | Volumen |
 |---|---|---|
 | XFCE | `network-manager-applet` | `xfce4-pulseaudio-plugin` |
 | Plasma | `plasma-nm` | `plasma-pa` |
-| GNOME | (incrustado en el shell) | `pavucontrol` (mezclador avanzado) |
+| GNOME | integrado | `pavucontrol` (mezclador avanzado) |
 | MATE | `network-manager-applet` | `mate-media` |
-| LXQt | `network-manager-applet` | `pavucontrol-qt` (mezclador; el widget de bandeja ya viene en `lxqt-panel`) |
+| LXQt | `network-manager-applet` | `pavucontrol-qt` (el control de la bandeja ya viene en `lxqt-panel`) |
 
-`wpa_supplicant` y `pulseaudio` **no** se registran como servicios OpenRC de arranque: `wpa_supplicant` lo invoca NetworkManager internamente vía D-Bus, y PulseAudio se gestiona por sesión de usuario en cada entorno, no como demonio de sistema.
+### Bloques 7 y 8 — WiFi
+Detecta adaptadores WiFi internos (`lspci`) y USB (`lsusb`), y según el fabricante instala su firmware (`linux-firmware-intel`, `-realtek`, `-ath10k`, etc.). Si no reconoce el fabricante, instala un conjunto amplio. En una instalación normal de Alpine ese firmware ya está, así que este paso solo cambia algo en sistemas reducidos.
 
-### Bloque 7 — `detect_wifi_hardware`
-Detecta adaptadores de red inalámbrica tanto por **PCI** (`lspci`, clase "Network controller"/"Wireless") como por **USB** (`lsusb`). Antes de usarlos, la función `ensure_hw_tools` instala `pciutils` y `usbutils` si **el paquete** no está: BusyBox trae sus propios `lspci` y `lsusb`, pero solo muestran códigos numéricos, sin los nombres que buscan estos bloques. *(Corrección: antes se comprobaba con `command -v lspci`, que encontraba la versión de BusyBox, así que `pciutils` nunca se instalaba y la detección podía fallar en silencio en una instalación recién hecha.)* Es importante cubrir ambos: un adaptador WiFi conectado como dongle externo **no aparece en `lspci`**, solo en `lsusb`. El resultado combinado se guarda en `$WIFI_INFO` para que el bloque siguiente lo use.
-
-### Bloque 8 — `install_wifi_firmware`
-Busca palabras clave de fabricante (Intel, Realtek, Atheros/Qualcomm, MediaTek/Ralink, Marvell, Broadcom) en `$WIFI_INFO` e instala el/los subpaquete(s) de firmware correspondientes (Alpine divide el firmware en decenas de subpaquetes por fabricante: `linux-firmware-intel`, `linux-firmware-realtek`, `linux-firmware-ath9k_htc`, etc.). En una instalación normal de Alpine ya están todos presentes (ver la nota del Bloque 12), así que este paso solo marca la diferencia en sistemas adelgazados. Si no se identifica el fabricante por nombre, instala un conjunto amplio como red de seguridad en vez de no instalar nada.
-
-> **Sobre el filtro de `lsusb`:** la primera versión de este bloque capturaba la salida completa de `lsusb` sin filtrar, lo que causaba falsos positivos — una cámara web Realtek, un teclado con chip MediaTek, o el hub USB interno de la placa (a menudo Intel) hacían que el script instalara firmware WiFi innecesario. Se corrigió filtrando por frases específicas de adaptador de red (`802.11`, `WLAN`, `Wi-Fi`, `wireless network`, `network adapter`) en vez de palabras sueltas como "wireless" o "adapter", que son demasiado amplias.
-
-### Bloque 9 — `detect_bluetooth_hardware`
-Detecta adaptadores Bluetooth por **PCI** y **USB** (`lsusb`, ya que la inmensa mayoría de adaptadores Bluetooth en laptops están cableados internamente por USB, a menudo combinados con el chip WiFi en el mismo controlador físico). El resultado se guarda en `$BT_INFO`.
-
-### Bloque 10 — `install_bluetooth`
-Instala `bluez` + `bluez-openrc` + `pulseaudio-bluez` y habilita el servicio `bluetooth`. **`pulseaudio-bluez` es el eslabón que suele faltar:** sin él, `bluez` permite emparejar audífonos o altavoces Bluetooth, pero PulseAudio no tiene el módulo necesario para enrutar el perfil A2DP — el dispositivo se empareja pero no emite sonido. Si `$BT_INFO` identificó un fabricante, instala también el firmware Bluetooth correspondiente — **importante:** no existe un paquete genérico `linux-firmware-bluetooth` en Alpine; el firmware de Bluetooth está fragmentado por fabricante igual que el de WiFi (`linux-firmware-rtl_bt` para Realtek, `linux-firmware-ar3k` para Atheros/Qualcomm; Broadcom e Intel reutilizan `linux-firmware-brcm`/`linux-firmware-intel`, que ya cubren el combo WiFi+Bluetooth). Si no se detectó ningún adaptador Bluetooth, el bloque no instala nada (evita dejar `bluez` corriendo sin hardware que gestionar).
+### Bloques 9 y 10 — Bluetooth
+Detecta adaptadores Bluetooth y, si hay alguno, instala `bluez`, su firmware y el **puente de audio** del servidor elegido en el Bloque 6 (`pulseaudio-bluez` o `pipewire-spa-bluez`). Sin ese puente, los audífonos se emparejan pero no suenan. Si no hay adaptador, no instala nada.
 
 ### Bloque 11 — `detect_hardware`
-Clasifica **todos** los adaptadores de video presentes en banderas independientes: `GPU_HAS_INTEL`, `GPU_HAS_AMD`, `GPU_HAS_NVIDIA`, `GPU_HAS_VIRTUAL` (más `GPU_COUNT` con el total). Esto es deliberado: en un laptop con gráficos híbridos (Optimus, Intel+NVIDIA) hay más de una GPU, y el script necesita saber de **todas**, no solo de la primera que coincida.
+Clasifica todas las tarjetas gráficas leyendo `/sys` (fabricante y tipo en números, sin depender del texto de `lspci`). Además averigua:
 
-La clasificación se hace leyendo `/sys/bus/pci/devices` (clase y fabricante en números), no el texto de `lspci`, que solo se guarda en el log. Así funciona aunque `lspci` sea la versión reducida de BusyBox. Además registra:
+- cuál es la **gráfica principal**, la que usó el equipo al encender;
+- si el equipo es **portátil**, por el tipo de chasis o por la presencia de batería;
+- si es un **portátil Optimus**: portátil, una sola NVIDIA, y la principal es Intel o AMD.
 
-- **La GPU principal** (`PRIMARY_SLOT`): la que el firmware usó al arrancar (`boot_vga`). En un portátil Optimus es la integrada.
-- **Si el equipo es portátil** (`IS_LAPTOP`): por el tipo de chasis del firmware o, como respaldo, por la presencia de una batería.
-- **Si es un portátil Optimus** (`OPTIMUS_LAPTOP`): portátil, una sola NVIDIA, y la principal es Intel o AMD. Solo en ese caso se ofrece el modo de ahorro del Bloque 12.
-
-También revisa `lsusb` en busca de adaptadores de video **DisplayLink** (docks USB para múltiples monitores, invisibles para `lspci`). Solo se registra una advertencia informativa — **no se intenta instalar nada automáticamente**, porque el driver que necesitan (`evdi`) no está empaquetado en Alpine (solo existe vía DKMS en otras distros) y, aun así, `evdi` por sí solo no es un driver completo: DisplayLink exige además su propio userspace binario cerrado, no distribuible por un gestor de paquetes.
+También avisa si hay un adaptador de video USB DisplayLink, que Alpine no soporta.
 
 ### Bloque 12 — `install_drivers`
-Instala controladores según las banderas del Bloque 11 (puede instalar más de un fabricante a la vez, si el hardware es híbrido):
-- **Intel:** `linux-firmware-i915`, `mesa-vulkan-intel`, `libva-intel-driver`, `intel-media-driver`, `libva-utils`.
-- **AMD:** `linux-firmware-amdgpu`/`radeon`, `mesa-vulkan-ati`/`radeon`, `vulkan-loader`, `mesa-va-gallium`, `libva-utils`.
-- **Virtual (QEMU/VMware/VirtualBox):** drivers `xf86-video-*` + `spice-vdagent`.
-- **NVIDIA:** `linux-firmware-nvidia` (driver abierto `nouveau`) y uno de tres modos:
+Instala los controladores de cada gráfica detectada:
+
+- **Intel:** firmware, Vulkan y decodificación de video por hardware (`libva-intel-driver` para gráficas antiguas, `intel-media-driver` para las de 2014 en adelante).
+- **AMD:** firmware, Vulkan (`mesa-vulkan-ati`) y decodificación de video (`mesa-va-gallium`).
+- **Máquinas virtuales:** controladores de video y `spice-vdagent`.
+- **NVIDIA:** firmware y uno de tres modos.
 
 | Modo | Cuándo se ofrece | Qué hace |
 |---|---|---|
-| **Ahorro (Optimus)** | Solo en portátiles Optimus; es el predeterminado ahí | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
-| **Seguro** | Siempre | Bloquea el módulo `nouveau` (`/etc/modprobe.d`). La NVIDIA queda sin driver, pero **encendida** |
-| **Activa** | Siempre | `nouveau` con aceleración 3D normal. Riesgo de pantalla negra en tarjetas antiguas (Tesla/Fermi/Kepler) |
+| **Ahorro** | Solo en portátiles Optimus (predeterminado) | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
+| **Seguro** | Siempre | Bloquea `nouveau`. La NVIDIA queda sin driver, pero **sigue encendida** |
+| **Activa** | Siempre | `nouveau` con aceleración 3D. Riesgo de pantalla negra en tarjetas antiguas |
 
-Cada modo empieza borrando los archivos de los otros, así que volver a correr el script y elegir otro modo cambia de verdad la configuración. Si cambia el bloqueo de `nouveau`, se regenera el initramfs (`mkinitfs`).
+Cada modo borra los archivos de los otros, así que volver a ejecutar el script y elegir otro modo cambia la configuración por completo.
 
-**El modo de ahorro** salió de pruebas en un ASUS K53SV (Intel HD 3000 + GeForce GT 540M, Fermi) con Plasma en Wayland: la NVIDIA queda en `D3cold` (sin corriente), el escritorio fluido y el video de YouTube decodificado por la Intel. Hubo que resolver tres obstáculos, que el script aplica así:
+**El modo de ahorro** se probó en un ASUS K53SV (Intel HD 3000 y GeForce GT 540M) con Plasma en Wayland: la NVIDIA queda apagada (`D3cold`), el escritorio fluido y el video de YouTube decodificado por la Intel. Resuelve tres cosas que mantenían encendida la NVIDIA:
 
-1. **KWin, Firefox y otros programas abren todas las GPU que encuentran.** Las variables `KWIN_DRM_DEVICES` y `MOZ_DRM_DEVICE` apuntan a la gráfica integrada. Se calculan en cada inicio de sesión a partir de su ranura PCI, porque `card0`/`card1` pueden cambiar entre arranques. En Xorg se desactiva `AutoAddGPU`.
-2. **El audio HDMI de la NVIDIA mantenía despierta a la gráfica.** Al arrancar se desvincula de su driver. No se pierde nada: las salidas de video del portátil están en la integrada.
-3. **`nouveau` detectaba una pantalla "fantasma" en su salida VGA** (que en un portátil Optimus no está cableada) y la mantenía encendida con una consola de texto. Al arrancar se desconectan las salidas **analógicas** (VGA/TV) de la NVIDIA que figuren como conectadas. Las digitales no se tocan.
+1. **Programas que abren todas las gráficas.** Las variables `KWIN_DRM_DEVICES` y `MOZ_DRM_DEVICE` dejan a KWin y a Firefox en la integrada. Para Xorg (pantalla de inicio de SDDM, XFCE, MATE, LXQt) se desactiva `AutoAddGPU`.
+2. **El audio HDMI de la NVIDIA.** Al arrancar se desconecta de su driver. No se pierde nada: las salidas de video del portátil están en la integrada.
+3. **Una pantalla "fantasma".** `nouveau` creía tener algo conectado en su salida VGA, que en un portátil Optimus no está cableada. Al arrancar se desconectan las salidas analógicas de la NVIDIA; las digitales no se tocan.
 
-Para comprobar después de reiniciar: `cat /sys/bus/pci/devices/<ranura-NVIDIA>/power_state` debe decir `D3cold`. El script imprime el comando exacto.
+Para comprobarlo después de reiniciar, el script muestra el comando exacto; debe responder `D3cold`.
 
-**Por qué el modo seguro cambió:** antes escribía también `20-nouveau-safe.conf`, una sección de Xorg con `Driver "nouveau"` y `NoAccel`, sin `BusID`. Con el módulo bloqueado, ese driver de Xorg no puede funcionar, y sin `BusID` Xorg lo aplicaba a la tarjeta principal (en un portátil híbrido, la Intel). Es una causa probable de la pantalla negra registrada en [Limitaciones conocidas](#limitaciones-conocidas). Ahora solo se bloquea el módulo.
+Al final del bloque, `check_vaapi` comprueba con `vainfo` si la gráfica principal decodifica video H.264 y lo anota en el log.
 
-Además de la aceleración 3D (OpenGL y Vulkan), instala la **decodificación de video por hardware (VA-API)**, que es la que alivia al procesador al reproducir video en el navegador o en `mpv`: `mesa-va-gallium` en AMD, y en Intel tanto `libva-intel-driver` (GPU antiguas) como `intel-media-driver` (de 2014 en adelante). Se instalan ambos en Intel porque la librería VA-API prueba el moderno y, si la GPU no lo soporta, recurre al antiguo. Al final del bloque, `check_vaapi` ejecuta `vainfo` sobre la gráfica principal (elegida por su ranura PCI, no "la primera" de `/dev/dri`, que en un equipo híbrido puede ser la NVIDIA) y deja en el log si H.264 se decodifica por hardware.
-
-> **Límite en GPU antiguas:** las GPU Intel de la era Sandy Bridge o anteriores solo decodifican por hardware el formato H.264, mientras que YouTube entrega por defecto VP9 o AV1, que terminan decodificándose en el procesador. Por eso el script recomienda al final la extensión *enhanced-h264ify* para Firefox (ver Bloque 30).
-
-Si no se detecta ninguna GPU reconocida, `mesa-dri-gallium` ya deja software rendering (`llvmpipe`) como respaldo funcional.
-
-> **Sobre el firmware (corrección):** una versión anterior de esta nota daba a entender que el script mantenía el sistema liviano al no instalar el metapaquete `linux-firmware` (que depende de todos los subpaquetes de fabricante). Pero la [documentación oficial de Alpine](https://wiki.alpinelinux.org/wiki/Kernels) indica que ese metapaquete **ya viene incluido en la instalación por defecto**. Por lo tanto, en un sistema recién instalado, los subpaquetes de firmware que piden los Bloques 8, 10 y 12 ya están presentes y `apk add` no hace nada con ellos: no cuesta nada, pero tampoco aporta. Solo marcan la diferencia en un sistema adelgazado con `linux-firmware-none`, donde falta todo el firmware y el script agrega únicamente el del hardware detectado. El script no intenta adelgazar el sistema por su cuenta: quitar firmware a ciegas podría dejar sin WiFi o sin video un equipo que hoy funciona.
+> **Gráficas antiguas y YouTube:** las Intel de la época Sandy Bridge solo decodifican H.264, pero YouTube envía VP9 o AV1, que acaban en el procesador. Por eso el script recomienda la extensión *enhanced-h264ify* para Firefox.
 
 ### Bloque 13 — `check_unclaimed_devices`
-Cierra el ciclo de los bloques de firmware anteriores preguntando algo distinto: **¿quedó algún dispositivo sin ningún controlador del kernel enlazado?** Usa `lspci -k`, que añade una línea `Kernel driver in use:` a cada dispositivo que sí tiene driver; los que no la tienen se reportan (filtrando a clases de red, video y audio — muchos dispositivos como los *host bridges* legítimamente no llevan driver, y eso es normal). Un dispositivo de red o video sin driver es exactamente el síntoma de hardware que solo funciona con controladores propietarios o fuera del árbol del kernel.
+Lista los dispositivos de red, video o audio que quedaron sin controlador, que es el síntoma de hardware que necesita controladores propietarios. Explica en el log los dos caminos de Alpine para esos casos y no aplica ninguno por su cuenta:
 
-En Alpine hay **dos caminos distintos y no intercambiables** para esos casos, y el bloque los explica en el log:
-
-| Tipo | Ejemplos | Mecanismo |
+| Tipo | Ejemplos | Camino |
 |---|---|---|
-| Módulo de **kernel** | NVIDIA `.ko`, Broadcom `wl`, varios Realtek USB | **AKMS** (Alpine Kernel Module Support) — el equivalente oficial de DKMS: compila el módulo desde fuente y lo **reconstruye solo** en cada actualización de kernel. Alpine empaqueta varios como `*-src` (`rtl8812au-src`, `rtl88x2bu-src`, `rtw89-src`…), casi todos en el repositorio `testing` |
-| Binario de **espacio de usuario** (glibc) | Plugins de impresora, DRM Widevine | **`gcompat`** — capa de compatibilidad glibc sobre musl. **No** sirve para módulos de kernel |
+| Módulo del kernel | Broadcom `wl`, algunos Realtek USB | AKMS (equivalente a DKMS); varios paquetes están en el repositorio `testing` |
+| Programa compilado para glibc | Controladores de impresora, Widevine | `gcompat` (opcional en el menú) |
 
-Instalar `gcompat` depende de una casilla del menú inicial (ver sección 5), pero **no instala módulos propietarios ni habilita `testing` por su cuenta**: habilitar un repositorio inestable a nivel de sistema puede arrastrar paquetes rotos al resto de la instalación, y compilar un módulo equivocado puede dejar el equipo sin red o sin video. Reporta el diagnóstico con los comandos exactos y deja la decisión al usuario.
+Los controladores propietarios de NVIDIA no existen en Alpine; la única opción es `nouveau`.
 
-> **Sobre NVIDIA:** los drivers propietarios de NVIDIA no están disponibles en Alpine por la incompatibilidad con musl libc — AKMS no cambia eso. Para GPU NVIDIA la única vía sigue siendo `nouveau` (ver Bloque 12).
-
-### Bloque 14 — `detect_cpu` / `install_microcode`
-Lee `/proc/cpuinfo` para clasificar el fabricante (`GenuineIntel`/`AuthenticAMD`). Instala `intel-ucode` o `amd-ucode` según el caso. Con syslinux (extlinux) o GRUB, el paquete **agrega solo** su imagen de microcódigo a la línea `INITRD` del cargador de arranque, así que basta con reiniciar; se puede verificar con `dmesg | grep -i microcode`. Alpine no instala el microcódigo por defecto: es la única pieza específica del fabricante de la CPU que falta tras la instalación, porque el resto (control de frecuencia, sensores de temperatura, virtualización) ya viene dentro del kernel genérico y se activa solo.
-
-> **Corrección:** una versión anterior de este bloque afirmaba que `amd-ucode` no existía en Alpine e instalaba `linux-firmware-amd` en su lugar, y advertía que el microcódigo podía requerir integración manual en el arranque. Ambas afirmaciones venían de información desactualizada; la [wiki oficial de Alpine](https://wiki.alpinelinux.org/wiki/CPU_Microcode) documenta `amd-ucode` y la integración automática.
-
-También detecta el **nivel de microarquitectura x86-64** (v1 a v4) a partir de los *flags* de `/proc/cpuinfo` — el método habitual (`/lib/ld-linux-x86-64.so.2 --help`) es propio de glibc y no existe en musl. **Es un dato solo informativo:** la optimización por nivel que hacen distribuciones como CachyOS ocurre al *compilar* los paquetes, no después de instalarlos, y Alpine distribuye un único juego de paquetes x86_64 para el nivel base. Saber el nivel sirve para entender qué rendimiento esperar, no cambia nada de lo que se instala.
-
-| Nivel | Requisitos clave | CPUs típicas |
-|---|---|---|
-| v1 | SSE2 (base de x86-64) | Athlon 64, Core 2 tempranos |
-| v2 | SSE4.2, POPCNT, SSSE3 | Nehalem, Sandy/Ivy Bridge, Bulldozer (~2008–2012) |
-| v3 | AVX2, FMA, BMI1/2 | Haswell (2013) en adelante, Zen |
-| v4 | AVX-512 | Skylake-X, Zen 4/5 |
-
-> Dato relevante para hardware antiguo: los repositorios optimizados de CachyOS existen solo para v3, v4 y Zen 4; en CPUs v2 (como un Core i3 M 370 o un i7-2630QM), CachyOS instala sus paquetes genéricos. Es decir, en esa clase de equipos la ventaja de CachyOS por nivel de CPU no aplica, y Alpine no pierde nada en ese aspecto.
+### Bloque 14 — `detect_cpu`, `install_microcode`
+Instala el microcódigo del procesador (`intel-ucode` o `amd-ucode`). El cargador de arranque lo incluye solo; basta con reiniciar. También anota en el log el nivel x86-64 del procesador (v1 a v4), solo como dato: Alpine usa los mismos paquetes para todos los niveles.
 
 ### Bloque 15 — `setup_zram`
-Calcula la RAM física total (`/proc/meminfo`) y configura `zram-init` con un dispositivo swap comprimido (algoritmo `zstd`) de tamaño igual al 100% de esa RAM. Ajusta también `vm.swappiness=100` y `vm.page-cluster=0` en `/etc/sysctl.conf` (valores recomendados para swap sobre zram). Pensado para exprimir el máximo de memoria efectiva en equipos con poca RAM física.
+Crea memoria de intercambio comprimida en RAM (`zram`, con `zstd`) del mismo tamaño que la RAM física, y ajusta `vm.swappiness` y `vm.page-cluster` para ese uso. Ayuda mucho en equipos con poca memoria.
 
 ### Bloque 16 — `setup_earlyoom`
-Instala `earlyoom` (+ su subpaquete `earlyoom-openrc`, necesario para que exista el script de arranque) y lo habilita. `earlyoom` monitorea la memoria en segundo plano y cierra el proceso responsable (ej. una pestaña de Chrome) segundos antes de que el sistema se quede sin memoria y se congele por completo.
+Instala `earlyoom`, que cierra el programa que está agotando la memoria antes de que el equipo se congele.
 
 ### Bloque 17 — `setup_power`
-Instala y habilita `acpid` (+ `acpid-openrc`), para que Alpine reaccione a eventos físicos: cerrar la tapa de un laptop, presionar el botón de encendido, etc.
+Con escritorio, **no** habilita `acpid` (y lo quita del arranque si estaba): `elogind` ya atiende el botón de encendido y la tapa, y tener los dos podía apagar el equipo por accidente. Alpine hace lo mismo en `setup-desktop` desde 2025. Solo en sistemas sin escritorio habilita `acpid`.
 
 ### Bloque 18 — `optimize_hdd_storage`
-Recorre `/sys/block/*/queue/rotational` para identificar discos **mecánicos** (excluyendo `loop`/`ram`/`zram`). Si encuentra alguno, configura el planificador de E/S vía una regla `udev` persistente (`/etc/udev/rules.d/60-ioscheduler.rules`): prioriza **BFQ** (diseñado para que un proceso con mucha carga de E/S no congele el resto del escritorio — la misma filosofía que `earlyoom` aplica a la memoria), verificando en tiempo de ejecución si el kernel actual lo tiene disponible y cayendo a `mq-deadline` si no.
-
-La regla de `udev` filtra **por atributo físico** (`rotational==1`), no por nombre de disco — esto es clave en configuraciones mixtas (ej. sistema instalado en SSD con un HDD auxiliar solo para datos): el SSD nunca recibe esta regla sin importar qué letra de disco (`sda`/`sdb`) le toque en un arranque dado, ya que el orden de asignación no está garantizado entre reinicios. El bloque también identifica cuál disco es la raíz del sistema (usando `mount`, sin depender de `findmnt`/`lsblk` para no sumar una dependencia nueva) y ajusta la sugerencia de `noatime` en consecuencia: si el disco mecánico detectado **no** es la raíz (es un disco de datos auxiliar), la sugerencia es más directa, ya que modificar `/etc/fstab` para una partición no-raíz tiene mucho menor riesgo que tocar la partición de arranque.
-
-**No modifica `/etc/fstab`** automáticamente en ningún caso — es un archivo crítico para el arranque y se deja como sugerencia manual en el log, no como cambio automático.
+Si hay discos mecánicos, les asigna el planificador BFQ (o `mq-deadline` si el kernel no tiene BFQ) con una regla `udev`, para que una copia grande o una actualización no congelen el escritorio. La regla se aplica solo a discos mecánicos, aunque cambie su nombre (`sda`, `sdb`) entre arranques. **No modifica `/etc/fstab`**; sugiere en el log agregar `noatime` a mano.
 
 ### Bloque 19 — `setup_usb_automount`
-Configura el montaje automático de memorias USB al conectarlas. Es el bloque con más piezas coordinadas:
-1. **`dbus`** (+ servicio `dbus`) — instalado primero porque todo lo demás en este bloque depende del bus de mensajes del sistema.
-2. **`udisks2`** — hace el montaje real. No tiene servicio OpenRC propio: se activa bajo demanda vía D-Bus.
-3. **`elogind` + `polkit-elogind`** (servicios `elogind` y `polkit`, nombres distintos a los paquetes) — autorización para que un usuario normal (no root) pueda montar sin contraseña, basada en detección de **sesión activa** (no en pertenencia a grupos Unix — ver [Limitaciones conocidas](#limitaciones-conocidas)).
-4. **Disparador según entorno:** `gvfs` + `thunar-volman` para XFCE; `gvfs` para GNOME/MATE; `gvfs` + `lxqt-policykit` para LXQt. Plasma no necesita nada adicional aquí porque Dolphin usa KIO/Solid + `udisks2` directamente.
+Hace que las memorias USB se monten solas: instala y habilita `dbus`, `udisks2`, `elogind` y `polkit`, más `gvfs` en XFCE, GNOME, MATE y LXQt (en LXQt también `lxqt-policykit`, y en XFCE `thunar-volman`). Plasma no necesita nada más.
 
 ### Bloque 20 — `setup_printing`
-**Depende de una casilla del menú inicial** (ver sección 5) si se desea soporte de impresión — no todo equipo "revivido" tiene o necesita una impresora. Si se acepta, instala `cups` + `cups-openrc` + `cups-filters` + `system-config-printer`, habilita el servicio `cupsd`, y deja la interfaz web de CUPS disponible en `http://localhost:631`.
+Solo si se marcó en el menú. Instala CUPS y su configurador; la administración web queda en `http://localhost:631`.
 
 ### Bloque 21 — `install_archive_tools`
-Instala `zip`, `unzip`, `p7zip`. **`unrar` no se instala porque no existe como paquete en Alpine** (licencia no-libre, verificado en v3.24) — el script lo indica explícitamente en el log en vez de intentarlo y fallar en silencio, y apunta al binario oficial de `rarlab.com/download.htm` como única vía si de verdad se necesita soporte RAR (no automatizado por el script: cada versión de RARLAB cambia el nombre del archivo, y una URL fija quedaría rota con el tiempo).
+Instala `zip`, `unzip` y `7zip`.
 
 ### Bloque 22 — `setup_locale_es`
-Configura español en tres capas independientes, porque ningún mecanismo por sí solo cubre todos los casos:
-1. **`/etc/profile.d/lang-es.sh`** — variables `LANG`/`LC_ALL`/`LC_MESSAGES=es_ES.UTF-8` para shells de login tradicionales.
-2. **`/etc/environment`** — las mismas variables, leídas por PAM (`pam_env`) en la mayoría de gestores de sesión gráficos (SDDM incluido), que no siempre pasan por `/etc/profile.d`.
-3. **`plasma-localerc`** (solo si se detecta Plasma) — Plasma tiene su **propio** mecanismo de idioma, separado del `LANG` del sistema, con dos secciones distintas: `[Formats]` (números/fecha) y `[Translations]` (idioma real de la interfaz). Se escribe tanto en `/etc/xdg/plasma-localerc` (default para usuarios nuevos) como en `$HOME/.config/plasma-localerc` del usuario detectado en el Bloque 5.
-
-También instala `musl-locales`/`musl-locales-lang` y el metapaquete `lang`, que dispara automáticamente (vía `install_if` de `apk`) los subpaquetes `-lang` de todo el software ya instalado en el sistema (XFCE, GTK, Plasma, NetworkManager applet, etc.), sin necesidad de listar cada paquete a mano.
-
-> **Nota:** musl (la libc de Alpine) no tiene un locale `es_MX.UTF-8` — solo un conjunto reducido, entre ellos `es_ES.UTF-8`, que es el que usa el script. Para la traducción de interfaz esto no supone ninguna diferencia práctica (los paquetes de idioma no distinguen variantes regionales de español).
+Configura español (`es_ES.UTF-8`) en tres capas: `/etc/profile.d` para las consolas, `/etc/environment` para las sesiones gráficas, y el archivo propio de idioma de Plasma. También instala el metapaquete `lang`, que agrega solo las traducciones de todo lo instalado. musl, la biblioteca de C de Alpine, no tiene variantes regionales como `es_CO`, pero las traducciones de los programas son las mismas.
 
 ### Bloque 23 — `install_fonts`
-Instala `ttf-dejavu`, `font-liberation` + `font-liberation-sans-narrow` (métricamente compatibles con Arial/Times/Courier — importante para abrir `.docx` sin que el texto se desborde) `font-noto` y `font-noto-emoji`. La fuente de emojis va en un paquete aparte de `font-noto`: sin ella, páginas como WhatsApp Web muestran cuadritos en lugar de emojis (Plasma ya la trae como dependencia; los demás escritorios no). Se ejecuta antes de LibreOffice a propósito.
+Instala DejaVu, Liberation (compatible en medidas con Arial, Times y Courier, para abrir documentos de Office sin descuadres), Noto y Noto Emoji (sin ella, WhatsApp Web muestra cuadritos en vez de emojis).
 
 ### Bloque 24 — `install_libreoffice`
-**Depende de una casilla del menú inicial** (ver sección 5) — es de los paquetes más pesados del script, y quien prefiera OnlyOffice vía Flatpak puede omitirlo aquí. Si se acepta, instala `libreoffice` + `libreoffice-lang-es`.
+Solo si se marcó en el menú. LibreOffice con su paquete de idioma español.
 
 ### Bloque 25 — `setup_flatpak`
-**Depende de una casilla del menú inicial** (ver sección 5) si se desea habilitar Flatpak/Flathub en absoluto — si no se marca, no se instala nada de infraestructura (`flatpak`, portales XDG). Marcar OnlyOffice o Chrome en el menú activa Flatpak automáticamente. Si se acepta: instala Flatpak y agrega el repositorio Flathub, instala `xdg-desktop-portal` + `xdg-desktop-portal-gtk` como base universal, y además el portal nativo correspondiente si se detecta Plasma (`xdg-desktop-portal-kde`) o LXQt (`xdg-desktop-portal-lxqt`) — así los diálogos de "Abrir/Guardar" de apps en sandbox (Chrome, OnlyOffice) se ven coherentes con el entorno en vez de forzar siempre estética GTK. Luego instala OnlyOffice y/o Google Chrome desde Flathub, según las casillas marcadas.
+Solo si se marcó Flatpak, OnlyOffice o Chrome. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas.
 
 ### Bloque 26 — `setup_display_manager`
-Habilita el gestor de inicio de sesión gráfico (`lightdm`/`sddm`/`gdm`) en el runlevel `default`. No basta con que `setup-desktop` lo haya instalado — hay casos reales donde el DM queda instalado pero no correctamente enganchado al arranque. En vez de una prioridad fija (que podría elegir el DM equivocado en equipos con más de un entorno instalado, como XFCE + Plasma a la vez), reutiliza las banderas `DE_*` del Bloque 4 para preferir el emparejamiento convencional — el mismo que usa el propio `setup-desktop` de Alpine internamente: Plasma → `sddm`, GNOME → `gdm`, cualquier otro (XFCE/MATE/LXQt) → `lightdm` si está instalado. Si hay más de un DM instalado, se advierte explícitamente cuál se eligió y por qué.
+Habilita la pantalla de inicio de sesión que corresponde al escritorio: SDDM para Plasma, GDM para GNOME y LightDM para los demás. Si hay más de una instalada, avisa cuál eligió.
 
 ### Bloque 27 — `setup_update_shortcut`
-**Depende de una casilla del menú inicial** (ver sección 5) si se desea un botón en el menú de aplicaciones para actualizar el sistema (Alpine vía `apk` y Flatpak, si está instalado) con un clic. Usa dos piezas del ecosistema freedesktop.org que hacen esto trivialmente multi-entorno:
+Crea el botón "Actualizar el sistema" (ver [la sección del botón](#el-botón-actualizar-el-sistema)). Funciona con dos scripts:
 
-- **Un único archivo `.desktop`** en `/usr/share/applications/` — el estándar XDG que XFCE, Plasma, GNOME, MATE y LXQt leen por igual, así que el botón aparece en el menú de **todos** los entornos detectados sin lógica separada por DE.
-- **`pkexec`** (parte de `polkit-elogind`, ya instalado en el Bloque 19) para pedir autenticación. Por defecto, sin ninguna regla de polkit adicional, si el usuario pertenece al grupo `wheel` (se agrega automáticamente si hace falta), `pkexec` pide **su propia contraseña** — igual que `doas` — nunca la de root.
+- `alpine-update-launcher.sh` corre como el usuario: pregunta por el cambio de versión, pide la contraseña con `pkexec` y muestra el avance con `zenity`.
+- `alpine-update-root.sh` corre como administrador y solo hace el trabajo (`apk`, `flatpak`), sin ventanas.
 
-El trabajo se divide en dos scripts. `alpine-update-root.sh` corre como root vía `pkexec` y solo imprime a stdout/stderr (`apk update`, `apk upgrade`, y `flatpak update -y` si Flatpak está instalado) — sin nada gráfico en el lado privilegiado, para no depender de que X11/Wayland se reenvíe correctamente a través del salto de privilegios. `alpine-update-launcher.sh` corre como el usuario normal e invoca el anterior.
+Detalles de funcionamiento:
 
-**Por qué la ventana puede quedarse pegada en el primer mensaje sin este ajuste.** `apk` y `flatpak` deciden cuánto detalle imprimir — y con qué buffer — según si su salida está conectada a una terminal real. Aquí no lo está (escribe a un archivo), así que sin protección, ninguno de los dos tiene motivo para soltar su salida línea por línea: la ventana de progreso puede quedarse mostrando solo "Actualizando Alpine (apk)" hasta que el proceso completo termina, sin forma de saber si sigue trabajando o si ya no hay actualizaciones pendientes. `alpine-update-root.sh` envuelve cada llamada con `script -qec "..." /dev/null` (`script` es parte de `util-linux-misc`, instalado junto a `zenity` en este mismo bloque) — engaña al programa haciéndole creer que sí hay una terminal, sin que aparezca nada distinto en la pantalla real, ya que el *typescript* que `script` normalmente guardaría se descarta a `/dev/null`. También se agrega `--no-progress` a `apk` explícitamente, para evitar que, al creerse en una terminal, intente dibujar una barra de progreso que se redibuja a sí misma (con retornos de carro en vez de saltos de línea), algo que no se lleva bien con `tail -n1`. Si `script` no está disponible por algún motivo, el script sigue funcionando igual sin él — solo vuelve al comportamiento anterior.
-
-**No se muestra ninguna ventana hasta que la contraseña ya se aceptó.** Encadenar `pkexec` directamente con Zenity en una sola tubería hace que ambas ventanas arranquen a la vez, y la de Zenity a veces tapa al diálogo de contraseña — obligando a buscarlo. En vez de eso, `alpine-update-root.sh` escribe en un archivo marcador (`/tmp/.alpine-update-authenticated`) apenas `pkexec` lo autoriza como root, y el lanzador espera a ver ese marcador (o a que el proceso termine antes, por ejemplo si se cancela la contraseña o no hay agente de autenticación) antes de mostrar nada. El marcador lo crea el lanzador como el usuario normal; `alpine-update-root.sh` solo escribe contenido dentro de él (nunca lo borra ni lo recrea), así la propiedad nunca cambia de manos y el lanzador puede borrarlo después sin toparse con el bit *sticky* de `/tmp`, que impide borrar archivos ajenos.
-
-**Una sola línea que se reemplaza sola, sin scroll — y por qué costó cuatro intentos llegar aquí.** En vez de `--text-info` (que exige desplazarse para ver lo más nuevo), se usa `zenity --progress --pulsate`, donde cualquier línea que empiece con `#` reemplaza el texto visible (confirmado directamente en el código fuente de Zenity). Llegar a un mecanismo confiable para alimentar esas líneas — y para que la ventana supiera cuándo terminar — tomó cuatro diseños:
-
-1. **Un bucle de sondeo** (`while kill -0 "$BGPID"; do tail -n1 ...; sleep 0.3; done`) — frágil: si la detección del proceso fallaba en cualquier vuelta, el bucle no volvía a ejecutarse y la ventana quedaba congelada en el primer mensaje, con la barra animándose (dando una falsa sensación de actividad) pero sin texto nuevo — exactamente el síntoma reportado en la práctica.
-2. **Una tubería con nombre (FIFO)** para separar el prefijado `#` del resto, pensada para no depender del sondeo anterior — pero demostró en pruebas quedarse esperando para siempre si el lector y el escritor no llegaban a sincronizarse en el momento exacto de abrir la tubería.
-3. **`alpine-update-root.sh` escribiendo el prefijo `#` directamente**, simplificando el lanzador a un `tail -f` directo hacia Zenity — esto sí arregló el avance en vivo (verificado con tiempos reales: las líneas llegan escalonadas según se producen), pero dejaba `tail -f` corriendo *para siempre* a propósito. Ese "costo aceptado" resultó ser un error real: sin que la tubería hacia Zenity reciba EOF, la barra `--pulsate` nunca deja de animarse y el botón para cerrar la ventana nunca se habilita, aunque el último mensaje ya diga que todo terminó — el síntoma reportado en la siguiente ronda.
-4. **El diseño actual:** `tail -n1 -f --pid="$BGPID" "$LOG"` — `--pid` es una opción real de GNU coreutils (`tail --help` la documenta explícitamente: *"with -f, terminate after process ID, PID dies"*) que hace que `tail` se detenga **solo**, automáticamente, en cuanto el trabajo de fondo ya no existe, sin rastrear ni matar ningún proceso a mano. Eso le da a Zenity el EOF que le faltaba. El `tail` de BusyBox (el de Alpine por defecto) no soporta `--pid`, así que este bloque instala `coreutils` junto con `zenity`.
-
-Verificado con el `tail` real de GNU coreutils (no una simulación): al terminar el trabajo de fondo, la alimentación se corta sola y el proceso que lee la salida recibe EOF sin intervención externa — el lanzador completo termina limpio, sin necesitar ningún mecanismo de por sí ajeno al diseño para forzar su cierre.
-
-La barra animada de `--pulsate` transmite que el proceso sigue corriendo aunque el texto no cambie por un momento, y como no se usa `--auto-close`, la ventana **se queda abierta mostrando el mensaje final** hasta que el usuario la cierra, en vez de desaparecer antes de que le dé tiempo a leerlo. `alpine-update-root.sh` incluye la hora en su propia línea de resultado (éxito o error), así el mensaje final queda completo por sí solo sin depender de que el lanzador agregue algo después.
-
-> **Nota honesta:** al sondear cada 0.3 segundos, alguna línea de progreso intermedia entre dos sondeos puede no llegar a mostrarse si `apk` avanza más rápido que eso — no se pierde información importante (el mensaje final siempre se captura), solo algún paso intermedio del recorrido.
-
-> **Nota técnica:** algunos programas cambian su propio buffering cuando su salida va a una tubería en vez de a una terminal, así que el texto puede llegar en bloques en vez de línea por línea perfectamente fluida.
-
-**Detección de actualización del kernel.** En Alpine, actualizar el kernel *reemplaza* el paquete y borra los módulos del kernel anterior, así que hasta reiniciar, cargar módulos nuevos (por ejemplo, al conectar un USB) puede fallar. El botón lo maneja en dos capas:
-- Durante la actualización, `alpine-update-root.sh` compara `/lib/modules` antes y después de `apk upgrade` (en vez de la salida de `apk info`, cuyo formato cambió entre apk-tools v2 y v3). Si cambió, lo anuncia en la misma ventana, indicando la versión anterior y la nueva.
-- Al cerrar la ventana, `alpine-update-launcher.sh` comprueba si el kernel *que está corriendo* sigue instalado, y si no, muestra un aviso emergente pidiendo reiniciar. Para eso busca `/lib/modules/$(uname -r)/modules.order`, un archivo que pertenece al **paquete** del kernel y desaparece al desinstalarse, en vez de comprobar solo si existe el directorio: si al desinstalar el kernel viejo quedan residuos sin dueño (por ejemplo, archivos generados por `depmod`), el directorio seguiría existiendo y el aviso nunca aparecería. Si el sistema no usa `modules.order`, recurre a comprobar el directorio. Como se basa en el **estado** del sistema y no solo en la última ejecución, el aviso sigue apareciendo aunque se pulse el botón varias veces sin reiniciar.
-
-**Agente de autenticación polkit.** `pkexec` lanzado desde un menú gráfico, sin terminal, necesita un agente de autenticación **en ejecución** para dibujar la ventana de contraseña; sin él, falla con *"No authentication agent found"* y la actualización nunca empieza. Plasma, GNOME y LXQt (vía `lxqt-policykit`, Bloque 19) traen el suyo. Para XFCE el script instala `polkit-gnome`, y para MATE su agente nativo `mate-polkit`. Pero instalar el paquete **no garantiza que arranque**: el autoarranque de `polkit-gnome` suele estar restringido a ciertos escritorios según la distribución. Por eso el lanzador, en cada ejecución, comprueba si hay un agente del propio usuario corriendo (leyendo `/proc/*/comm` directamente, sin depender de las opciones de `pgrep`, que varían entre versiones) y, si no lo hay, lo inicia desde las rutas conocidas del binario, que también cambian entre distribuciones. Si no encuentra ninguno, continúa igual: puede tratarse de un escritorio con agente integrado, como GNOME Shell.
-
-**Cierre de la ventana a mitad del proceso — resuelto por diseño, no por blindaje.** En una versión anterior de este bloque, `apk` quedaba conectado *directamente* a Zenity por una tubería (`pkexec | tee | zenity`): si el usuario cerraba la ventana a mitad del proceso, la tubería se rompía y `apk` podía morir por `SIGPIPE` a mitad de una transacción. La solución de entonces era ignorar esa señal (`trap '' PIPE`). Con el rediseño de esta sección (ver más arriba), `alpine-update-root.sh` ya no escribe a una tubería sino a un **archivo** (`>> "$LOG"`) — Zenity ni siquiera está conectado a él, solo lee ese archivo por separado. El riesgo desapareció estructuralmente, así que el `trap` ya no aparece en ninguno de los dos scripts: mantenerlo activo en el lanzador, además de innecesario, era contraproducente, porque una subshell hereda los `trap` de su shell padre — de haber quedado, la subshell que sondea el log y alimenta a Zenity habría ignorado también el cierre de la ventana, quedando en un bucle infinito huérfano en segundo plano en vez de terminar limpiamente cuando el usuario cierra la ventana (el comportamiento que sí se quiere ahí).
-
-**Permisos del log.** El lanzador corre como el usuario normal, que no puede escribir en `/var/log`. El script crea `/var/log/alpine-update.log` perteneciente al grupo `wheel` con permiso `664`, para que cada ejecución quede registrada. *(Una versión anterior de este bloque omitía este paso: la ventana funcionaba, pero el log nunca se guardaba.)*
+- **La ventana aparece después de la contraseña**, para no tapar el diálogo de `pkexec`.
+- **Muestra una sola línea que se va reemplazando.** Para que la ventana se cierre bien al terminar se usa `tail --pid` de GNU coreutils (el `tail` de BusyBox no tiene esa opción), y `script` (de `util-linux-misc`) hace que `apk` muestre su avance línea por línea.
+- **Agente de contraseña:** XFCE y MATE necesitan uno aparte (`polkit-gnome`, `mate-polkit`). El lanzador comprueba que esté corriendo y, si no, lo inicia.
+- **Aviso de reinicio:** el lanzador avisa si el kernel en uso ya no está instalado o si cambió la versión de Alpine.
 
 ### Bloque 28 — `setup_user_groups`
-Agrega al usuario detectado en el Bloque 5 a los grupos `audio`, `video` y `lpadmin` (necesarios para acceso a hardware de sonido/video y administración de impresoras).
+Agrega al usuario a los grupos `audio`, `video` y `lpadmin` (sonido, video y administración de impresoras).
 
 ### Bloque 29 — `select_options_menu`
-Reúne **todas las decisiones opcionales en una sola pantalla** al inicio, usando `dialog` (se instala en ese momento; funciona tanto en una consola TTY como en una terminal gráfica). Se marca con la barra espaciadora, se continúa con Enter, y una segunda pantalla muestra un resumen con **Comenzar** o **Volver**; al volver, el menú conserva lo ya marcado. A partir de ahí el script corre solo. Aunque este bloque está al final del archivo, `main()` lo ejecuta al principio, justo después de `detect_hardware`, porque la casilla de NVIDIA solo se muestra si se detectó una NVIDIA.
-
-Cada decisión queda en una variable `OPT_*`, y los bloques que antes preguntaban ahora consultan esa variable mediante la función auxiliar `want`. El **respaldo** vive en esa misma función: si el menú no se pudo mostrar (sin terminal interactiva, o sin poder instalar `dialog`), las variables quedan vacías y `want` vuelve a preguntar cada opción por separado, como en versiones anteriores. Pulsar **Salir** en el menú termina el script sin haber hecho cambios de configuración.
-
-El tamaño de ambas ventanas se calcula **automáticamente** según el contenido y la pantalla disponible (`0 0 0`), y el menú oculta los nombres internos de cada opción (`--no-tags`). Con un tamaño fijo, en pantallas amplias las descripciones quedaban cortadas; así, todas caben completas en una consola estándar de 80 columnas, y en pantallas muy pequeñas la lista y el resumen se vuelven desplazables sin ocultar los botones.
-
-Los textos del menú van **sin acentos** a propósito: el menú aparece antes de que el script configure el idioma, y en una consola TTY recién instalada los acentos pueden verse como símbolos extraños.
+El menú inicial (ver [Menú de opciones](#menú-de-opciones)). Cada decisión queda en una variable `OPT_*`; la función `want` la consulta y, si el menú no se pudo mostrar, hace la pregunta por separado.
 
 ### Bloque 30 — `install_daily_apps`
-Instala las aplicaciones que un usuario común necesita para el uso diario, y las registra como **predeterminadas**:
+Instala y deja como predeterminadas las aplicaciones de uso diario:
 
-| Uso | Aplicación | Detalle |
-|---|---|---|
-| Leer PDF | `evince` (u `okular` en Plasma) | Evince es liviano y de estilo GTK; en Plasma se usa Okular, que se integra con el resto del escritorio. Si conviven Plasma y otro escritorio, se instalan ambos y el predeterminado es Evince |
-| Audio y video locales | `mpv` | Bajo consumo, controles en pantalla, y usa la decodificación por hardware del Bloque 12. Cubre los audios de WhatsApp (`.ogg`/`.opus`) y los videos descargados habituales |
-| Navegar | `firefox` | Casilla del menú inicial, marcada por defecto |
+| Uso | Aplicación |
+|---|---|
+| PDF | Evince (Okular en Plasma) |
+| Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 12 |
+| Navegador | Firefox (opcional en el menú) |
 
-**Por qué registrar predeterminadas:** instalar una aplicación no garantiza que el doble clic la use, porque varias se declaran capaces de abrir el mismo tipo de archivo (por ejemplo, LibreOffice Draw también abre PDF) y cuál gana depende del escritorio. El script escribe la preferencia en `/etc/xdg/mimeapps.list`, el archivo de preferencias a nivel de sistema del estándar freedesktop, sin tocar las demás entradas que ya hubiera. Solo registra una aplicación si encuentra su archivo `.desktop` instalado, así que nunca apunta a algo que no existe. **Límite:** si el usuario ya eligió otra aplicación por su cuenta, su elección personal (`~/.config/mimeapps.list`) tiene prioridad.
+Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
 
-**Idioma de Firefox:** en Alpine no existe un paquete de idioma de Firefox separado. En su primer arranque, Firefox ofrece cambiar su interfaz al idioma del sistema, que es español de España (`es_ES`). No se fuerza el español latinoamericano porque requeriría descargas atadas a la versión exacta del navegador, que se romperían con cada actualización.
-
-**Recomendaciones al final:** si Firefox quedó instalado, el script termina mostrando dos extensiones recomendadas, sin instalarlas por su cuenta (instalar extensiones sin que el usuario lo vea no es buena práctica):
-- **uBlock Origin:** bloquea publicidad y rastreadores, lo que reduce la carga del procesador al navegar. Además, la versión completa solo sigue disponible en Firefox; Chrome retiró el soporte para el tipo de extensiones en el que se basa.
-- **enhanced-h264ify:** en equipos antiguos, pide a YouTube video H.264, que la GPU puede decodificar por hardware (ver el límite descrito en el Bloque 12).
+Firefox ofrece cambiar su interfaz al idioma del sistema en el primer arranque. Al final, el script recomienda dos extensiones, sin instalarlas: **uBlock Origin** (bloquea publicidad y reduce la carga del procesador) y **enhanced-h264ify** (ver Bloque 12).
 
 ### Bloque 31 — `main`
-Orquesta la ejecución de todos los bloques anteriores en el orden correcto (el orden importa: por ejemplo, `detect_desktop_environment` debe correr antes que `setup_applets`, y `detect_hardware` antes que `install_drivers`).
+Ejecuta los bloques en el orden necesario.
 
-## Menú de opciones al inicio
+## Archivos que crea o modifica
 
-Al empezar, el script muestra una pantalla de casillas con todas las decisiones opcionales. Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se continúa con **Enter**. Después aparece un resumen con lo que se va a instalar, con dos botones: **Comenzar** (el script corre solo desde ahí hasta el final) o **Volver** (regresa al menú conservando lo ya marcado).
-
-| Casilla | Marcada por defecto | Bloque | Qué hace |
-|---|---|---|---|
-| Teclado latinoamericano | Sí | 3 | Configura `latam` en consola (TTY) y en Xorg |
-| NVIDIA en modo seguro | Sí | 12 | **Solo aparece si hay una NVIDIA y el equipo no es un portátil Optimus.** Bloquea el módulo `nouveau` y usa la otra GPU |
-| gcompat | No | 13 | Compatibilidad con programas propietarios compilados contra glibc |
-| Impresoras (CUPS) | Sí | 20 | Instala CUPS y habilita su servicio |
-| LibreOffice | Sí | 24 | LibreOffice con paquete de idioma español |
-| Firefox | Sí | 30 | Navegador, registrado como predeterminado |
-| Flatpak/Flathub | No | 25 | Infraestructura de Flatpak y portales XDG |
-| OnlyOffice | No | 25 | Vía Flatpak; **marcarla activa Flatpak automáticamente** |
-| Google Chrome | No | 25 | Vía Flatpak (empaquetado comunitario, no oficial de Google); también activa Flatpak |
-| Botón "Actualizar el sistema" | Sí | 27 | Acceso directo en el menú de aplicaciones |
-
-**Portátiles Optimus:** en lugar de la casilla de NVIDIA, después del menú aparece una segunda pantalla para elegir el modo: *ahorro* (marcado por defecto), *seguro* o *activa* (ver Bloque 12). **Volver** regresa a las casillas.
-
-**Por qué estos valores por defecto:** el modo seguro de NVIDIA viene marcado porque, en el hardware antiguo al que apunta este proyecto, dejarlo desmarcado puede terminar en pantalla negra, mientras que marcarlo solo cuesta la aceleración de la NVIDIA. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación sería infraestructura sin uso; por eso marcar una de sus aplicaciones lo activa sola.
-
-**Respaldo:** si el menú no se puede mostrar (por ejemplo, si el script se ejecuta sin una terminal interactiva, o si `dialog` no se pudo instalar), el script vuelve al comportamiento anterior y hace cada pregunta por separado en el momento en que la necesita, respondiendo `s` o `n`. Cualquier respuesta que no empiece con `s`/`S`/`y`/`Y` (incluyendo Enter vacío) se interpreta como "no".
-
-**Salir:** pulsar **Salir** en el menú termina el script sin haber hecho cambios de configuración (hasta ese punto solo se actualizó el índice de paquetes y se instalaron las herramientas de detección y el propio `dialog`).
-
-## Archivos que el script crea o modifica
-
-| Archivo | Bloque | Propósito |
+| Archivo | Bloque | Para qué |
 |---|---|---|
-| `/etc/X11/xorg.conf.d/00-keyboard.conf` | 3 | Layout de teclado latam en Xorg |
-| `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo del módulo `nouveau` (solo modo seguro) |
-| `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` | 12 | **Ya no se crea.** Lo escribía el modo seguro anterior; el script lo borra si lo encuentra |
-| `/etc/local.d/nvidia-optimus.start` | 12 | Modo ahorro: suelta el audio HDMI de la NVIDIA y desconecta sus salidas analógicas fantasma al arrancar |
-| `/etc/xdg/plasma-workspace/env/gpu-integrada.sh` | 12 | Modo ahorro: `KWIN_DRM_DEVICES` y `MOZ_DRM_DEVICE` hacia la gráfica integrada (Plasma) |
-| `/etc/profile.d/gpu-integrada.sh` | 12 | Modo ahorro: las mismas variables para las demás sesiones |
-| `/etc/X11/xorg.conf.d/20-gpu-integrada.conf` | 12 | Modo ahorro: `AutoAddGPU off` para que Xorg no abra la NVIDIA |
-| `/etc/conf.d/zram-init` | 15 | Tamaño y algoritmo del dispositivo zram |
-| `/etc/sysctl.conf` | 15 | `vm.swappiness`, `vm.page-cluster` (se agregan líneas, no se sobreescribe) |
-| `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador de E/S (BFQ o mq-deadline) para discos mecánicos detectados |
-| `/etc/profile.d/lang-es.sh` | 22 | Variables de idioma para shells de login |
-| `/etc/environment` | 22 | Variables de idioma para PAM (se limpian líneas `LANG`/`LC_*` previas antes de reescribir) |
-| `/etc/xdg/plasma-localerc` | 22 | Idioma de Plasma, default de sistema (solo si se detecta Plasma) |
-| `$HOME/.config/plasma-localerc` | 22 | Idioma de Plasma para el usuario detectado (solo si se detecta Plasma) |
-| `/etc/rc.conf` | 22 | Se agrega `unicode="YES"` si no estaba presente |
-| `/var/log/desktop-postinstall.log` | (todos) | Registro completo de la ejecución |
-| `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas del sistema (PDF, audio, video, navegador); se conservan las entradas existentes |
-| `/usr/local/bin/alpine-update-root.sh` | 27 | Script de trabajo (root, vía `pkexec`): `apk update`/`apk upgrade` + `flatpak update`, imprime a stdout/stderr |
-| `/usr/local/bin/alpine-update-launcher.sh` | 27 | Script lanzador (usuario normal): invoca `pkexec` y canaliza su salida en vivo hacia `zenity --text-info` |
-| `/usr/share/applications/alpine-update.desktop` | 27 | Entrada de menú "Actualizar el sistema", visible en todos los DE detectados |
-| `/var/log/alpine-update.log` | 27 | Registro de cada ejecución del botón de actualización (grupo `wheel`, permiso `664`, para que el usuario normal pueda escribir) |
+| `/etc/X11/xorg.conf.d/00-keyboard.conf` | 3 | Teclado `latam` en Xorg |
+| `/etc/xdg/plasma-workspace/env/teclado-latam.sh`, `/etc/profile.d/teclado-latam.sh` | 3 | `XKB_DEFAULT_LAYOUT=latam` para Wayland |
+| `/etc/xdg/kxkbrc` | 3 | Teclado `latam` por defecto en Plasma |
+| `/usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override` | 3 | Teclado `latam` por defecto en GNOME |
+| `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo de `nouveau` (modo seguro) |
+| `/etc/local.d/nvidia-optimus.start` | 12 | Modo ahorro: audio HDMI y salidas fantasma de la NVIDIA |
+| `/etc/xdg/plasma-workspace/env/gpu-integrada.sh`, `/etc/profile.d/gpu-integrada.sh` | 12 | Modo ahorro: escritorio y video en la gráfica integrada |
+| `/etc/X11/xorg.conf.d/20-gpu-integrada.conf` | 12 | Modo ahorro: Xorg no abre la NVIDIA |
+| `/etc/conf.d/zram-init` | 15 | Configuración de zram |
+| `/etc/sysctl.conf` | 15 | `vm.swappiness` y `vm.page-cluster` (se agregan líneas) |
+| `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador para discos mecánicos |
+| `/etc/profile.d/lang-es.sh`, `/etc/environment` | 22 | Idioma español |
+| `/etc/xdg/plasma-localerc`, `~/.config/plasma-localerc` | 22 | Idioma de Plasma (solo con Plasma) |
+| `/etc/rc.conf` | 22 | Agrega `unicode="YES"` si falta |
+| `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas |
+| `/usr/local/bin/alpine-update-root.sh`, `/usr/local/bin/alpine-update-launcher.sh` | 27 | Botón de actualización |
+| `/usr/share/applications/alpine-update.desktop` | 27 | Entrada "Actualizar el sistema" en el menú |
+| `/var/log/alpine-update.log` | 27 | Registro del botón |
+| `/var/backups/alpine-update/` | 27 | Copias de `/etc/apk/repositories` antes de cada cambio de versión |
+| `/var/log/desktop-postinstall.log` | todos | Registro del script |
 
-## Servicios OpenRC habilitados
+## Servicios que habilita
 
-Todos en el runlevel `default`, salvo aclaración:
+En el arranque normal (`default`): `networkmanager`, `dbus`, `elogind`, `polkit`, `zram-init`, `earlyoom`, la pantalla de inicio que corresponda (`lightdm`, `sddm` o `gdm`), y según el caso:
 
-`networkmanager`, `bluetooth` (solo si se detectó adaptador Bluetooth), `local` (solo en el modo de ahorro de NVIDIA, para ejecutar `/etc/local.d/nvidia-optimus.start`), `spice-vdagentd` (solo entornos virtualizados), `zram-init`, `earlyoom`, `acpid`, `dbus`, `elogind`, `polkit`, `cupsd`, `lightdm`/`sddm`/`gdm` (el que corresponda, ver Bloque 25).
+- `bluetooth`, si hay adaptador Bluetooth;
+- `cupsd`, si se marcaron las impresoras;
+- `local`, en el modo de ahorro de NVIDIA;
+- `spice-vdagentd`, en máquinas virtuales;
+- `acpid`, solo en sistemas sin escritorio.
 
-`udisks2`, `wpa_supplicant` y `pulseaudio` **no** se registran como servicios de arranque a propósito (ver Bloques 6 y 19 para el porqué de cada uno).
+`udisks2`, `wpa_supplicant` y el servidor de audio no se habilitan como servicios: se activan solos cuando se necesitan o con cada sesión de usuario.
 
-## Registro de ejecución (log)
+## Registro (log) y reejecución
 
-Todo lo que el script hace queda en `/var/log/desktop-postinstall.log`, con cuatro niveles:
+Todo queda en `/var/log/desktop-postinstall.log` con cuatro niveles: `[INFO]` (paso en curso), `[OK]` (paso completado), `[WARN]` (algo falló, pero el script sigue) y `[ERROR]` (fallo grave que detiene el script). El registro se acumula entre ejecuciones.
 
-- `[INFO]` — paso en curso.
-- `[OK]` — paso completado con éxito.
-- `[WARN]` — algo no salió como se esperaba, pero el script continúa (paquete no encontrado, servicio no agregado, etc.).
-- `[ERROR]` — fallo grave que sí detiene el script (falta de permisos root, `apk update` fallido).
+El script se puede ejecutar varias veces sin hacer daño: instalar un paquete que ya está no hace nada, habilitar un servicio dos veces no lo duplica, y los archivos de configuración se reescriben completos. Sirve para cambiar una opción del menú o después de instalar otro escritorio.
 
-El log es acumulativo entre ejecuciones (usa `tee -a`), así que si corres el script varias veces, verás el historial completo de todas las corridas en el mismo archivo.
+## Compatibilidad con futuras versiones de Alpine
 
-## Reejecución / idempotencia
+Alpine publica una versión estable cada mayo y cada noviembre (3.21 en diciembre de 2024, 3.22 en mayo de 2025, 3.23 en diciembre de 2025, 3.24 en junio de 2026). El repositorio `main` recibe soporte unos dos años; **`community` solo hasta la siguiente versión**, unos seis meses. Casi todo lo que instala este script está en `community`, así que conviene cambiar de versión cada seis meses, o al menos una vez al año. El botón "Actualizar el sistema" lo ofrece cuando hay una versión nueva.
 
-El script está diseñado para poder correrse más de una vez sin causar daño:
+Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (versiones 3.22, 3.23, 3.24 y edge):
 
-- `apk add` sobre un paquete ya instalado no hace nada.
-- `rc-update add` sobre un servicio ya agregado a un runlevel no duplica la entrada.
-- Los archivos de configuración se sobreescriben con `cat >` (contenido determinista, no se acumulan versiones).
-- `/etc/environment` limpia explícitamente las líneas `LANG`/`LC_ALL`/`LC_MESSAGES` previas antes de volver a escribirlas, para evitar duplicados.
-
-Esto es útil si quieres volver a correrlo tras cambiar de opinión en alguna de las preguntas interactivas, o después de instalar un segundo entorno de escritorio.
+- **Todos los paquetes del script existen en las cuatro versiones.**
+- **apk-tools 3** (desde 3.23) acepta todas las órdenes que usa el script y el botón.
+- **/usr-merge** (convertir `/bin`, `/sbin` y `/lib` en enlaces a `/usr`): estaba previsto para 3.23, se pospuso, y será obligatorio en una versión futura (Alpine mencionó 3.26 o 3.27). El script no escribe en esas carpetas. Cuando llegue, conviene leer las notas de esa versión antes de usar el cambio de versión del botón.
+- **Wayland:** en Alpine, Plasma solo tiene sesión Wayland desde 3.22 y GNOME desde 3.24; edge ya trae Plasma 6.8. XFCE, MATE y LXQt siguen en Xorg. Por eso el teclado se configura en ambos.
+- **PipeWire:** Alpine marcó como obsoleto su lanzador automático en favor de los servicios de usuario de OpenRC. El script detecta si falta y avisa.
 
 ## Limitaciones conocidas
 
-- **⚠️ Pantalla negra persistente en hardware NVIDIA, incluso con el modo seguro activado.** En versiones anteriores, en al menos algunos equipos con NVIDIA, la pantalla negra **reaparecía tras reiniciar** aunque se hubiera aceptado el modo seguro. La causa probable era el archivo de Xorg `20-nouveau-safe.conf` (ver Bloque 12), que esta versión ya no crea y borra si existe. Falta confirmarlo en un equipo que arranque con Xorg. Si te encuentras en este caso:
-  - No asumas que el equipo quedó "arreglado" solo por haber aceptado el modo seguro; verifica el arranque real tras reiniciar.
-  - Si necesitas recuperar acceso, entra por una TTY (consola de texto, sin arrancar Xorg) para revisar `dmesg | grep -i nouveau` y `cat /var/log/desktop-postinstall.log`, y confirmar si `/etc/modprobe.d/blacklist-nouveau.conf` realmente se aplicó y si el módulo sigue cargado (`lsmod | grep nouveau`).
-  - Si el bloqueo del módulo no fue suficiente, puede que el cuelgue ocurra en una etapa aún más temprana que la cubierta por este script (por ejemplo, en el propio firmware/KMS antes de que OpenRC llegue a iniciar servicios) — este escenario requiere más diagnóstico específico por equipo y todavía no tiene una solución generalizada incorporada al script.
-- **`unrar` no está disponible.** No hay alternativa vía `apk`; ver Bloque 20.
-- **El microcódigo de AMD no se garantiza cargado en el arranque** solo con instalar el paquete; Alpine no lo integra automáticamente al initramfs.
-- **El montaje de USB depende de `elogind` reconociendo la sesión como activa.** Si en algún momento el montaje pide contraseña de root inesperadamente, el problema casi seguro está en que la sesión gráfica no está siendo reconocida como activa por `elogind` — **no** es un problema de pertenencia a grupos Unix (`plugdev`/`storage`), que es el mecanismo de un backend distinto (`seatd`) que este script no usa.
-- **El script asume que el entorno de escritorio ya fue instalado por separado** (vía `setup-desktop`). No instala XFCE, Plasma, GNOME, MATE ni LXQt desde cero.
-- **Hardware NVIDIA legacy:** el modo seguro del Bloque 12 deshabilita la NVIDIA por completo (a nivel de kernel), pero sin driver la tarjeta **sigue encendida**. En un portátil Optimus conviene más el modo de ahorro, que sí la apaga.
-- **Modo de ahorro de NVIDIA:** probado en Plasma con Wayland en un solo modelo (ASUS K53SV). En escritorios con Xorg (Xfce, MATE, LXQt) y en otros modelos no se ha probado. Si un portátil tuviera algún puerto de video cableado a la NVIDIA, ese puerto no daría imagen en este modo. Tampoco se probó la suspensión.
+- **NVIDIA con Xorg:** la corrección de la pantalla negra (ver [Historial](#historial-de-correcciones)) falta confirmarla en un equipo que arranque con Xorg. Si vuelve a ocurrir, entra a una consola de texto y revisa `dmesg | grep -i nouveau`, `lsmod | grep nouveau` y `/var/log/desktop-postinstall.log`.
+- **Modo de ahorro de NVIDIA:** probado solo en un modelo (ASUS K53SV) con Plasma en Wayland. No se probó con XFCE, MATE o LXQt, ni la suspensión. Si algún puerto de video del portátil estuviera cableado a la NVIDIA, no daría imagen en este modo.
+- **Modo seguro de NVIDIA:** deja la tarjeta sin driver, pero encendida. En un portátil Optimus conviene el modo de ahorro.
+- **Cambio de versión de Alpine:** probado en una simulación, no todavía en un equipo real.
+- **Montaje de USB:** depende de que `elogind` reconozca la sesión gráfica como activa. Si al montar pide la contraseña de root, el problema está ahí, no en los grupos del usuario.
+- **El script no instala el escritorio:** hay que instalarlo antes con `setup-desktop`.
 
 ## Solución de problemas
 
-**El teclado sigue en inglés dentro de la sesión gráfica.** Algunos entornos (especialmente XFCE) cachean su propia configuración de teclado la primera vez que arrancan. Abre el panel de configuración de teclado del entorno una sola vez y confirma que "latam" ya aparece preseleccionado.
+**El teclado sigue en inglés en la sesión gráfica.** Abre una vez la configuración de teclado del escritorio y confirma que aparece "latam" (XFCE, por ejemplo, guarda su propia configuración la primera vez). En Plasma, si alguna vez se eligió otra distribución, esa elección (`~/.config/kxkbrc`) manda sobre la del script.
 
-**Pantalla negra o cuelgue al iniciar Xorg con NVIDIA.** Entra a una consola de texto (Ctrl+Alt+F2) y revisa si existe `/etc/X11/xorg.conf.d/20-nouveau-safe.conf`, de una versión anterior del script: bórralo y reinicia. Si dejaste la NVIDIA activa, vuelve a correr el script y elige el modo seguro (o el de ahorro, en un portátil Optimus).
+**Pantalla negra al iniciar con NVIDIA.** Entra a una consola de texto (Ctrl+Alt+F2). Si existe `/etc/X11/xorg.conf.d/20-nouveau-safe.conf`, de una versión anterior del script, bórralo y reinicia. Si la NVIDIA quedó activa, vuelve a ejecutar el script y elige el modo seguro (o el de ahorro, en un portátil Optimus).
 
-**En el modo de ahorro, la NVIDIA sigue en `D0`.** Revisa que el servicio `local` haya arrancado (`rc-status default | grep local`), que `nouveau` esté cargado (`lspci -k -s <ranura-NVIDIA>`) y qué programas tienen abierta la NVIDIA. En las pruebas del K53SV, los culpables fueron el audio HDMI de la NVIDIA y una salida VGA fantasma (ver Bloque 12).
+**En el modo de ahorro, la NVIDIA sigue encendida (`D0`).** Revisa que el servicio `local` haya arrancado (`rc-status default | grep local`), que `nouveau` esté cargado (`lspci -k`) y qué programas tienen abierta la NVIDIA.
 
-**Flatpak no se instaló / falló el `remote-add`.** Verifica que el repositorio `community` esté habilitado (`grep -v '^#' /etc/apk/repositories`) y que haya conexión a internet.
+**El cambio de versión quedó incompleto.** No reinicies. Conéctate a internet y vuelve a pulsar el botón, o ejecuta `doas apk upgrade --available` en una terminal. La versión anterior de los repositorios está en `/var/backups/alpine-update/`.
 
-**El montaje automático de USB no funciona.** Confirma que `elogind` y `polkit` estén corriendo (`rc-service elogind status`, `rc-service polkit status`) y que hayas reiniciado después de correr el script (estos servicios necesitan estar activos desde el arranque, no basta con iniciarlos manualmente después).
+**Flatpak no se instaló.** Revisa que el repositorio `community` esté habilitado y que haya internet.
 
-## Cómo revertir cambios específicos
+**Las memorias USB no se montan solas.** Comprueba que `elogind` y `polkit` estén corriendo (`rc-service elogind status`, `rc-service polkit status`) y que hayas reiniciado después de ejecutar el script.
 
-| Para revertir... | Hacer esto |
+## Cómo revertir cambios
+
+| Para quitar... | Hacer esto |
 |---|---|
-| Bloqueo de NVIDIA (modo seguro) | Borrar `/etc/modprobe.d/blacklist-nouveau.conf` (y `/etc/X11/xorg.conf.d/20-nouveau-safe.conf` si existe), ejecutar `mkinitfs $(uname -r)` y reiniciar |
-| Modo de ahorro de NVIDIA | Borrar `/etc/local.d/nvidia-optimus.start`, `/etc/xdg/plasma-workspace/env/gpu-integrada.sh`, `/etc/profile.d/gpu-integrada.sh` y `/etc/X11/xorg.conf.d/20-gpu-integrada.conf`, luego reiniciar |
-| Idioma del sistema | Borrar `/etc/profile.d/lang-es.sh`, quitar las líneas `LANG`/`LC_*` de `/etc/environment`, y (si aplica) `/etc/xdg/plasma-localerc` y `$HOME/.config/plasma-localerc` |
-| zram | `rc-service zram-init stop`, `rc-update del zram-init`, borrar `/etc/conf.d/zram-init` |
-| EarlyOOM | `rc-update del earlyoom`, `apk del earlyoom earlyoom-openrc` |
-| CUPS | `rc-update del cupsd`, `apk del cups cups-filters system-config-printer` |
-| Planificador de E/S para HDD | Borrar `/etc/udev/rules.d/60-ioscheduler.rules`, luego `udevadm control --reload-rules && udevadm trigger` (o reiniciar) |
+| Modo seguro de NVIDIA | Borrar `/etc/modprobe.d/blacklist-nouveau.conf`, ejecutar `mkinitfs $(uname -r)` y reiniciar |
+| Modo de ahorro de NVIDIA | Borrar `/etc/local.d/nvidia-optimus.start`, los dos `gpu-integrada.sh` y `/etc/X11/xorg.conf.d/20-gpu-integrada.conf`; reiniciar |
+| Teclado latam en Wayland | Borrar los dos `teclado-latam.sh`, `/etc/xdg/kxkbrc` y el esquema de GNOME; ejecutar `glib-compile-schemas /usr/share/glib-2.0/schemas` |
+| Idioma | Borrar `/etc/profile.d/lang-es.sh`, las líneas `LANG`/`LC_*` de `/etc/environment` y, con Plasma, los dos `plasma-localerc` |
+| Un cambio de versión de Alpine | Solo es seguro si `apk upgrade --available` todavía no se ejecutó: copiar el respaldo de `/var/backups/alpine-update/` sobre `/etc/apk/repositories` y ejecutar `doas apk update` |
+| zram | `rc-service zram-init stop`, `rc-update del zram-init` y borrar `/etc/conf.d/zram-init` |
+| EarlyOOM | `rc-update del earlyoom` y `apk del earlyoom earlyoom-openrc` |
+| Impresoras | `rc-update del cupsd` y `apk del cups cups-filters system-config-printer` |
+| Planificador de discos | Borrar `/etc/udev/rules.d/60-ioscheduler.rules` y reiniciar |
 
----
+## Historial de correcciones
 
-*Este README documenta el script `desktop-postinstall.sh` tal como quedó tras las correcciones y adiciones acumuladas: distribución latam (opcional), detección multi-entorno (XFCE/Plasma/GNOME/MATE/LXQt), detección y firmware de adaptadores WiFi y Bluetooth (PCI y USB, con puente de audio A2DP vía `pulseaudio-bluez`), soporte de gráficos híbridos (con modo de ahorro que apaga la NVIDIA en portátiles Optimus), protección NVIDIA legacy, menú de casillas al inicio con respaldo a preguntas individuales, instalación en lote con fallback automático (`install_pkgs`), optimización de E/S para discos mecánicos, habilitación automática del Display Manager, acceso directo de actualización en el menú de aplicaciones (vía `pkexec`, multi-entorno), zram, EarlyOOM, gestión de energía, montaje automático de USB, impresión (opcional), idioma español en tres capas, tipografías (incluida la de emojis), LibreOffice (opcional), visor de PDF, reproductor `mpv` y Firefox (opcional) registrados como aplicaciones predeterminadas, decodificación de video por hardware (VA-API), Flatpak (opcional), y diagnóstico de dispositivos sin controlador con orientación sobre AKMS y `gcompat` para hardware que solo funciona con drivers propietarios.*
+Cambios importantes respecto a versiones anteriores del script, para quien venga de una de ellas:
+
+- **Modo seguro de NVIDIA:** escribía `20-nouveau-safe.conf`, que pedía a Xorg usar el driver `nouveau` sin decir en qué tarjeta. Con el módulo bloqueado ese driver no funciona, y en un portátil híbrido Xorg lo aplicaba a la Intel: causa probable de la pantalla negra. Ya no se crea, y se borra si existe.
+- **`acpid`:** se habilitaba siempre; ahora solo sin escritorio (ver Bloque 17).
+- **Audio:** se forzaba PulseAudio; ahora se respeta el servidor que ya tenga el sistema (ver Bloque 6).
+- **Teclado:** solo se configuraba para Xorg; ahora también para Wayland (ver Bloque 3).
+- **`lsusb`:** el script daba por bueno el `lsusb` reducido de BusyBox y la detección por USB podía fallar en silencio; ahora instala `usbutils`.
+- **Paquetes:** se quitó `mesa-vulkan-radeon`, que no existe y hacía fallar la instalación en equipos AMD; `p7zip` y `ttf-dejavu` se cambiaron por sus nombres actuales, `7zip` y `font-dejavu`.
+- **Microcódigo AMD:** una versión decía que `amd-ucode` no existía; sí existe y se instala.
+- **Botón de actualización:** varios diseños anteriores de la ventana se quedaban congelados o no se cerraban; el actual usa `tail --pid`. El registro no se guardaba porque el usuario no podía escribir en `/var/log`; ahora el archivo pertenece al grupo `wheel`.
