@@ -1060,10 +1060,33 @@ install_microcode() {
             return 0
             ;;
     esac
-    # Con syslinux (extlinux) o GRUB, el paquete agrega solo su imagen de
-    # microcodigo a la linea INITRD del cargador de arranque: basta con
-    # reiniciar.
-    log_info "El microcodigo se cargara en el proximo arranque. Verificalo despues con: dmesg | grep -i microcode"
+    # No hace falta ejecutar update-extlinux ni update-grub a mano: los
+    # paquetes syslinux y grub de Alpine traen un "trigger" que apk ejecuta
+    # cada vez que cambia algo en /boot (y el microcodigo se instala en
+    # /boot/*-ucode.img), y update-extlinux agrega esa imagen a la linea
+    # INITRD por su cuenta. Ejecutarlo a mano seria peor: ignoraria
+    # disable_trigger=1 de /etc/update-extlinux.conf y reescribiria un
+    # extlinux.conf editado a mano.
+    # Lo que si se hace es COMPROBAR el resultado, para avisar en el caso
+    # en que el trigger esta desactivado.
+    ucode_img="intel-ucode.img"
+    [ "$CPU_VENDOR" = "amd" ] && ucode_img="amd-ucode.img"
+    boot_cfg=""
+    for f in /boot/extlinux.conf /boot/grub/grub.cfg; do
+        if [ -f "$f" ]; then
+            boot_cfg="$f"
+            break
+        fi
+    done
+    if [ ! -f "/boot/$ucode_img" ]; then
+        log_warn "No se encontro /boot/$ucode_img: el paquete del microcodigo no quedo instalado."
+    elif [ -n "$boot_cfg" ] && grep -q "$ucode_img" "$boot_cfg"; then
+        log_ok "Microcodigo incluido en el arranque ($boot_cfg). Se cargara en el proximo inicio; verificalo despues con: dmesg | grep -i microcode"
+    elif [ -n "$boot_cfg" ]; then
+        log_warn "$boot_cfg no menciona $ucode_img. Si desactivaste la actualizacion automatica del cargador (disable_trigger=1), agrega '/boot/$ucode_img' a mano antes del initramfs en la linea INITRD."
+    else
+        log_info "No se reconocio el cargador de arranque; verifica tras reiniciar con: dmesg | grep -i microcode"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -1223,6 +1246,49 @@ EOF
     fi
 }
 
+# ------------------------------------------------------------------------------
+# BLOQUE 18b: TRIM semanal para discos de estado solido
+# ------------------------------------------------------------------------------
+# Un SSD necesita que el sistema le avise que bloques quedaron libres
+# (TRIM); sin eso, en SSD baratos el rendimiento de escritura cae con el
+# tiempo. Alpine no monta con 'discard' ni programa un TRIM periodico, y
+# no tiene un servicio "fstrim" de OpenRC (eso es un timer de systemd en
+# otras distribuciones). Se usa el mecanismo propio de Alpine: un script
+# en /etc/periodic/weekly, que ejecuta crond (setup-alpine lo habilita).
+# 'fstrim -a' solo recorta los sistemas de archivos que lo soportan.
+setup_ssd_trim() {
+    log_info "== TRIM periodico para SSD =="
+    has_ssd="no"
+    for dev in /sys/block/*/queue/rotational; do
+        [ -e "$dev" ] || continue
+        devname="${dev%/queue/rotational}"
+        devname="${devname##*/}"
+        case "$devname" in
+            loop*|ram*|zram*|sr*) continue ;;
+        esac
+        # Solo discos que no giran Y aceptan TRIM (discard_max_bytes > 0).
+        [ "$(cat "$dev" 2>/dev/null)" = "0" ] || continue
+        [ "$(cat "/sys/block/$devname/queue/discard_max_bytes" 2>/dev/null || echo 0)" != "0" ] || continue
+        has_ssd="yes"
+        log_info "Disco de estado solido con TRIM: /dev/$devname"
+    done
+    if [ "$has_ssd" = "no" ]; then
+        log_info "No hay discos de estado solido con TRIM. Se omite."
+        return 0
+    fi
+    install_pkgs fstrim
+    mkdir -p /etc/periodic/weekly
+    cat > /etc/periodic/weekly/fstrim <<'EOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: TRIM semanal de los SSD.
+fstrim -a >/dev/null 2>&1 || true
+EOF
+    chmod 755 /etc/periodic/weekly/fstrim
+    rc-update add crond default >/dev/null 2>&1 || log_warn "No se pudo habilitar 'crond' (necesario para el TRIM semanal)."
+    log_ok "TRIM semanal configurado: /etc/periodic/weekly/fstrim (lo ejecuta crond)."
+}
+
+# ------------------------------------------------------------------------------
 # BLOQUE 19: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
 # ------------------------------------------------------------------------------
 # El montaje real lo hace udisks2 (dbus-activated, no requiere su propio
@@ -2311,6 +2377,7 @@ main() {
     setup_earlyoom
     setup_power
     optimize_hdd_storage
+    setup_ssd_trim
     setup_usb_automount
     setup_printing
     install_archive_tools

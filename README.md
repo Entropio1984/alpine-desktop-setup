@@ -217,7 +217,7 @@ Lista los dispositivos de red, video o audio que quedaron sin controlador, que e
 Los controladores propietarios de NVIDIA no existen en Alpine; la única opción es `nouveau`.
 
 ### Bloque 14 — `detect_cpu`, `install_microcode`
-Instala el microcódigo del procesador (`intel-ucode` o `amd-ucode`). El cargador de arranque lo incluye solo; basta con reiniciar. También anota en el log el nivel x86-64 del procesador (v1 a v4), solo como dato: Alpine usa los mismos paquetes para todos los niveles.
+Instala el microcódigo del procesador (`intel-ucode` o `amd-ucode`). No hace falta actualizar el cargador de arranque a mano: los paquetes `syslinux` y `grub` de Alpine se actualizan solos cada vez que cambia algo en `/boot`, y `update-extlinux` agrega la imagen del microcódigo a la línea `INITRD`. El script **comprueba** que la configuración del cargador la mencione y avisa si no (por ejemplo, si se desactivó la actualización automática con `disable_trigger=1`). No ejecuta `update-extlinux` por su cuenta, porque eso reescribiría un `extlinux.conf` editado a mano. También anota en el log el nivel x86-64 del procesador (v1 a v4), solo como dato: Alpine usa los mismos paquetes para todos los niveles.
 
 ### Bloque 15 — `setup_zram`
 Crea memoria de intercambio comprimida en RAM (`zram`, con `zstd`) del mismo tamaño que la RAM física, y ajusta `vm.swappiness` y `vm.page-cluster` para ese uso. Ayuda mucho en equipos con poca memoria.
@@ -230,6 +230,9 @@ Con escritorio, **no** habilita `acpid` (y lo quita del arranque si estaba): `el
 
 ### Bloque 18 — `optimize_hdd_storage`
 Si hay discos mecánicos, les asigna el planificador BFQ (o `mq-deadline` si el kernel no tiene BFQ) con una regla `udev`, para que una copia grande o una actualización no congelen el escritorio. La regla se aplica solo a discos mecánicos, aunque cambie su nombre (`sda`, `sdb`) entre arranques. **No modifica `/etc/fstab`**; sugiere en el log agregar `noatime` a mano.
+
+### Bloque 18b — `setup_ssd_trim`
+Si hay un disco de estado sólido que acepta TRIM, programa `fstrim -a` una vez por semana. Sin TRIM, los SSD baratos se vuelven más lentos al escribir con el tiempo, y Alpine no lo programa por defecto. Alpine no tiene un servicio `fstrim` de OpenRC, así que se usa su mecanismo propio: un script en `/etc/periodic/weekly/`, que ejecuta `crond`.
 
 ### Bloque 19 — `setup_usb_automount`
 Hace que las memorias USB se monten solas: instala y habilita `dbus`, `udisks2`, `elogind` y `polkit`, más `gvfs` en XFCE, GNOME, MATE y LXQt (en LXQt también `lxqt-policykit`, y en XFCE `thunar-volman`). Plasma no necesita nada más.
@@ -305,6 +308,7 @@ Ejecuta los bloques en el orden necesario.
 | `/etc/conf.d/zram-init` | 15 | Configuración de zram |
 | `/etc/sysctl.conf` | 15 | `vm.swappiness` y `vm.page-cluster` (se agregan líneas) |
 | `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador para discos mecánicos |
+| `/etc/periodic/weekly/fstrim` | 18b | TRIM semanal de los SSD |
 | `/etc/profile.d/lang-es.sh`, `/etc/environment` | 22 | Idioma español |
 | `/etc/xdg/plasma-localerc`, `~/.config/plasma-localerc` | 22 | Idioma de Plasma (solo con Plasma) |
 | `/etc/rc.conf` | 22 | Agrega `unicode="YES"` si falta |
@@ -323,6 +327,7 @@ En el arranque normal (`default`): `networkmanager`, `dbus`, `elogind`, `polkit`
 - `cupsd`, si se marcaron las impresoras;
 - `local`, en el modo de ahorro de NVIDIA;
 - `spice-vdagentd`, en máquinas virtuales;
+- `crond`, si hay un SSD (para el TRIM semanal);
 - `acpid`, solo en sistemas sin escritorio.
 
 `udisks2`, `wpa_supplicant` y el servidor de audio no se habilitan como servicios: se activan solos cuando se necesitan o con cada sesión de usuario.
@@ -381,6 +386,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | EarlyOOM | `rc-update del earlyoom` y `apk del earlyoom earlyoom-openrc` |
 | Impresoras | `rc-update del cupsd` y `apk del cups cups-filters system-config-printer` |
 | Planificador de discos | Borrar `/etc/udev/rules.d/60-ioscheduler.rules` y reiniciar |
+| TRIM semanal | Borrar `/etc/periodic/weekly/fstrim` |
 
 ## Historial de correcciones
 
@@ -393,4 +399,5 @@ Cambios importantes respecto a versiones anteriores del script, para quien venga
 - **`lsusb`:** el script daba por bueno el `lsusb` reducido de BusyBox y la detección por USB podía fallar en silencio; ahora instala `usbutils`.
 - **Paquetes:** se quitó `mesa-vulkan-radeon`, que no existe y hacía fallar la instalación en equipos AMD; `p7zip` y `ttf-dejavu` se cambiaron por sus nombres actuales, `7zip` y `font-dejavu`.
 - **Microcódigo AMD:** una versión decía que `amd-ucode` no existía; sí existe y se instala.
+- **SSD:** no había TRIM periódico; ahora se programa uno semanal si hay un SSD.
 - **Botón de actualización:** varios diseños anteriores de la ventana se quedaban congelados o no se cerraban; el actual usa `tail --pid`. El registro no se guardaba porque el usuario no podía escribir en `/var/log`; ahora el archivo pertenece al grupo `wheel`.
