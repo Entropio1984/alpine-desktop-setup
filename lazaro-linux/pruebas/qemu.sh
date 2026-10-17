@@ -72,10 +72,10 @@ esperar() {
 	while [ "$t" -lt "$3" ]; do
 		if grep -q "$4" "$1" 2>/dev/null; then return 0; fi
 		if [ -n "${5:-}" ] && grep -q "$5" "$1" 2>/dev/null; then return 1; fi
-	if grep -q 'initramfs emergency recovery shell' "$1" 2>/dev/null; then
-		echo "El initramfs no encontró el sistema y abrió la consola de emergencia" >&2
-		return 1
-	fi
+		if grep -q 'initramfs emergency recovery shell' "$1" 2>/dev/null; then
+			echo "El initramfs no encontró el sistema y abrió la consola de emergencia" >&2
+			return 1
+		fi
 		kill -0 "$2" 2>/dev/null || { grep -q "$4" "$1" 2>/dev/null; return $?; }
 		sleep 5
 		t=$((t + 5))
