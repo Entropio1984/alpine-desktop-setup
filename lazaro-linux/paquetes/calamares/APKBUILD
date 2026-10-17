@@ -1,12 +1,12 @@
-# Contributor: Lázaro Linux
-# Maintainer: Lázaro Linux
+# Maintainer: Julián <173747797+Entropio1984@users.noreply.github.com>
 #
 # Calamares no está empaquetado en Alpine (ni en la rama estable ni en
 # edge; verificado en aports el 2026-10-17), así que Lázaro Linux lo
 # compila. Versión probada por Alpine:
 #   Alpine v3.24 -> Calamares 3.4.3 (Qt6, KF6, kpmcore 26.04)
 # La versión se cambia en config.env (CALAMARES_VERSION) y build.sh la
-# pasa como variable de entorno.
+# pasa como variable de entorno. Al cambiarla, deja sha512sums="" abajo:
+# build.sh calcula la suma nueva y la muestra en el registro para fijarla.
 pkgname=calamares
 pkgver=${CALAMARES_VERSION:-3.4.3}
 pkgrel=0
@@ -71,4 +71,6 @@ package() {
 	DESTDIR="$pkgdir" cmake --install build
 }
 
-sha512sums=""
+sha512sums="
+a0c570cea1117cd70e839afad2ea4ac7e3a674a58bfc546a7890eb268b167272c85bdb376e17e7a02b7317571580bad105fcc5903c3353d7b260f470dea3a311  calamares-3.4.3.tar.gz
+"
