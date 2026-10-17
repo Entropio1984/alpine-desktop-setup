@@ -1,6 +1,0 @@
-#!/bin/sh
-# Abre Calamares como root dentro de la sesión gráfica del usuario live.
-# Si ya está abierto, no abre otro.
-pidof calamares >/dev/null 2>&1 && exit 0
-export QT_QPA_PLATFORM=xcb
-exec doas -n /usr/bin/calamares "$@"
