@@ -1420,7 +1420,13 @@ EOF
         log_ok "Capa 3/3: default de sistema escrito en /etc/xdg/plasma-localerc (aplica a usuarios nuevos)."
 
         if [ -n "$TARGET_USER" ] && [ -n "$TARGET_HOME" ]; then
-            mkdir -p "$TARGET_HOME/.config"
+            # Si ~/.config no existe aún (usuario que nunca inició sesión),
+            # se crea a nombre del usuario: creada por root, Plasma no
+            # podría guardar nada ahí ("kioworkerrc not writable").
+            if [ ! -d "$TARGET_HOME/.config" ]; then
+                mkdir -p "$TARGET_HOME/.config"
+                chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.config" 2>/dev/null || true
+            fi
             cat > "$TARGET_HOME/.config/plasma-localerc" <<'EOF'
 [Formats]
 LANG=es_ES.UTF-8
@@ -1428,7 +1434,7 @@ LANG=es_ES.UTF-8
 [Translations]
 LANGUAGE=es_ES:es
 EOF
-            chown "$TARGET_USER":"$TARGET_USER" "$TARGET_HOME/.config/plasma-localerc" 2>/dev/null || true
+            chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.config/plasma-localerc" 2>/dev/null || true
             log_ok "Capa 3/3: idioma de Plasma pre-configurado también para el usuario existente '$TARGET_USER'."
         else
             log_warn "No se detectó un usuario existente; solo quedó el default de sistema en /etc/xdg/plasma-localerc."
