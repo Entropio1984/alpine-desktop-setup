@@ -1,0 +1,9 @@
+#!/bin/sh
+# Ejecuta desktop-postinstall.sh sin preguntas, con las opciones que dejó
+# el instalador en /etc/lazaro/postinstall.env. Corre dentro del sistema
+# instalado: durante la instalación (si hay internet) o en el primer
+# arranque (servicio lazaro-primer-arranque).
+set -a
+. /etc/lazaro/postinstall.env
+set +a
+exec /bin/sh /usr/libexec/lazaro/desktop-postinstall.sh </dev/null

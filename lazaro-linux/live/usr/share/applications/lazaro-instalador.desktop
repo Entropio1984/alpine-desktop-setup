@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Instalar Lázaro Linux
+GenericName=Instalador del sistema
+Comment=Tu hardware aún tiene pulso: instala Lázaro Linux en este equipo
+Exec=lazaro-abrir-instalador
+Icon=system-software-install
+Terminal=false
+Categories=System;

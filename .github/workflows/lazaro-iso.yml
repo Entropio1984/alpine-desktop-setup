@@ -1,0 +1,126 @@
+# Compila la ISO de Lázaro Linux y la prueba en QEMU (BIOS y UEFI).
+# Corre con la versión estable de Alpine de config.env y con edge, para
+# enterarse a tiempo de lo que rompería la siguiente versión.
+name: Lázaro Linux ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lazaro-linux/**"
+      - "desktop-postinstall.sh"
+      - ".github/workflows/lazaro-iso.yml"
+  pull_request:
+    paths:
+      - "lazaro-linux/**"
+      - "desktop-postinstall.sh"
+      - ".github/workflows/lazaro-iso.yml"
+  schedule:
+    # Cada lunes: detecta cambios de Alpine aunque nadie toque el repo.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: lazaro-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  iso:
+    name: ISO (${{ matrix.alpine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    continue-on-error: ${{ matrix.alpine == 'edge' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # "estable" = la de config.env.
+        alpine: [estable, edge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión de Alpine
+        id: version
+        run: |
+          if [ "${{ matrix.alpine }}" = edge ]; then
+            echo "branch=edge" >> "$GITHUB_OUTPUT"
+          else
+            . lazaro-linux/config.env
+            echo "branch=$ALPINE_BRANCH" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Caché de Calamares compilado
+        uses: actions/cache@v4
+        with:
+          path: lazaro-linux/cache
+          key: calamares-${{ steps.version.outputs.branch }}-${{ hashFiles('lazaro-linux/paquetes/**', 'lazaro-linux/config.env', 'lazaro-linux/build.sh') }}
+
+      - name: Compilar la ISO
+        env:
+          ALPINE_BRANCH: ${{ steps.version.outputs.branch }}
+        run: ./lazaro-linux/build.sh
+
+      - name: Permisos de la caché
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" lazaro-linux/cache lazaro-linux/salida || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iso-${{ matrix.alpine }}
+          path: lazaro-linux/salida/*.iso*
+          retention-days: 7
+          compression-level: 0
+
+  pruebas:
+    name: Prueba ${{ matrix.prueba }} (${{ matrix.alpine }})
+    needs: iso
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: ${{ matrix.alpine == 'edge' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        alpine: [estable, edge]
+        prueba:
+          - live bios
+          - live uefi
+          - instalar bios xfce sin-red
+          - instalar uefi xfce con-red
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Activar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instalar QEMU
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils ovmf xorriso socat imagemagick
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: iso-${{ matrix.alpine }}
+          path: iso
+
+      - name: Probar
+        run: |
+          set -- ${{ matrix.prueba }}
+          orden="$1"; shift
+          ./lazaro-linux/pruebas/qemu.sh "$orden" iso/*.iso "$@"
+
+      - name: Nombre de los resultados
+        if: always()
+        id: nombre
+        run: echo "valor=$(echo '${{ matrix.prueba }}-${{ matrix.alpine }}' | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultados-${{ steps.nombre.outputs.valor }}
+          path: |
+            lazaro-linux/pruebas/resultados/*.log
+            lazaro-linux/pruebas/resultados/*.png
+            lazaro-linux/pruebas/resultados/*.ppm
+          retention-days: 14

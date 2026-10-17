@@ -1,0 +1,23 @@
+# Paquetes del sistema instalado (world del destino), antes del
+# escritorio. setup-disk añade el kernel, GRUB y el firmware detectado;
+# setup-desktop añade el escritorio. Todos deben estar en el repositorio
+# de la ISO para instalar sin internet: perfil/mkimg.lazaro.sh lee este
+# mismo archivo.
+alpine-base
+alpine-conf
+shadow
+doas
+musl-locales
+musl-locales-lang
+tzdata
+kbd-bkeymaps
+networkmanager
+networkmanager-wifi
+networkmanager-cli
+wpa_supplicant
+wireless-regdb
+chrony
+acpid
+util-linux
+e2fsprogs
+dosfstools
