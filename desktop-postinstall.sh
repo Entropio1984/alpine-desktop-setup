@@ -1420,15 +1420,26 @@ EOF
         log_ok "Capa 3/3: default de sistema escrito en /etc/xdg/plasma-localerc (aplica a usuarios nuevos)."
 
         if [ -n "$TARGET_USER" ] && [ -n "$TARGET_HOME" ]; then
-            mkdir -p "$TARGET_HOME/.config"
-            cat > "$TARGET_HOME/.config/plasma-localerc" <<'EOF'
+            config_dir="$TARGET_HOME/.config"
+            grupo="$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")"
+            mkdir -p "$config_dir"
+            cat > "$config_dir/plasma-localerc" <<'EOF'
 [Formats]
 LANG=es_ES.UTF-8
 
 [Translations]
 LANGUAGE=es_ES:es
 EOF
-            chown "$TARGET_USER":"$TARGET_USER" "$TARGET_HOME/.config/plasma-localerc" 2>/dev/null || true
+            chown -h "$TARGET_USER:$grupo" "$config_dir/plasma-localerc" \
+                || log_warn "No se pudo dar plasma-localerc a '$TARGET_USER'."
+            # ~/.config tiene que ser del usuario. Si el script corre antes
+            # del primer inicio de sesión, la carpeta la acaba de crear root
+            # (o una versión anterior de este script) y Plasma no podría
+            # guardar nada ahí ("kioworkerrc not writable"). Se cambia de
+            # dueño después de escribir el archivo, para que el usuario no
+            # pueda meter un enlace en medio.
+            chown -h "$TARGET_USER:$grupo" "$config_dir" \
+                || log_warn "No se pudo dar $config_dir a '$TARGET_USER': Plasma no podrá guardar su configuración."
             log_ok "Capa 3/3: idioma de Plasma pre-configurado también para el usuario existente '$TARGET_USER'."
         else
             log_warn "No se detectó un usuario existente; solo quedó el default de sistema en /etc/xdg/plasma-localerc."
