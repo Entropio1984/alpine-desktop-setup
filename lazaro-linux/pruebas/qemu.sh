@@ -72,6 +72,10 @@ esperar() {
 	while [ "$t" -lt "$3" ]; do
 		if grep -q "$4" "$1" 2>/dev/null; then return 0; fi
 		if [ -n "${5:-}" ] && grep -q "$5" "$1" 2>/dev/null; then return 1; fi
+	if grep -q 'initramfs emergency recovery shell' "$1" 2>/dev/null; then
+		echo "El initramfs no encontró el sistema y abrió la consola de emergencia" >&2
+		return 1
+	fi
 		kill -0 "$2" 2>/dev/null || { grep -q "$4" "$1" 2>/dev/null; return $?; }
 		sleep 5
 		t=$((t + 5))
@@ -130,12 +134,21 @@ prueba_instalar() {
 		-extract /boot/initramfs-lts "$i" >/dev/null 2>&1
 	chmod u+w "$k" "$i"
 
+	# Con OVMF y arranque directo del kernel, el CD por IDE no se detecta a
+	# tiempo y el initramfs no encuentra la ISO; por virtio-scsi sí.
+	cd_args="-cdrom $ISO"
+	mods="loop,squashfs,sd-mod,usb-storage"
+	if [ "$MODO" = uefi ]; then
+		cd_args="-device virtio-scsi-pci,id=scsi0 -drive id=cd0,if=none,media=cdrom,readonly=on,file=$ISO -device scsi-cd,drive=cd0,bus=scsi0.0"
+		mods="$mods,virtio_scsi,sr-mod"
+	fi
+
 	echo "Instalando ($MODO, $de, $red)..."
 	# shellcheck disable=SC2046
 	qemu-system-x86_64 $KVM -m "$MEM" -smp 2 $(firmware_args "$nombre") \
 		-kernel "$k" -initrd "$i" \
-		-append "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 lazaro.autoinstall=$de lazaro.disco=/dev/vda" \
-		-cdrom "$ISO" -drive "file=$disco,if=virtio,format=qcow2" \
+		-append "modules=$mods console=tty0 console=ttyS0,115200 lazaro.autoinstall=$de lazaro.disco=/dev/vda" \
+		$cd_args -drive "file=$disco,if=virtio,format=qcow2" \
 		-vga std -display none $nic \
 		-serial "file:$serie" -monitor "unix:$mon,server,nowait" &
 	pid=$!
