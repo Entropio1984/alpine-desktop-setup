@@ -77,7 +77,7 @@ if ls "$REPO_PROPIO/paquetes/$ALPINE_ARCH/calamares-$CALAMARES_VERSION-"*.apk >/
 else
 	msg "Compilando Calamares $CALAMARES_VERSION (tarda varios minutos)"
 	cd "$TRABAJO/paquetes/calamares"
-	if ! grep -q '^sha512sums=".\+' APKBUILD; then
+	if grep -q '^sha512sums=""' APKBUILD; then
 		# Primera compilación de una versión nueva: se calcula la suma y se
 		# muestra para fijarla en el APKBUILD del repositorio.
 		su constructor -c "CALAMARES_VERSION=$CALAMARES_VERSION abuild checksum"
