@@ -47,6 +47,7 @@ makedepends="
 # Las pruebas de Calamares necesitan una sesión gráfica; la prueba real
 # del instalador está en pruebas/ (QEMU).
 options="!check"
+subpackages="$pkgname-dev $pkgname-doc"
 source="https://codeberg.org/Calamares/calamares/releases/download/v$pkgver/calamares-$pkgver.tar.gz"
 
 # Módulos que no aplican a Alpine (systemd, dracut, initcpio de Arch,

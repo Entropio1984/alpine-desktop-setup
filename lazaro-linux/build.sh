@@ -89,7 +89,17 @@ else
 		echo "AVISO: fija esta suma en paquetes/calamares/APKBUILD:"
 		grep -A2 '^sha512sums' APKBUILD
 	fi
-	su constructor -c "CALAMARES_VERSION=$CALAMARES_VERSION REPODEST=$REPO_PROPIO abuild -r"
+	# La salida completa va a un archivo; si falla, se muestra lo que
+	# importa (abuild borra cientos de dependencias después del error y
+	# eso entierra el mensaje).
+	REGISTRO="$CACHE/abuild-calamares.log"
+	if ! su constructor -c "CALAMARES_VERSION=$CALAMARES_VERSION REPODEST=$REPO_PROPIO abuild -r" \
+		> "$REGISTRO" 2>&1; then
+		echo "ERROR: falló la compilación de Calamares. Últimas líneas útiles:"
+		sed -n '/Uninstalling dependencies/q;p' "$REGISTRO" | tail -n 80
+		exit 1
+	fi
+	tail -n 5 "$REGISTRO"
 fi
 
 # --- aports/scripts (mkimage.sh) ---------------------------------------
