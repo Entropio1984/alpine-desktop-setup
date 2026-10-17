@@ -20,6 +20,10 @@ set -eu
 DIR="$(cd "$(dirname "$0")" && pwd)"
 RES="${RESULTADOS:-$DIR/resultados}"
 mkdir -p "$RES"
+# Los sockets UNIX no admiten rutas de más de 108 bytes, así que el del
+# monitor de QEMU va en una carpeta temporal corta.
+SOCK_DIR="$(mktemp -d /tmp/lzq.XXXXXX)"
+trap 'rm -rf "$SOCK_DIR"' EXIT
 
 uso() { sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 
@@ -81,7 +85,7 @@ terminar() { kill "$1" 2>/dev/null || true; sleep 2; kill -9 "$1" 2>/dev/null ||
 prueba_live() {
 	nombre="live-$MODO"
 	serie="$RES/$nombre-serie.log"
-	mon="$RES/$nombre.mon"
+	mon="$SOCK_DIR/$nombre.mon"
 	rm -f "$serie" "$mon"
 	# shellcheck disable=SC2046
 	qemu-system-x86_64 $KVM -m "$MEM" -smp 2 $(firmware_args "$nombre") \
@@ -110,7 +114,7 @@ prueba_instalar() {
 	nombre="instalar-$MODO-$de-$red"
 	disco="$RES/$nombre.qcow2"
 	serie="$RES/$nombre-instalacion.log"
-	mon="$RES/$nombre.mon"
+	mon="$SOCK_DIR/$nombre.mon"
 	rm -f "$disco" "$serie" "$mon" "$RES/$nombre-vars.fd"
 	qemu-img create -q -f qcow2 "$disco" 20G
 
