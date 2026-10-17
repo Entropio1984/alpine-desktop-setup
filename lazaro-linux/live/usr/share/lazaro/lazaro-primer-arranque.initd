@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# Termina la configuración de Lázaro Linux (desktop-postinstall.sh) en
+# cuanto haya internet, si no se pudo durante la instalación. Corre en
+# segundo plano para no retrasar el arranque y se desactiva al terminar
+# bien; si no hay red en 30 minutos, lo intenta en el siguiente arranque.
+
+description="Configuración final de Lázaro Linux"
+
+depend() {
+	after networkmanager
+}
+
+start() {
+	ebegin "Lázaro Linux: la configuración final se hará al tener internet"
+	(
+		repo="$(grep -m1 '^http' /etc/apk/repositories)"
+		indice="$repo/$(apk --print-arch)/APKINDEX.tar.gz"
+		i=0
+		while [ $i -lt 360 ]; do
+			if wget -q --spider -T 8 "$indice"; then
+				if /usr/libexec/lazaro/lazaro-postinstalacion; then
+					rc-update del lazaro-primer-arranque default
+				fi
+				exit 0
+			fi
+			i=$((i + 1))
+			sleep 5
+		done
+	) >/dev/null 2>&1 &
+	eend 0
+}

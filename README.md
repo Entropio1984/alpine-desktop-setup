@@ -6,6 +6,8 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 
 > ⚠️ **Tarjetas NVIDIA.** Versiones anteriores del modo seguro podían dejar la pantalla en negro en algunos equipos. La causa probable ya se corrigió (ver [Bloque 12](#bloque-12--install_drivers)), pero falta confirmarlo en un equipo que arranque con Xorg. En portátiles Optimus hay un modo nuevo, probado en un equipo real, que apaga la NVIDIA y deja todo en la gráfica integrada.
 
+> 💿 **Lázaro Linux.** Este script también va dentro de la ISO instalable de [Lázaro Linux](lazaro-linux/README.md) (*Tu hardware aún tiene pulso*), que lo ejecuta al final de la instalación sin hacer preguntas.
+
 ---
 
 ## Contenido
