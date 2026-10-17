@@ -50,19 +50,24 @@ CONSTRUCTOR_HOME=/home/constructor
 mkdir -p "$CACHE/llaves" "$CACHE/paquetes/$ALPINE_BRANCH"
 chown -R constructor:abuild "$CACHE"
 
-# Llave de firma del repositorio propio (Calamares). Se guarda en la caché
-# para que los paquetes ya compilados sigan siendo válidos.
-if ! ls "$CACHE"/llaves/*.rsa >/dev/null 2>&1; then
+# Llave de firma del repositorio propio (Calamares e índice de la ISO).
+# Se guarda en la caché para que los paquetes ya compilados sigan siendo
+# válidos. Se crea con openssl directamente (como hace abuild-keygen)
+# porque la carpeta de configuración de abuild cambió entre versiones
+# (~/.abuild en 3.24, ~/.config/abuild en edge).
+LLAVE="$CACHE/llaves/lazaro-linux.rsa"
+if [ ! -f "$LLAVE" ]; then
 	msg "Creando la llave de firma"
-	su constructor -c "abuild-keygen -n"
-	cp "$CONSTRUCTOR_HOME"/.abuild/*.rsa "$CONSTRUCTOR_HOME"/.abuild/*.rsa.pub "$CACHE/llaves/"
+	openssl genrsa -out "$LLAVE" 2048
+	openssl rsa -in "$LLAVE" -pubout -out "$LLAVE.pub"
 fi
-LLAVE="$(ls "$CACHE"/llaves/*.rsa | head -n1)"
-mkdir -p "$CONSTRUCTOR_HOME/.abuild"
-cp "$CACHE"/llaves/* "$CONSTRUCTOR_HOME/.abuild/"
-echo "PACKAGER_PRIVKEY=\"$CONSTRUCTOR_HOME/.abuild/$(basename "$LLAVE")\"" > "$CONSTRUCTOR_HOME/.abuild/abuild.conf"
-cp "$CACHE"/llaves/*.rsa.pub /etc/apk/keys/
-chown -R constructor:abuild "$CONSTRUCTOR_HOME"
+for d in "$CONSTRUCTOR_HOME/.abuild" "$CONSTRUCTOR_HOME/.config/abuild"; do
+	mkdir -p "$d"
+	cp "$LLAVE" "$LLAVE.pub" "$d/"
+	echo "PACKAGER_PRIVKEY=\"$d/lazaro-linux.rsa\"" > "$d/abuild.conf"
+done
+cp "$LLAVE.pub" /etc/apk/keys/
+chown -R constructor:abuild "$CONSTRUCTOR_HOME" "$CACHE"
 
 # --- Calamares ----------------------------------------------------------
 REPO_PROPIO="$CACHE/paquetes/$ALPINE_BRANCH"

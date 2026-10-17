@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: lazaro-linux/cache
-          key: calamares-${{ steps.version.outputs.branch }}-${{ hashFiles('lazaro-linux/paquetes/**', 'lazaro-linux/config.env') }}
+          key: calamares-${{ steps.version.outputs.branch }}-${{ hashFiles('lazaro-linux/paquetes/**', 'lazaro-linux/config.env', 'lazaro-linux/build.sh') }}
 
       - name: Compilar la ISO
         env:
