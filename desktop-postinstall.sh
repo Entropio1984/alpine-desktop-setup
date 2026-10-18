@@ -1522,6 +1522,49 @@ install_libreoffice() {
     log_ok "LibreOffice instalado${lo_idioma:+ ($lo_idioma)}."
 }
 
+# Instala una aplicacion de Flathub. Si falla, queda pendiente y se
+# reintenta sola en segundo plano en cada arranque con internet. Pasa con
+# Google Chrome al instalar desde Calamares: Chrome se descarga de la
+# pagina de Google durante la instalacion y ese paso no funciona dentro
+# del sistema que se esta instalando (chroot).
+FLATPAK_PENDIENTES="/etc/flatpak-pendientes"
+flatpak_app() {
+    salida="$(mktemp)"
+    if $remote_add_cmd install -y --noninteractive flathub "$1" >"$salida" 2>&1; then
+        cat "$salida" >>"$LOG_FILE"; rm -f "$salida"
+        log_ok "$2 instalado."
+        return 0
+    fi
+    cat "$salida" >>"$LOG_FILE"; rm -f "$salida"
+    log_warn "$2 no se pudo instalar ahora; se reintentara solo en cada arranque con internet."
+    grep -qx "$1" "$FLATPAK_PENDIENTES" 2>/dev/null || echo "$1" >>"$FLATPAK_PENDIENTES"
+    mkdir -p /etc/local.d
+    cat > /etc/local.d/flatpak-pendientes.start <<'PEND'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: instala en segundo plano las
+# aplicaciones de Flathub que no se pudieron instalar antes. Se borra
+# sola cuando no queda ninguna pendiente.
+lista=/etc/flatpak-pendientes
+[ -s "$lista" ] || { rm -f "$0"; exit 0; }
+(
+    i=0
+    while [ -s "$lista" ] && [ $i -lt 20 ]; do
+        sleep 60
+        i=$((i + 1))
+        for app in $(cat "$lista"); do
+            if flatpak install -y --noninteractive flathub "$app" >>/var/log/flatpak-pendientes.log 2>&1; then
+                grep -vx "$app" "$lista" > "$lista.tmp"; mv -f "$lista.tmp" "$lista"
+            fi
+        done
+    done
+    [ -s "$lista" ] || rm -f "$lista" /etc/local.d/flatpak-pendientes.start
+) >/dev/null 2>&1 &
+PEND
+    chmod 755 /etc/local.d/flatpak-pendientes.start
+    rc-update add local default >/dev/null 2>&1 || log_warn "No se pudo habilitar el servicio 'local' de OpenRC."
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 25: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
 # ------------------------------------------------------------------------------
@@ -1575,13 +1618,13 @@ setup_flatpak() {
     fi
 
     if want OPT_ONLYOFFICE "¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?"; then
-        $remote_add_cmd install -y flathub org.onlyoffice.desktopeditors && log_ok "OnlyOffice instalado." || log_warn "Fallo al instalar OnlyOffice."
+        flatpak_app org.onlyoffice.desktopeditors "OnlyOffice"
     else
         log_info "Se omite OnlyOffice."
     fi
 
     if want OPT_CHROME "¿Deseas instalar Google Chrome vía Flatpak (paquete comunitario, no oficial de Google)?"; then
-        $remote_add_cmd install -y flathub com.google.Chrome && log_ok "Google Chrome instalado." || log_warn "Fallo al instalar Google Chrome."
+        flatpak_app com.google.Chrome "Google Chrome"
     else
         log_info "Se omite Google Chrome."
     fi
