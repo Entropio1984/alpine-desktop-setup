@@ -1588,6 +1588,189 @@ setup_display_manager() {
 }
 
 # ------------------------------------------------------------------------------
+# BLOQUE 26b: La pantalla de inicio usa la resolucion elegida por el usuario
+# ------------------------------------------------------------------------------
+# Cada escritorio guarda la resolucion en la configuracion del usuario, que
+# la pantalla de inicio (LightDM, SDDM, GDM) no lee: esta arranca siempre
+# con la resolucion que el monitor sugiere. En un portatil suele ser la
+# correcta, pero no en maquinas virtuales ni con monitores externos.
+#   - guardar (corre en la sesion del usuario): anota la resolucion actual
+#     en ~/.config/pantalla-inicio cada vez que cambia. Lee xrandr en
+#     sesiones Xorg (XFCE, MATE, LXQt) y kscreen-doctor en Plasma (Wayland).
+#   - aplicar (corre como root al abrir la pantalla de inicio de LightDM o
+#     SDDM, ambas sobre Xorg): aplica con xrandr el archivo mas reciente.
+#   - GNOME guarda la resolucion en ~/.config/monitors.xml, el mismo
+#     formato que lee GDM: un servicio la copia al arrancar.
+# Sway y XFCE Wayland (greetd) quedan fuera: su pantalla de inicio no tiene
+# un paso donde aplicar la resolucion.
+PANTALLA_DIR="/usr/local/libexec/pantalla-inicio"
+
+setup_greeter_resolution() {
+    log_info "== Resolucion de la pantalla de inicio =="
+
+    if ! apk info -e lightdm >/dev/null 2>&1 && ! apk info -e sddm >/dev/null 2>&1 \
+            && ! apk info -e gdm >/dev/null 2>&1; then
+        log_info "No hay pantalla de inicio grafica: nada que ajustar."
+        return 0
+    fi
+
+    mkdir -p "$PANTALLA_DIR"
+
+    cat > "$PANTALLA_DIR/guardar" <<'EOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh. Anota la resolucion de la sesion
+# en ~/.config/pantalla-inicio para que la pantalla de inicio use la
+# misma. Revisa cada minuto y solo escribe si cambio.
+dest="${XDG_CONFIG_HOME:-$HOME/.config}/pantalla-inicio"
+
+leer() {
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        # Plasma: "Output: N NOMBRE" y, en sus lineas, "Modes:" con la
+        # resolucion actual marcada con "*" (p. ej. 2:1366x768@60*!).
+        command -v kscreen-doctor >/dev/null 2>&1 || return 0
+        kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '
+            /Output:/ { for (i = 1; i < NF; i++) if ($i == "Output:") nombre = $(i + 2)
+                        activa = ($0 ~ /[[:space:]]enabled/) }
+            /^[[:space:]]*enabled[[:space:]]*$/ { activa = 1 }
+            /^[[:space:]]*disabled[[:space:]]*$/ { activa = 0 }
+            /Modes:/ && activa { for (i = 1; i <= NF; i++) if ($i ~ /\*/) {
+                    m = $i; sub(/^[0-9]+:/, "", m); sub(/@.*/, "", m); sub(/[*!]+$/, "", m)
+                    print nombre, m } }'
+    elif [ -n "${DISPLAY:-}" ] && command -v xrandr >/dev/null 2>&1; then
+        xrandr --current 2>/dev/null | awk '$2 == "connected" {
+            for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+\+/) {
+                split($i, g, "+"); print $1, g[1]; break } }'
+    fi
+}
+
+# Primero se espera a que el escritorio aplique su propia configuracion.
+# Termina junto con la sesion que lo abrio.
+sleep 10
+while kill -0 "$PPID" 2>/dev/null; do
+    actual="$(leer)"
+    if [ -n "$actual" ] && [ "$actual" != "$(cat "$dest" 2>/dev/null)" ]; then
+        mkdir -p "${dest%/*}"
+        printf '%s\n' "$actual" > "$dest.tmp" && mv -f "$dest.tmp" "$dest"
+    fi
+    sleep 60
+done
+EOF
+
+    cat > "$PANTALLA_DIR/aplicar" <<'EOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh. Corre como root al abrir la
+# pantalla de inicio (LightDM o SDDM): aplica la resolucion que anoto
+# "guardar" en la ultima sesion. Siempre termina bien: si fallara,
+# LightDM no mostraria la pantalla de inicio.
+archivo=""
+for f in /home/*/.config/pantalla-inicio; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    if [ -z "$archivo" ] || [ "$f" -nt "$archivo" ]; then
+        archivo="$f"
+    fi
+done
+[ -n "$archivo" ] || exit 0
+command -v xrandr >/dev/null 2>&1 || exit 0
+
+conectadas="$(xrandr --query 2>/dev/null | awk '$2 == "connected" { print $1 }')"
+n_conectadas="$(printf '%s\n' "$conectadas" | grep -c .)"
+n_guardadas="$(grep -c . "$archivo")"
+
+while read -r salida modo _; do
+    # El archivo lo escribe el usuario: solo se aceptan nombres y
+    # resoluciones con forma valida.
+    case "$salida" in ''|*[!A-Za-z0-9_-]*) continue ;; esac
+    case "$modo" in ''|*[!0-9x]*|x*|*x) continue ;; esac
+    if ! printf '%s\n' "$conectadas" | grep -qx "$salida"; then
+        # Xorg y Wayland pueden nombrar distinto la misma pantalla: con
+        # una sola pantalla de cada lado, se entiende que es la misma.
+        [ "$n_guardadas" = 1 ] && [ "$n_conectadas" = 1 ] || continue
+        salida="$conectadas"
+    fi
+    xrandr --output "$salida" --mode "$modo" >/dev/null 2>&1 || true
+done < "$archivo"
+exit 0
+EOF
+
+    # SDDM reemplaza su propio Xsetup por el comando configurado: se
+    # aplica la resolucion y luego se corre el original.
+    cat > "$PANTALLA_DIR/sddm-xsetup" <<'EOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh.
+/usr/local/libexec/pantalla-inicio/aplicar
+[ -x /usr/share/sddm/scripts/Xsetup ] && exec /usr/share/sddm/scripts/Xsetup
+exit 0
+EOF
+    chmod 755 "$PANTALLA_DIR/guardar" "$PANTALLA_DIR/aplicar" "$PANTALLA_DIR/sddm-xsetup"
+
+    mkdir -p /etc/xdg/autostart
+    cat > /etc/xdg/autostart/pantalla-inicio.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Guardar resolucion para la pantalla de inicio
+Exec=$PANTALLA_DIR/guardar
+NoDisplay=true
+NotShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
+EOF
+
+    if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1; then
+        install_pkgs xrandr
+    fi
+    if apk info -e lightdm >/dev/null 2>&1; then
+        mkdir -p /etc/lightdm/lightdm.conf.d
+        cat > /etc/lightdm/lightdm.conf.d/50-pantalla-inicio.conf <<EOF
+# Generado por desktop-postinstall.sh: resolucion elegida por el usuario.
+[Seat:*]
+display-setup-script=$PANTALLA_DIR/aplicar
+EOF
+        log_ok "LightDM usara la resolucion de la ultima sesion."
+    fi
+    if apk info -e sddm >/dev/null 2>&1; then
+        mkdir -p /etc/sddm.conf.d
+        cat > /etc/sddm.conf.d/50-pantalla-inicio.conf <<EOF
+# Generado por desktop-postinstall.sh: resolucion elegida por el usuario.
+[X11]
+DisplayCommand=$PANTALLA_DIR/sddm-xsetup
+EOF
+        log_ok "SDDM usara la resolucion de la ultima sesion."
+    fi
+    if apk info -e gdm >/dev/null 2>&1; then
+        cat > /etc/init.d/pantalla-inicio-gdm <<'EOF'
+#!/sbin/openrc-run
+# Generado por desktop-postinstall.sh. Copia la configuracion de pantallas
+# de GNOME de la ultima sesion (~/.config/monitors.xml) a GDM.
+description="Resolucion de GNOME para la pantalla de inicio (GDM)"
+
+depend() {
+    before gdm
+}
+
+start() {
+    archivo=""
+    for f in /home/*/.config/monitors.xml; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        if [ -z "$archivo" ] || [ "$f" -nt "$archivo" ]; then
+            archivo="$f"
+        fi
+    done
+    [ -n "$archivo" ] || return 0
+    # Un monitors.xml normal pesa unos pocos KB.
+    [ "$(wc -c < "$archivo")" -le 65536 ] || return 0
+    install -d -o gdm -g gdm /var/lib/gdm/.config
+    install -m 644 -o gdm -g gdm "$archivo" /var/lib/gdm/.config/monitors.xml
+    return 0
+}
+EOF
+        chmod 755 /etc/init.d/pantalla-inicio-gdm
+        rc-update add pantalla-inicio-gdm default >/dev/null 2>&1 \
+            || log_warn "No se pudo habilitar 'pantalla-inicio-gdm'."
+        log_ok "GDM usara la resolucion de la ultima sesion de GNOME."
+    fi
+    log_info "La pantalla de inicio toma la resolucion despues del primer inicio de sesion con la resolucion nueva."
+}
+
+# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # BLOQUE 27: Acceso directo de actualizacion en el menu de aplicaciones
 # ------------------------------------------------------------------------------
@@ -2330,6 +2513,20 @@ install_daily_apps() {
         log_warn "No se encontro el reproductor instalado; no se cambiaron las aplicaciones predeterminadas de audio y video."
     fi
 
+    # --- Tienda de aplicaciones ---
+    # Plasma trae Discover y GNOME trae GNOME Software (los instala
+    # setup-desktop). En los demas: Discover en LXQt (Qt, como el
+    # escritorio) y GNOME Software en XFCE y MATE (GTK). Ambas instalan y
+    # actualizan paquetes de Alpine y, con Flatpak (Bloque 25), tambien
+    # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
+    # (install_if) cuando flatpak esta instalado.
+    if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
+        install_pkgs discover
+    fi
+    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
+        install_pkgs gnome-software gnome-software-plugin-apk2 apk-polkit-rs
+    fi
+
     # --- Navegador ---
     if want OPT_FIREFOX "¿Deseas instalar el navegador Firefox?"; then
         install_pkgs firefox
@@ -2398,6 +2595,7 @@ main() {
     install_daily_apps
     setup_flatpak
     setup_display_manager
+    setup_greeter_resolution
     setup_update_shortcut
     setup_user_groups
 
