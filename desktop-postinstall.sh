@@ -1723,6 +1723,7 @@ llave_comodin() {
     fi
 }
 
+vueltas=10
 anotar() {
     actual="$(leer)"
     [ -n "$actual" ] || return 0
@@ -1731,15 +1732,20 @@ anotar() {
         printf '%s\n' "$actual" > "$dest.tmp.$$" && mv -f "$dest.tmp.$$" "$dest"
     else
         # Con varios usuarios gana el archivo mas reciente: se marca
-        # como reciente aunque la resolucion no haya cambiado (como mucho
-        # una vez por minuto, para no escribir en el disco a cada vuelta).
-        [ -z "$(find "$dest" -mmin +1 2>/dev/null)" ] || touch "$dest"
+        # como reciente aunque la resolucion no haya cambiado, cada 10
+        # vueltas (30 segundos, como antes), para no escribir en el disco
+        # a cada vuelta. Al cerrar la sesion se marca siempre.
+        vueltas=$((vueltas + 1))
+        if [ "$vueltas" -ge 10 ] || [ "${1:-}" = final ]; then
+            touch "$dest"
+            vueltas=0
+        fi
     fi
 }
 
 # Al cerrar la sesion, el escritorio termina este proceso: antes de
 # salir se anota por ultima vez (la pantalla aun existe).
-trap 'anotar; [ -z "$comodin" ] || rm -f "$comodin"; exit 0' TERM HUP INT
+trap 'anotar final; [ -z "$comodin" ] || rm -f "$comodin"; exit 0' TERM HUP INT
 
 # La sesion sigue abierta? No se mira el proceso padre: LXQt y otros
 # lanzan el autoarranque "separado" y el padre pasa a ser init, que un
