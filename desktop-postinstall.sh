@@ -1665,7 +1665,8 @@ setup_greeter_resolution() {
 #!/bin/sh
 # Generado por desktop-postinstall.sh. Anota la resolucion de la sesion
 # en ~/.config/pantalla-inicio para que la pantalla de inicio use la
-# misma. Revisa cada 30 segundos y una ultima vez al cerrar la sesion.
+# misma. Revisa cada 3 segundos (al reiniciar no siempre alcanza a correr
+# la anotacion final) y una ultima vez al cerrar la sesion.
 # Siempre en ~/.config (no en XDG_CONFIG_HOME): ahi la busca "aplicar".
 dest="$HOME/.config/pantalla-inicio"
 
@@ -1759,7 +1760,7 @@ sleep 10
 # loginctl, sesion_viva mira la pantalla con xrandr.
 while llave_comodin; sesion_viva; do
     anotar
-    sleep 30 &
+    sleep 3 &
     wait $!
 done
 [ -z "$comodin" ] || rm -f "$comodin"
