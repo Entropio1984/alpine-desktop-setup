@@ -1649,6 +1649,27 @@ leer() {
     fi
 }
 
+# La llave de X de la sesion queda atada al nombre del equipo. Si el
+# nombre cambia despues de abrir X (LightDM puede arrancar antes que el
+# servicio "hostname"), xrandr ya no puede conectarse aunque el escritorio
+# siga funcionando: se usa una copia de la llave valida para cualquier
+# nombre (familia "ffff"), igual que en "aplicar". Se llama fuera de
+# "$(leer)" para que el cambio de XAUTHORITY dure.
+comodin=""
+llave_comodin() {
+    [ -z "$comodin" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${DISPLAY:-}" ] \
+        && command -v xrandr >/dev/null 2>&1 || return 0
+    con_limite xrandr --current >/dev/null 2>&1 && return 0
+    command -v xauth >/dev/null 2>&1 || return 0
+    original="${XAUTHORITY:-$HOME/.Xauthority}"
+    [ -f "$original" ] || return 0
+    comodin="$(mktemp)" || { comodin=""; return 0; }
+    xauth -f "$original" nlist 2>/dev/null | sed 's/^..../ffff/' \
+        | xauth -f "$comodin" nmerge - 2>/dev/null
+    XAUTHORITY="$comodin"
+    export XAUTHORITY
+}
+
 anotar() {
     actual="$(leer)"
     [ -n "$actual" ] || return 0
@@ -1664,7 +1685,7 @@ anotar() {
 
 # Al cerrar la sesion, el escritorio termina este proceso: antes de
 # salir se anota por ultima vez (la pantalla aun existe).
-trap 'anotar; exit 0' TERM HUP INT
+trap 'anotar; [ -z "$comodin" ] || rm -f "$comodin"; exit 0' TERM HUP INT
 
 # La sesion sigue abierta? No se mira el proceso padre: LXQt y otros
 # lanzan el autoarranque "separado" y el padre pasa a ser init, que un
@@ -1682,11 +1703,14 @@ sesion_viva() {
 
 # Primero se espera a que el escritorio aplique su propia configuracion.
 sleep 10
+llave_comodin
 while sesion_viva; do
+    llave_comodin
     anotar
     sleep 30 &
     wait $!
 done
+[ -z "$comodin" ] || rm -f "$comodin"
 exit 0
 EOF
 
