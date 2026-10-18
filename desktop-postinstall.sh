@@ -1883,7 +1883,10 @@ depend() {
     before gdm
 }
 
-start() {
+# Se copia al apagar (con la ultima sesion ya cerrada) y otra vez al
+# arrancar, antes de GDM: asi el archivo ya esta en su sitio cuando
+# arranca la pantalla de inicio.
+copiar() {
     archivo=""
     for f in /home/*/.config/monitors.xml; do
         [ -f "$f" ] && [ ! -L "$f" ] || continue
@@ -1899,6 +1902,14 @@ start() {
         ewarn "No se pudo copiar $archivo para GDM."
     fi
     return 0
+}
+
+start() {
+    copiar
+}
+
+stop() {
+    copiar
 }
 EOF
         chmod 755 /etc/init.d/pantalla-inicio-gdm
