@@ -659,7 +659,14 @@ install_drivers() {
 
     if [ "$GPU_HAS_VIRTUAL" = "yes" ]; then
         log_info "Entorno virtualizado detectado. Instalando utilidades QEMU/KVM/VirtualBox..."
-        install_pkgs xf86-video-vmware xf86-video-qxl spice-vdagent
+        # Sin xf86-video-qxl: con ese driver Xorg no tiene DPMS (apagar la
+        # pantalla) y la gestion de energia de LXQt se cierra con "Unsupported
+        # extension". El driver "modesetting" de Xorg maneja QXL sin ese fallo.
+        install_pkgs xf86-video-vmware spice-vdagent
+        if apk info -e xf86-video-qxl >/dev/null 2>&1; then
+            apk del -q xf86-video-qxl >/dev/null 2>&1 \
+                || log_warn "No se pudo quitar xf86-video-qxl."
+        fi
         rc-update add spice-vdagentd default || log_warn "Fallo al habilitar spice-vdagentd."
     fi
 
