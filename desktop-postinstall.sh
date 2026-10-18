@@ -1372,10 +1372,22 @@ install_archive_tools() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 22: Idioma español — sistema, XFCE y propagación global a Plasma
+# BLOQUE 22: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
 setup_locale_es() {
-    log_info "== Configurando idioma español para el sistema =="
+    # Idioma: espanol de Espana salvo que se indique otro con OPT_LANG
+    # (por ejemplo el que se eligio en el instalador de Lazaro Linux).
+    idioma="${OPT_LANG:-es_ES.UTF-8}"
+    case "$idioma" in
+        [a-z][a-z]_[A-Z][A-Z].UTF-8|[a-z][a-z][a-z]_[A-Z][A-Z].UTF-8) ;;
+        *)
+            log_warn "Idioma no valido '$idioma'; se usa es_ES.UTF-8."
+            idioma="es_ES.UTF-8"
+            ;;
+    esac
+    region="${idioma%%.*}"
+    traducciones="$region:${region%%_*}"
+    log_info "== Configurando el idioma del sistema ($idioma) =="
 
     install_pkg "musl-locales"
     install_pkg "musl-locales-lang"
@@ -1384,21 +1396,23 @@ setup_locale_es() {
         sed -i 's/#unicode="NO"/#unicode="NO"\nunicode="YES"/' /etc/rc.conf 2>/dev/null || true
     fi
 
-    cat > /etc/profile.d/lang-es.sh <<'EOF'
-export LANG="es_ES.UTF-8"
-export LC_ALL="es_ES.UTF-8"
-export LC_MESSAGES="es_ES.UTF-8"
+    # Nombre de versiones anteriores, que siempre ponian espanol.
+    rm -f /etc/profile.d/lang-es.sh
+    cat > /etc/profile.d/idioma-sistema.sh <<EOF
+export LANG="$idioma"
+export LC_ALL="$idioma"
+export LC_MESSAGES="$idioma"
 EOF
-    chmod +x /etc/profile.d/lang-es.sh
-    log_ok "Capa 1/3: variables de idioma escritas en /etc/profile.d/lang-es.sh"
+    chmod +x /etc/profile.d/idioma-sistema.sh
+    log_ok "Capa 1/3: variables de idioma escritas en /etc/profile.d/idioma-sistema.sh"
 
     if [ -f /etc/environment ]; then
         sed -i '/^LANG=/d;/^LC_ALL=/d;/^LC_MESSAGES=/d' /etc/environment
     fi
     {
-        echo "LANG=es_ES.UTF-8"
-        echo "LC_ALL=es_ES.UTF-8"
-        echo "LC_MESSAGES=es_ES.UTF-8"
+        echo "LANG=$idioma"
+        echo "LC_ALL=$idioma"
+        echo "LC_MESSAGES=$idioma"
     } >> /etc/environment
     log_ok "Capa 2/3: variables de idioma agregadas a /etc/environment (leído por PAM en la mayoría de gestores de sesión gráficos)."
 
@@ -1410,12 +1424,12 @@ EOF
         install_pkg "kdeplasma-addons-lang"
 
         mkdir -p /etc/xdg
-        cat > /etc/xdg/plasma-localerc <<'EOF'
+        cat > /etc/xdg/plasma-localerc <<EOF
 [Formats]
-LANG=es_ES.UTF-8
+LANG=$idioma
 
 [Translations]
-LANGUAGE=es_ES:es
+LANGUAGE=$traducciones
 EOF
         log_ok "Capa 3/3: default de sistema escrito en /etc/xdg/plasma-localerc (aplica a usuarios nuevos)."
 
@@ -1423,12 +1437,12 @@ EOF
             config_dir="$TARGET_HOME/.config"
             grupo="$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")"
             mkdir -p "$config_dir"
-            cat > "$config_dir/plasma-localerc" <<'EOF'
+            cat > "$config_dir/plasma-localerc" <<EOF
 [Formats]
-LANG=es_ES.UTF-8
+LANG=$idioma
 
 [Translations]
-LANGUAGE=es_ES:es
+LANGUAGE=$traducciones
 EOF
             chown -h "$TARGET_USER:$grupo" "$config_dir/plasma-localerc" \
                 || log_warn "No se pudo dar plasma-localerc a '$TARGET_USER'."
@@ -1446,7 +1460,7 @@ EOF
         fi
     fi
 
-    log_ok "Idioma español configurado para el/los entorno(s) detectado(s)."
+    log_ok "Idioma $idioma configurado para el/los entorno(s) detectado(s)."
 }
 
 # ------------------------------------------------------------------------------

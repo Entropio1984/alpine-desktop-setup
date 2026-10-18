@@ -246,7 +246,7 @@ Solo si se marcó en el menú. Instala CUPS y su configurador; la administració
 Instala `zip`, `unzip` y `7zip`.
 
 ### Bloque 22 — `setup_locale_es`
-Configura español (`es_ES.UTF-8`) en tres capas: `/etc/profile.d` para las consolas, `/etc/environment` para las sesiones gráficas, y el archivo propio de idioma de Plasma. También instala el metapaquete `lang`, que agrega solo las traducciones de todo lo instalado. musl, la biblioteca de C de Alpine, no tiene variantes regionales como `es_CO`, pero las traducciones de los programas son las mismas.
+Configura español (`es_ES.UTF-8`), u otro idioma si se indica con la variable `OPT_LANG` (por ejemplo `OPT_LANG=pt_BR.UTF-8`, como hace el instalador de Lázaro Linux), en tres capas: `/etc/profile.d` para las consolas, `/etc/environment` para las sesiones gráficas, y el archivo propio de idioma de Plasma. También instala el metapaquete `lang`, que agrega solo las traducciones de todo lo instalado. musl, la biblioteca de C de Alpine, no tiene variantes regionales como `es_CO`, pero las traducciones de los programas son las mismas.
 
 ### Bloque 23 — `install_fonts`
 Instala DejaVu, Liberation (compatible en medidas con Arial, Times y Courier, para abrir documentos de Office sin descuadres), Noto y Noto Emoji (sin ella, WhatsApp Web muestra cuadritos en vez de emojis).
@@ -311,7 +311,7 @@ Ejecuta los bloques en el orden necesario.
 | `/etc/sysctl.conf` | 15 | `vm.swappiness` y `vm.page-cluster` (se agregan líneas) |
 | `/etc/udev/rules.d/60-ioscheduler.rules` | 18 | Planificador para discos mecánicos |
 | `/etc/periodic/weekly/fstrim` | 18b | TRIM semanal de los SSD |
-| `/etc/profile.d/lang-es.sh`, `/etc/environment` | 22 | Idioma español |
+| `/etc/profile.d/idioma-sistema.sh`, `/etc/environment` | 22 | Idioma del sistema |
 | `/etc/xdg/plasma-localerc`, `~/.config/plasma-localerc` | 22 | Idioma de Plasma (solo con Plasma) |
 | `/etc/rc.conf` | 22 | Agrega `unicode="YES"` si falta |
 | `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas |
@@ -382,7 +382,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Modo seguro de NVIDIA | Borrar `/etc/modprobe.d/blacklist-nouveau.conf`, ejecutar `mkinitfs $(uname -r)` y reiniciar |
 | Modo de ahorro de NVIDIA | Borrar `/etc/local.d/nvidia-optimus.start`, los dos `gpu-integrada.sh` y `/etc/X11/xorg.conf.d/20-gpu-integrada.conf`; reiniciar |
 | Teclado latam en Wayland | Borrar los dos `teclado-latam.sh`, `/etc/xdg/kxkbrc` y el esquema de GNOME; ejecutar `glib-compile-schemas /usr/share/glib-2.0/schemas` |
-| Idioma | Borrar `/etc/profile.d/lang-es.sh`, las líneas `LANG`/`LC_*` de `/etc/environment` y, con Plasma, los dos `plasma-localerc` |
+| Idioma | Borrar `/etc/profile.d/idioma-sistema.sh` (o `lang-es.sh` en versiones anteriores), las líneas `LANG`/`LC_*` de `/etc/environment` y, con Plasma, los dos `plasma-localerc` |
 | Un cambio de versión de Alpine | Solo es seguro si `apk upgrade --available` todavía no se ejecutó: copiar el respaldo de `/var/backups/alpine-update/` sobre `/etc/apk/repositories` y ejecutar `doas apk update` |
 | zram | `rc-service zram-init stop`, `rc-update del zram-init` y borrar `/etc/conf.d/zram-init` |
 | EarlyOOM | `rc-update del earlyoom` y `apk del earlyoom earlyoom-openrc` |
