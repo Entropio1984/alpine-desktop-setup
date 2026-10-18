@@ -1620,8 +1620,9 @@ setup_greeter_resolution() {
 #!/bin/sh
 # Generado por desktop-postinstall.sh. Anota la resolucion de la sesion
 # en ~/.config/pantalla-inicio para que la pantalla de inicio use la
-# misma. Revisa cada minuto y solo escribe si cambio.
-dest="${XDG_CONFIG_HOME:-$HOME/.config}/pantalla-inicio"
+# misma. Revisa cada 30 segundos y una ultima vez al cerrar la sesion.
+# Siempre en ~/.config (no en XDG_CONFIG_HOME): ahi la busca "aplicar".
+dest="$HOME/.config/pantalla-inicio"
 
 leer() {
     if [ -n "${WAYLAND_DISPLAY:-}" ]; then
@@ -1643,16 +1644,30 @@ leer() {
     fi
 }
 
+anotar() {
+    actual="$(leer)"
+    [ -n "$actual" ] || return 0
+    if [ "$actual" != "$(cat "$dest" 2>/dev/null)" ]; then
+        mkdir -p "${dest%/*}"
+        printf '%s\n' "$actual" > "$dest.tmp.$$" && mv -f "$dest.tmp.$$" "$dest"
+    else
+        # Con varios usuarios gana el archivo mas reciente: se marca
+        # como reciente aunque la resolucion no haya cambiado.
+        touch "$dest"
+    fi
+}
+
+# Al cerrar la sesion, el escritorio termina este proceso: antes de
+# salir se anota por ultima vez (la pantalla aun existe).
+trap 'anotar; exit 0' TERM HUP INT
+
 # Primero se espera a que el escritorio aplique su propia configuracion.
 # Termina junto con la sesion que lo abrio.
 sleep 10
 while kill -0 "$PPID" 2>/dev/null; do
-    actual="$(leer)"
-    if [ -n "$actual" ] && [ "$actual" != "$(cat "$dest" 2>/dev/null)" ]; then
-        mkdir -p "${dest%/*}"
-        printf '%s\n' "$actual" > "$dest.tmp" && mv -f "$dest.tmp" "$dest"
-    fi
-    sleep 60
+    anotar
+    sleep 30 &
+    wait $!
 done
 EOF
 
@@ -1687,7 +1702,9 @@ while read -r salida modo _; do
         [ "$n_guardadas" = 1 ] && [ "$n_conectadas" = 1 ] || continue
         salida="$conectadas"
     fi
-    xrandr --output "$salida" --mode "$modo" >/dev/null 2>&1 || true
+    xrandr --output "$salida" --mode "$modo" >/dev/null 2>&1 \
+        || logger -t pantalla-inicio "No se pudo poner $salida en $modo (de $archivo)." 2>/dev/null \
+        || true
 done < "$archivo"
 exit 0
 EOF
@@ -1757,8 +1774,10 @@ start() {
     [ -n "$archivo" ] || return 0
     # Un monitors.xml normal pesa unos pocos KB.
     [ "$(wc -c < "$archivo")" -le 65536 ] || return 0
-    install -d -o gdm -g gdm /var/lib/gdm/.config
-    install -m 644 -o gdm -g gdm "$archivo" /var/lib/gdm/.config/monitors.xml
+    if ! install -d -o gdm -g gdm /var/lib/gdm/.config \
+            || ! install -m 644 -o gdm -g gdm "$archivo" /var/lib/gdm/.config/monitors.xml; then
+        ewarn "No se pudo copiar $archivo para GDM."
+    fi
     return 0
 }
 EOF
