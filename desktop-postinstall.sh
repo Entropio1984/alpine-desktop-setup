@@ -1378,15 +1378,25 @@ setup_locale_es() {
     # Idioma: espanol de Espana salvo que se indique otro con OPT_LANG
     # (por ejemplo el que se eligio en el instalador de Lazaro Linux).
     idioma="${OPT_LANG:-es_ES.UTF-8}"
-    case "$idioma" in
-        [a-z][a-z]_[A-Z][A-Z].UTF-8|[a-z][a-z][a-z]_[A-Z][A-Z].UTF-8) ;;
-        *)
-            log_warn "Idioma no valido '$idioma'; se usa es_ES.UTF-8."
-            idioma="es_ES.UTF-8"
-            ;;
+    # Forma aceptada: xx_XX.UTF-8 o xxx_XX.UTF-8, con un modificador
+    # opcional de letras (por ejemplo sr_RS.UTF-8@latin).
+    valido=no
+    case "${idioma%@*}" in
+        [a-z][a-z]_[A-Z][A-Z].UTF-8|[a-z][a-z][a-z]_[A-Z][A-Z].UTF-8) valido=yes ;;
     esac
+    case "$idioma" in
+        *@) valido=no ;;
+        *@*) case "${idioma#*@}" in *[!a-z]*) valido=no ;; esac ;;
+    esac
+    if [ "$valido" != yes ]; then
+        log_warn "Idioma no valido '$idioma'; se usa es_ES.UTF-8."
+        idioma="es_ES.UTF-8"
+    fi
     region="${idioma%%.*}"
     traducciones="$region:${region%%_*}"
+    case "$idioma" in
+        *@*) traducciones="$region@${idioma#*@}:${region%%_*}@${idioma#*@}:$traducciones" ;;
+    esac
     log_info "== Configurando el idioma del sistema ($idioma) =="
 
     install_pkg "musl-locales"
@@ -1396,14 +1406,15 @@ setup_locale_es() {
         sed -i 's/#unicode="NO"/#unicode="NO"\nunicode="YES"/' /etc/rc.conf 2>/dev/null || true
     fi
 
-    # Nombre de versiones anteriores, que siempre ponian espanol.
-    rm -f /etc/profile.d/lang-es.sh
     cat > /etc/profile.d/idioma-sistema.sh <<EOF
 export LANG="$idioma"
 export LC_ALL="$idioma"
 export LC_MESSAGES="$idioma"
 EOF
     chmod +x /etc/profile.d/idioma-sistema.sh
+    # Nombre de versiones anteriores, que siempre ponian espanol (se
+    # borra despues de escribir el nuevo).
+    rm -f /etc/profile.d/lang-es.sh
     log_ok "Capa 1/3: variables de idioma escritas en /etc/profile.d/idioma-sistema.sh"
 
     if [ -f /etc/environment ]; then
@@ -1486,9 +1497,22 @@ install_libreoffice() {
         return 0
     fi
 
-    log_info "== Instalando LibreOffice (español) =="
-    install_pkgs libreoffice libreoffice-lang-es
-    log_ok "LibreOffice instalado con soporte de idioma español."
+    # Paquete de idioma: el del sistema ya validado por setup_locale_es,
+    # que corre antes (por defecto espanol).
+    # Alpine los nombra por region (libreoffice-lang-pt_br) o por idioma
+    # (libreoffice-lang-es); el ingles viene incluido.
+    lo_region="$(printf '%s' "${idioma:-es_ES.UTF-8}" | sed 's/[.@].*//' | tr 'A-Z' 'a-z')"
+    lo_idioma=""
+    for p in "libreoffice-lang-$lo_region" "libreoffice-lang-${lo_region%%_*}"; do
+        case "$p" in *[!a-z_-]*) continue ;; esac
+        if apk search -qx "$p" 2>/dev/null | grep -qx "$p"; then
+            lo_idioma="$p"
+            break
+        fi
+    done
+    log_info "== Instalando LibreOffice =="
+    install_pkgs libreoffice $lo_idioma
+    log_ok "LibreOffice instalado${lo_idioma:+ ($lo_idioma)}."
 }
 
 # ------------------------------------------------------------------------------
@@ -2604,9 +2628,9 @@ install_daily_apps() {
         fi
         # No se fuerza el idioma: en su primer arranque, Firefox ofrece
         # descargar el paquete de idioma que coincide con el del sistema
-        # (es_ES). Forzar otra variante requeriria descargas atadas a la
+        # (es_ES u OPT_LANG). Forzar otra variante requeriria descargas atadas a la
         # version exacta del navegador, que se romperian al actualizarlo.
-        log_info "En su primer arranque, Firefox ofrecera cambiar su interfaz al idioma del sistema (espanol)."
+        log_info "En su primer arranque, Firefox ofrecera cambiar su interfaz al idioma del sistema."
     else
         log_info "Se omite Firefox."
     fi
