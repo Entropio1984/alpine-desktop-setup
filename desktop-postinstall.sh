@@ -1646,7 +1646,8 @@ leer() {
 
 anotar() {
     actual="$(leer)"
-    [ -n "$actual" ] || return 0
+    # Sin respuesta: la pantalla ya no existe (se cerro la sesion).
+    [ -n "$actual" ] || return 1
     if [ "$actual" != "$(cat "$dest" 2>/dev/null)" ]; then
         mkdir -p "${dest%/*}"
         printf '%s\n' "$actual" > "$dest.tmp.$$" && mv -f "$dest.tmp.$$" "$dest"
@@ -1662,13 +1663,15 @@ anotar() {
 trap 'anotar; exit 0' TERM HUP INT
 
 # Primero se espera a que el escritorio aplique su propia configuracion.
-# Termina junto con la sesion que lo abrio.
+# Termina cuando la pantalla de la sesion deja de responder. No se mira
+# el proceso padre: LXQt y otros lanzan el autoarranque "separado" y el
+# padre pasa a ser init, que un usuario normal no puede consultar.
 sleep 10
-while kill -0 "$PPID" 2>/dev/null; do
-    anotar
+while anotar; do
     sleep 30 &
     wait $!
 done
+exit 0
 EOF
 
     cat > "$PANTALLA_DIR/aplicar" <<'EOF'
