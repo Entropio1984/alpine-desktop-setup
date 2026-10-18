@@ -1394,7 +1394,9 @@ setup_locale_es() {
     fi
     region="${idioma%%.*}"
     traducciones="$region:${region%%_*}"
-    case "$idioma" in *@*) traducciones="$region@${idioma#*@}:$traducciones" ;; esac
+    case "$idioma" in
+        *@*) traducciones="$region@${idioma#*@}:${region%%_*}@${idioma#*@}:$traducciones" ;;
+    esac
     log_info "== Configurando el idioma del sistema ($idioma) =="
 
     install_pkg "musl-locales"
@@ -1495,14 +1497,15 @@ install_libreoffice() {
         return 0
     fi
 
-    # Paquete de idioma: el del sistema (OPT_LANG, por defecto espanol).
+    # Paquete de idioma: el del sistema ya validado por setup_locale_es,
+    # que corre antes (por defecto espanol).
     # Alpine los nombra por region (libreoffice-lang-pt_br) o por idioma
     # (libreoffice-lang-es); el ingles viene incluido.
-    lo_region="$(printf '%s' "${OPT_LANG:-es_ES.UTF-8}" | sed 's/[.@].*//' | tr 'A-Z' 'a-z')"
+    lo_region="$(printf '%s' "${idioma:-es_ES.UTF-8}" | sed 's/[.@].*//' | tr 'A-Z' 'a-z')"
     lo_idioma=""
     for p in "libreoffice-lang-$lo_region" "libreoffice-lang-${lo_region%%_*}"; do
         case "$p" in *[!a-z_-]*) continue ;; esac
-        if [ -n "$(apk search -qx "$p" 2>/dev/null)" ]; then
+        if apk search -qx "$p" 2>/dev/null | grep -qx "$p"; then
             lo_idioma="$p"
             break
         fi
