@@ -1624,12 +1624,17 @@ setup_greeter_resolution() {
 # Siempre en ~/.config (no en XDG_CONFIG_HOME): ahi la busca "aplicar".
 dest="$HOME/.config/pantalla-inicio"
 
+# Una pantalla colgada no debe dejar este proceso esperando para siempre.
+con_limite() {
+    if command -v timeout >/dev/null 2>&1; then timeout 5 "$@"; else "$@"; fi
+}
+
 leer() {
     if [ -n "${WAYLAND_DISPLAY:-}" ]; then
         # Plasma: "Output: N NOMBRE" y, en sus lineas, "Modes:" con la
         # resolucion actual marcada con "*" (p. ej. 2:1366x768@60*!).
         command -v kscreen-doctor >/dev/null 2>&1 || return 0
-        kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '
+        con_limite kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '
             /Output:/ { for (i = 1; i < NF; i++) if ($i == "Output:") nombre = $(i + 2)
                         activa = ($0 ~ /[[:space:]]enabled/) }
             /^[[:space:]]*enabled[[:space:]]*$/ { activa = 1 }
@@ -1638,7 +1643,7 @@ leer() {
                     m = $i; sub(/^[0-9]+:/, "", m); sub(/@.*/, "", m); sub(/[*!]+$/, "", m)
                     print nombre, m } }'
     elif [ -n "${DISPLAY:-}" ] && command -v xrandr >/dev/null 2>&1; then
-        xrandr --current 2>/dev/null | awk '$2 == "connected" {
+        con_limite xrandr --current 2>/dev/null | awk '$2 == "connected" {
             for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+[+]/) {
                 m = $i; sub(/[+].*/, "", m); print $1, m; break } }'
     fi
@@ -1661,14 +1666,28 @@ anotar() {
 # salir se anota por ultima vez (la pantalla aun existe).
 trap 'anotar; exit 0' TERM HUP INT
 
+# La sesion sigue abierta? No se mira el proceso padre: LXQt y otros
+# lanzan el autoarranque "separado" y el padre pasa a ser init, que un
+# usuario normal no puede consultar. Se pregunta a elogind por la sesion
+# y, si no responde, se mira si la pantalla sigue viva.
+sesion_viva() {
+    if [ -n "${XDG_SESSION_ID:-}" ] && command -v loginctl >/dev/null 2>&1; then
+        case "$(con_limite loginctl show-session "$XDG_SESSION_ID" -p State --value 2>/dev/null)" in
+            active|online) return 0 ;;
+            closing) return 1 ;;
+        esac
+    fi
+    [ -n "$(leer)" ]
+}
+
 # Primero se espera a que el escritorio aplique su propia configuracion.
-# Termina junto con la sesion que lo abrio.
 sleep 10
-while kill -0 "$PPID" 2>/dev/null; do
+while sesion_viva; do
     anotar
     sleep 30 &
     wait $!
 done
+exit 0
 EOF
 
     cat > "$PANTALLA_DIR/aplicar" <<'EOF'
