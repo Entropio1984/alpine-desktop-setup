@@ -1638,8 +1638,8 @@ leer() {
                     print nombre, m } }'
     elif [ -n "${DISPLAY:-}" ] && command -v xrandr >/dev/null 2>&1; then
         xrandr --current 2>/dev/null | awk '$2 == "connected" {
-            for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+\+/) {
-                split($i, g, "+"); print $1, g[1]; break } }'
+            for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+[+]/) {
+                m = $i; sub(/[+].*/, "", m); print $1, m; break } }'
     fi
 }
 
