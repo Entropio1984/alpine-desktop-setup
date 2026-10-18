@@ -1731,8 +1731,9 @@ anotar() {
         printf '%s\n' "$actual" > "$dest.tmp.$$" && mv -f "$dest.tmp.$$" "$dest"
     else
         # Con varios usuarios gana el archivo mas reciente: se marca
-        # como reciente aunque la resolucion no haya cambiado.
-        touch "$dest"
+        # como reciente aunque la resolucion no haya cambiado (como mucho
+        # una vez por minuto, para no escribir en el disco a cada vuelta).
+        [ -z "$(find "$dest" -mmin +1 2>/dev/null)" ] || touch "$dest"
     fi
 }
 
