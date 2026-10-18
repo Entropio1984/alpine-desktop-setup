@@ -1802,9 +1802,23 @@ EOF
     fi
     if apk info -e sddm >/dev/null 2>&1; then
         mkdir -p /etc/sddm.conf.d
+        # Plasma pone la pantalla de inicio de SDDM sobre Wayland (kwin),
+        # donde no hay un paso para aplicar la resolucion: se usa la
+        # pantalla de inicio sobre Xorg, como en LXQt. Plasma no trae
+        # Xorg; si no se pudo instalar, SDDM se deja como estaba (sin
+        # Xorg la pantalla de inicio no apareceria).
+        if [ ! -x /usr/libexec/Xorg ] && [ ! -x /usr/bin/Xorg ]; then
+            install_pkgs xorg-server xf86-input-libinput
+        fi
+        servidor=""
+        if [ -x /usr/libexec/Xorg ] || [ -x /usr/bin/Xorg ]; then
+            servidor="[General]
+DisplayServer=x11
+"
+        fi
         cat > /etc/sddm.conf.d/50-pantalla-inicio.conf <<EOF
 # Generado por desktop-postinstall.sh: resolucion elegida por el usuario.
-[X11]
+${servidor}[X11]
 DisplayCommand=$PANTALLA_DIR/sddm-xsetup
 EOF
         log_ok "SDDM usara la resolucion de la ultima sesion."
