@@ -1687,6 +1687,19 @@ done
 [ -n "$archivo" ] || exit 0
 command -v xrandr >/dev/null 2>&1 || exit 0
 
+# La llave de X que crea LightDM queda atada al nombre del equipo. Si el
+# nombre cambia despues de abrir X (LightDM puede arrancar antes que el
+# servicio "hostname"), xrandr ya no puede conectarse: se usa una copia
+# de la llave valida para cualquier nombre (familia "ffff").
+comodin=""
+if ! xrandr --query >/dev/null 2>&1 && [ -n "${XAUTHORITY:-}" ] \
+        && command -v xauth >/dev/null 2>&1 && comodin="$(mktemp)"; then
+    xauth -f "$XAUTHORITY" nlist 2>/dev/null | sed 's/^..../ffff/' \
+        | xauth -f "$comodin" nmerge - 2>/dev/null
+    XAUTHORITY="$comodin"
+    export XAUTHORITY
+fi
+
 conectadas="$(xrandr --query 2>/dev/null | awk '$2 == "connected" { print $1 }')"
 n_conectadas="$(printf '%s\n' "$conectadas" | grep -c .)"
 n_guardadas="$(grep -c . "$archivo")"
@@ -1706,6 +1719,7 @@ while read -r salida modo _; do
         || logger -t pantalla-inicio "No se pudo poner $salida en $modo (de $archivo)." 2>/dev/null \
         || true
 done < "$archivo"
+[ -z "$comodin" ] || rm -f "$comodin"
 exit 0
 EOF
 
@@ -1732,7 +1746,7 @@ X-GNOME-Autostart-enabled=true
 EOF
 
     if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1; then
-        install_pkgs xrandr
+        install_pkgs xrandr xauth
     fi
     if apk info -e lightdm >/dev/null 2>&1; then
         mkdir -p /etc/lightdm/lightdm.conf.d
