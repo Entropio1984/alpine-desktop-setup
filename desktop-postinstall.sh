@@ -200,6 +200,7 @@ DE_PLASMA="no"
 DE_GNOME="no"
 DE_MATE="no"
 DE_LXQT="no"
+DE_SWAY="no"
 
 detect_desktop_environment() {
     log_info "== Detectando entorno de escritorio instalado =="
@@ -216,8 +217,9 @@ detect_desktop_environment() {
     apk info -e gnome-shell >/dev/null 2>&1 && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
     apk info -e mate-session-manager >/dev/null 2>&1 && { DE_MATE="yes"; log_ok "MATE detectado."; }
     apk info -e lxqt-session >/dev/null 2>&1 && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
+    apk info -e sway >/dev/null 2>&1 && { DE_SWAY="yes"; log_ok "Sway detectado."; }
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ]; then
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
         log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
     fi
 }
@@ -1645,6 +1647,9 @@ setup_flatpak() {
 setup_display_manager() {
     log_info "== Detectando y habilitando Gestor de Inicio de Sesión =="
 
+    setup_greetd_sway
+    setup_greetd_idioma
+
     dm_installed=""
     apk info -e lightdm >/dev/null 2>&1 && dm_installed="$dm_installed lightdm"
     apk info -e sddm >/dev/null 2>&1 && dm_installed="$dm_installed sddm"
@@ -1675,6 +1680,52 @@ setup_display_manager() {
     log_ok "Display Manager '$chosen' habilitado en el runlevel default."
 }
 
+# Sway: setup-desktop de Alpine no instala pantalla de inicio para Sway
+# (hay que entrar por consola y escribir "sway"). Se le pone la misma que
+# Alpine usa para XFCE Wayland: greetd con gtkgreet (dentro de cage), que
+# es liviana y no necesita Xorg. Si ya hay otra pantalla de inicio (por
+# ejemplo, Sway junto a XFCE), Sway se agrega como sesion en greetd solo
+# si greetd es la que esta instalada.
+setup_greetd_sway() {
+    [ "$DE_SWAY" = "yes" ] || return 0
+    if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1 \
+            || apk info -e gdm >/dev/null 2>&1; then
+        log_info "Sway: ya hay otra pantalla de inicio instalada; no se agrega greetd."
+        return 0
+    fi
+
+    log_info "Sway: instalando pantalla de inicio grafica (greetd + gtkgreet)..."
+    install_pkg "greetd-gtkgreet"
+    if ! apk info -e greetd-gtkgreet >/dev/null 2>&1; then
+        log_warn "Sway: no se pudo instalar greetd-gtkgreet; se entrara por consola escribiendo 'sway'."
+        return 0
+    fi
+    # Mismos pasos que setup-desktop hace para XFCE Wayland.
+    if ! grep -q '^rc_need' /etc/conf.d/greetd 2>/dev/null; then
+        echo 'rc_need="seatd dbus"' >> /etc/conf.d/greetd
+    fi
+    if ! grep -qx 'sway' /etc/greetd/environments 2>/dev/null; then
+        echo "sway" >> /etc/greetd/environments
+    fi
+    addgroup greetd seat 2>/dev/null || true
+    rc-update add dbus default >/dev/null 2>&1 || true
+    rc-update add greetd default || log_warn "Fallo al habilitar 'greetd'."
+    log_ok "Sway: pantalla de inicio greetd habilitada."
+}
+
+# gtkgreet corre como el usuario greetd, que no pasa por /etc/profile:
+# sin esto, la pantalla de inicio de Sway y XFCE Wayland sale en ingles.
+setup_greetd_idioma() {
+    [ -f /etc/greetd/config.toml ] || return 0
+    gtkgreet_re='^command = "\(env LANG=[^ ]* \)\{0,1\}cage -s -- gtkgreet"'
+    grep -q "$gtkgreet_re" /etc/greetd/config.toml || return 0
+    idioma_greetd="$(sed -n 's/^LANG=//p' /etc/environment 2>/dev/null | tail -n 1)"
+    [ -n "$idioma_greetd" ] || return 0
+    sed -i "s|$gtkgreet_re|command = \"env LANG=$idioma_greetd cage -s -- gtkgreet\"|" \
+        /etc/greetd/config.toml
+    log_ok "Pantalla de inicio greetd en idioma $idioma_greetd."
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 26b: La pantalla de inicio usa la resolucion elegida por el usuario
 # ------------------------------------------------------------------------------
@@ -1690,7 +1741,7 @@ setup_display_manager() {
 #   - GNOME guarda la resolucion en ~/.config/monitors.xml, el mismo
 #     formato que lee GDM: un servicio la copia al arrancar.
 # Sway y XFCE Wayland (greetd) quedan fuera: su pantalla de inicio no tiene
-# un paso donde aplicar la resolucion.
+# un paso donde aplicar la resolucion (usa la que sugiere el monitor).
 PANTALLA_DIR="/usr/local/libexec/pantalla-inicio"
 
 setup_greeter_resolution() {
