@@ -349,6 +349,7 @@ setup_applets() {
 # Sway trae de fabrica una barra que solo muestra la fecha: sin wifi, sin
 # volumen y sin menu de aplicaciones. Se cambia por waybar, con:
 #   - boton de menu (fuzzel, muestra los programas instalados),
+#   - boton con la lista de atajos de teclado (sway-atajos),
 #   - icono de wifi de NetworkManager (nm-applet) en la bandeja,
 #   - volumen (clic: pavucontrol; rueda del raton: subir/bajar),
 #   - red, bateria, brillo y reloj.
@@ -374,9 +375,153 @@ setup_sway_barra() {
         echo "exec nm-applet --indicator"
         echo "# Super+D abre el mismo menu que el boton de la barra."
         echo "bindsym --no-warn \$mod+d exec fuzzel"
+        echo "# Super+F1 muestra la lista de atajos de teclado."
+        echo "bindsym --no-warn \$mod+F1 exec sway-atajos"
         echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
         echo "bar bar-0 swaybar_command waybar"
     } > /etc/sway/config.d/50-lazaro-barra.conf
+
+    # Lista de atajos de teclado (boton de teclado en la barra y Super+F1),
+    # leida de la configuracion real de Sway y con el ratón: rueda para
+    # recorrerla y se puede escribir para buscar.
+    mkdir -p /usr/local/bin
+    cat > /usr/local/bin/sway-atajos <<'ATAJOS'
+#!/bin/sh
+# Muestra los atajos de teclado de Sway (boton de la barra y Super+F1).
+# Lee la misma configuracion que Sway: la del usuario si existe; si no,
+# la del sistema, mas /etc/sway/config.d.
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/sway/config"
+[ -f "$conf" ] || conf="${SWAY_ATAJOS_CONFIG:-/etc/sway/config}"
+idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+case "$idioma" in es*) es=1 ;; *) es=0 ;; esac
+extra=""
+for f in /etc/sway/config.d/*; do
+    [ -f "$f" ] && extra="$extra $f"
+done
+
+lista() {
+    # shellcheck disable=SC2086
+    awk -v es="$es" '
+    function nombre_tecla(k,   n, i, p, out, t) {
+        n = split(k, p, "+"); out = ""
+        for (i = 1; i <= n; i++) {
+            t = p[i]
+            if (t == "Mod4") t = "Super"
+            else if (t == "Mod1") t = "Alt"
+            else if (t == "Shift") t = es ? "Mayús" : "Shift"
+            else if (t == "Control" || t == "Ctrl") t = "Ctrl"
+            else if (t == "Return") t = es ? "Intro" : "Enter"
+            else if (t == "space") t = es ? "Espacio" : "Space"
+            else if (t == "minus") t = "-"
+            else if (t == "Left") t = "←"
+            else if (t == "Right") t = "→"
+            else if (t == "Up") t = "↑"
+            else if (t == "Down") t = "↓"
+            else if (t == "Escape") t = "Esc"
+            else if (t == "Print") t = es ? "ImprPant" : "Print"
+            else if (t ~ /^XF86AudioRaiseVolume$/) t = es ? "Tecla subir volumen" : "Volume up key"
+            else if (t ~ /^XF86AudioLowerVolume$/) t = es ? "Tecla bajar volumen" : "Volume down key"
+            else if (t ~ /^XF86AudioMute$/) t = es ? "Tecla silenciar" : "Mute key"
+            else if (t ~ /^XF86AudioMicMute$/) t = es ? "Tecla silenciar micrófono" : "Mic mute key"
+            else if (t ~ /^XF86MonBrightnessUp$/) t = es ? "Tecla subir brillo" : "Brightness up key"
+            else if (t ~ /^XF86MonBrightnessDown$/) t = es ? "Tecla bajar brillo" : "Brightness down key"
+            else if (length(t) == 1) t = toupper(t)
+            out = out (out == "" ? "" : "+") t
+        }
+        return out
+    }
+    function lado(d) {
+        if (d == "left") return "la izquierda"
+        if (d == "right") return "la derecha"
+        if (d == "up") return "arriba"
+        return "abajo"
+    }
+    function describir(c,   w, n) {
+        if (!es) return c
+        n = split(c, w, " ")
+        if (c ~ /^exec (foot|\$term)/) return "Abrir la terminal"
+        if (c ~ /^exec (fuzzel|wmenu|\$menu|dmenu|wofi)/) return "Menú de aplicaciones"
+        if (c ~ /^exec sway-atajos/) return "Ver esta lista de atajos"
+        if (c ~ /^exec swaynag.*exit/) return "Salir de Sway (cerrar sesión)"
+        if (c ~ /set-sink-mute/) return "Silenciar el sonido"
+        if (c ~ /set-sink-volume.*-/) return "Bajar el volumen"
+        if (c ~ /set-sink-volume/) return "Subir el volumen"
+        if (c ~ /set-source-mute/) return "Silenciar el micrófono"
+        if (c ~ /brightnessctl.*-$/) return "Bajar el brillo"
+        if (c ~ /brightnessctl/) return "Subir el brillo"
+        if (c ~ /^exec grim/) return "Captura de pantalla (se guarda en la carpeta personal)"
+        if (c == "kill") return "Cerrar la ventana"
+        if (c == "reload") return "Recargar la configuración de Sway"
+        if (w[1] == "focus" && w[2] ~ /^(left|right|up|down)$/) return "Pasar a la ventana de " lado(w[2])
+        if (w[1] == "move" && w[2] ~ /^(left|right|up|down)$/) return "Mover la ventana hacia " lado(w[2])
+        if (c ~ /^workspace number/) return "Ir al escritorio " w[3]
+        if (c ~ /^move container to workspace number/) return "Mover la ventana al escritorio " w[6]
+        if (c == "splith") return "Abrir la próxima ventana al lado"
+        if (c == "splitv") return "Abrir la próxima ventana debajo"
+        if (c == "layout stacking") return "Ventanas apiladas"
+        if (c == "layout tabbed") return "Ventanas en pestañas"
+        if (c == "layout toggle split") return "Cambiar entre lado a lado y una debajo de otra"
+        if (c == "fullscreen") return "Pantalla completa (sí/no)"
+        if (c == "floating toggle") return "Ventana flotante (sí/no)"
+        if (c == "focus mode_toggle") return "Cambiar entre ventanas flotantes y fijas"
+        if (c == "focus parent") return "Seleccionar el grupo de ventanas"
+        if (c == "move scratchpad") return "Esconder la ventana (cajón)"
+        if (c == "scratchpad show") return "Mostrar la ventana escondida (cajón)"
+        if (c ~ /^mode "?resize"?$/) return "Modo cambiar tamaño (salir con Esc)"
+        if (c ~ /^mode "?default"?$/) return "Salir del modo cambiar tamaño"
+        if (c ~ /^resize shrink width/) return "Más angosta"
+        if (c ~ /^resize grow width/) return "Más ancha"
+        if (c ~ /^resize shrink height/) return "Más baja"
+        if (c ~ /^resize grow height/) return "Más alta"
+        return c
+    }
+    function expandir(s,   k) {
+        for (k in var) {
+            while (index(s, "$" k " ") || substr(s, length(s) - length(k)) == "$" k || index(s, "$" k "+")) {
+                s = substr(s, 1, index(s, "$" k) - 1) var[k] substr(s, index(s, "$" k) + length(k) + 1)
+            }
+        }
+        return s
+    }
+    {
+        sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+        if ($0 ~ /^#/ || $0 == "") next
+        if ($1 == "set" && substr($2, 1, 1) == "$") {
+            v = $0; sub(/^set[ \t]+\$[^ \t]+[ \t]+/, "", v)
+            var[substr($2, 2)] = v; next
+        }
+        if ($1 == "mode" && $NF == "{") { modo = $2; gsub(/"/, "", modo); next }
+        if ($0 == "}") { modo = ""; next }
+        if ($1 != "bindsym") next
+        i = 2
+        while (substr($i, 1, 2) == "--") i++
+        tecla = expandir($i)
+        cmd = $0
+        sub(/^bindsym[ \t]+/, "", cmd)
+        while (cmd ~ /^--/) sub(/^--[^ \t]+[ \t]+/, "", cmd)
+        sub(/^[^ \t]+[ \t]+/, "", cmd)
+        cmd = expandir(cmd)
+        k = (modo == "" ? "" : modo ":") tecla
+        if (!(k in desc)) orden[++total] = k
+        desc[k] = describir(cmd)
+        etiqueta[k] = (modo == "" ? "" : (es ? "[cambiar tamaño] " : "[" modo "] ")) nombre_tecla(tecla)
+    }
+    END {
+        for (j = 1; j <= total; j++) {
+            k = orden[j]
+            printf "%s  →  %s\n", etiqueta[k], desc[k]
+        }
+    }' "$conf" $extra
+}
+
+if [ "${1:-}" = "--lista" ] || [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    lista
+else
+    if [ "$es" = 1 ]; then prompt="Atajos (escribe para buscar): "; else prompt="Shortcuts: "; fi
+    lista | fuzzel --dmenu --width 70 --lines 25 --prompt "$prompt" >/dev/null
+fi
+ATAJOS
+    chmod 755 /usr/local/bin/sway-atajos
 
     # Configuracion de waybar para el usuario y para los usuarios nuevos.
     # Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
@@ -390,13 +535,18 @@ setup_sway_barra() {
     "layer": "top",
     "position": "top",
     "height": 30,
-    "modules-left": ["custom/menu", "sway/workspaces", "sway/mode"],
+    "modules-left": ["custom/menu", "custom/atajos", "sway/workspaces", "sway/mode"],
     "modules-center": ["clock"],
     "modules-right": ["tray", "pulseaudio", "network", "backlight", "battery"],
     "custom/menu": {
         "format": "    ",
         "tooltip": false,
         "on-click": "fuzzel"
+    },
+    "custom/atajos": {
+        "format": " \uf11c ",
+        "tooltip": false,
+        "on-click": "sway-atajos"
     },
     "clock": {
         "format": "{:%a %d %b  %H:%M}",
