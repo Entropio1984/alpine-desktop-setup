@@ -337,9 +337,107 @@ setup_applets() {
         install_pkg "pavucontrol-qt"
     fi
 
+    if [ "$DE_SWAY" = "yes" ]; then
+        setup_sway_barra
+    fi
+
     rc-update add networkmanager default || log_warn "No se pudo agregar 'networkmanager' al runlevel default."
 
     log_ok "Arquitectura de red y audio acoplada al entorno visual."
+}
+
+# Sway trae de fabrica una barra que solo muestra la fecha: sin wifi, sin
+# volumen y sin menu de aplicaciones. Se cambia por waybar, con:
+#   - boton de menu (fuzzel, muestra los programas instalados),
+#   - icono de wifi de NetworkManager (nm-applet) en la bandeja,
+#   - volumen (clic: pavucontrol; rueda del raton: subir/bajar),
+#   - red, bateria, brillo y reloj.
+# Sway tampoco lee /etc/xdg/autostart, asi que el audio y nm-applet se
+# arrancan desde /etc/sway/config.d (que el config de Sway incluye al final).
+setup_sway_barra() {
+    log_info "Sway: barra con menu de aplicaciones, wifi y volumen (waybar)..."
+    install_pkgs waybar font-awesome fuzzel network-manager-applet pavucontrol
+
+    if ! apk info -e waybar >/dev/null 2>&1; then
+        log_warn "Sway: no se pudo instalar waybar; queda la barra original."
+        return 0
+    fi
+
+    mkdir -p /etc/sway/config.d
+    {
+        echo "# Lazaro Linux / desktop-postinstall.sh: barra y programas de la sesion."
+        if [ -x /usr/libexec/pipewire-launcher ]; then
+            echo "exec /usr/libexec/pipewire-launcher"
+        elif command -v pulseaudio >/dev/null 2>&1; then
+            echo "exec pulseaudio --start"
+        fi
+        echo "exec nm-applet --indicator"
+        echo "# Super+D abre el mismo menu que el boton de la barra."
+        echo "bindsym --no-warn \$mod+d exec fuzzel"
+        echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
+        echo "bar bar-0 swaybar_command waybar"
+    } > /etc/sway/config.d/50-lazaro-barra.conf
+
+    # Configuracion de waybar para el usuario y para los usuarios nuevos.
+    # Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
+    for base in /etc/skel "$TARGET_HOME"; do
+        [ -n "$base" ] || continue
+        config_nuevo=no
+        [ -d "$base/.config" ] || config_nuevo=yes
+        mkdir -p "$base/.config/waybar"
+        cat > "$base/.config/waybar/config.jsonc" <<'WAYBAR'
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "modules-left": ["custom/menu", "sway/workspaces", "sway/mode"],
+    "modules-center": ["clock"],
+    "modules-right": ["tray", "pulseaudio", "network", "backlight", "battery"],
+    "custom/menu": {
+        "format": "    ",
+        "tooltip": false,
+        "on-click": "fuzzel"
+    },
+    "clock": {
+        "format": "{:%a %d %b  %H:%M}",
+        "tooltip-format": "<tt>{calendar}</tt>"
+    },
+    "tray": { "spacing": 8 },
+    "pulseaudio": {
+        "format": "{icon} {volume}%",
+        "format-muted": "",
+        "format-icons": { "default": ["", "", ""] },
+        "on-click": "pavucontrol"
+    },
+    "network": {
+        "format-wifi": " {signalStrength}%",
+        "format-ethernet": "",
+        "format-disconnected": "",
+        "tooltip-format": "{ifname} {ipaddr}",
+        "tooltip-format-wifi": "{essid} {ipaddr}",
+        "on-click": "foot nmtui"
+    },
+    "backlight": {
+        "format": " {percent}%"
+    },
+    "battery": {
+        "states": { "warning": 25, "critical": 10 },
+        "format": "{icon} {capacity}%",
+        "format-charging": " {capacity}%",
+        "format-icons": ["", "", "", "", ""]
+    }
+}
+WAYBAR
+        if [ "$base" = "$TARGET_HOME" ] && [ -n "$TARGET_USER" ]; then
+            grupo="$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")"
+            chown -R "$TARGET_USER:$grupo" "$base/.config/waybar" \
+                || log_warn "No se pudo dar la configuracion de waybar a '$TARGET_USER'."
+            if [ "$config_nuevo" = yes ]; then
+                chown "$TARGET_USER:$grupo" "$base/.config" || true
+            fi
+        fi
+    done
+    log_ok "Sway: barra waybar con menu, wifi y volumen lista."
 }
 
 # ------------------------------------------------------------------------------
@@ -1704,8 +1802,10 @@ setup_greetd_sway() {
     if ! grep -q '^rc_need' /etc/conf.d/greetd 2>/dev/null; then
         echo 'rc_need="seatd dbus"' >> /etc/conf.d/greetd
     fi
-    if ! grep -qx 'sway' /etc/greetd/environments 2>/dev/null; then
-        echo "sway" >> /etc/greetd/environments
+    # Igual que el lanzador de Sway de Alpine (sway.desktop): con su propio
+    # bus de sesion, que necesitan la bandeja de la barra y el audio.
+    if ! grep -qx 'dbus-run-session sway' /etc/greetd/environments 2>/dev/null; then
+        echo "dbus-run-session sway" >> /etc/greetd/environments
     fi
     addgroup greetd seat 2>/dev/null || true
     rc-update add dbus default >/dev/null 2>&1 || true
