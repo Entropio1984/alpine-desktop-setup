@@ -74,7 +74,7 @@ check_root() {
 # ------------------------------------------------------------------------------
 update_system() {
     log_info "Actualizando índice de paquetes..."
-    apk_vigilado update || morir "Fallo al actualizar apk."
+    apk_vigilado update >>"$LOG_FILE" 2>&1 || morir "Fallo al actualizar apk (detalles en $LOG_FILE)."
 }
 
 # apk_vigilado: ejecuta apk (con los argumentos dados) sin que se quede
@@ -201,6 +201,14 @@ ensure_hw_tools() {
     # que 'lsusb' apunte al recien instalado y no al de BusyBox.
     hash -r 2>/dev/null || true
     HW_TOOLS_READY="yes"
+}
+
+# El hardware se pudo revisar del todo: estan las versiones completas de
+# lspci y lsusb (las de BusyBox no muestran nombres, asi que un adaptador
+# USB pasaria desapercibido) y las dos funcionaron.
+hw_revisado() {
+    apk info -e pciutils >/dev/null 2>&1 && apk info -e usbutils >/dev/null 2>&1 &&
+        lspci >/dev/null 2>&1 && lsusb >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------------------------
@@ -719,13 +727,13 @@ detect_wifi_hardware() {
     fi
 
     if [ -z "$net_pci" ] && [ -z "$net_usb" ]; then
-        if command -v lspci >/dev/null 2>&1 && command -v lsusb >/dev/null 2>&1; then
+        if hw_revisado; then
             log_info "No se detecto ningun adaptador de red inalambrica (PCI ni USB)."
             WIFI_INFO=""
         else
             # Sin las herramientas no se sabe: se instala el firmware general
             # (Bloque 8), como si hubiera un adaptador desconocido.
-            log_warn "No se pudo revisar el hardware (faltan lspci/lsusb)."
+            log_warn "No se pudo revisar del todo el hardware (lspci/lsusb)."
             WIFI_INFO="desconocido"
         fi
         return 0
@@ -828,11 +836,11 @@ detect_bluetooth_hardware() {
     fi
 
     if [ -z "$bt_pci" ] && [ -z "$bt_usb" ]; then
-        if command -v lspci >/dev/null 2>&1 && command -v lsusb >/dev/null 2>&1; then
+        if hw_revisado; then
             log_info "No se detecto ningun adaptador Bluetooth (PCI ni USB)."
             BT_INFO=""
         else
-            log_warn "No se pudo revisar el hardware (faltan lspci/lsusb); se instala Bluetooth por si acaso."
+            log_warn "No se pudo revisar del todo el hardware (lspci/lsusb); se instala Bluetooth por si acaso."
             BT_INFO="desconocido"
         fi
         return 0
@@ -2032,8 +2040,11 @@ setup_display_manager() {
         # Sway y XFCE Wayland usan greetd, que se habilita aparte.
         if apk info -e greetd >/dev/null 2>&1; then
             dm_tras_hostname greetd
-            rc-update add greetd default >/dev/null 2>&1 || log_warn "Fallo al habilitar 'greetd'."
-            log_ok "Pantalla de inicio 'greetd' habilitada."
+            if rc-update add greetd default >/dev/null 2>&1; then
+                log_ok "Pantalla de inicio 'greetd' habilitada."
+            else
+                log_warn "Fallo al habilitar 'greetd'."
+            fi
         else
             log_warn "No se detectó un Display Manager instalado (lightdm/sddm/gdm/greetd). El sistema arrancará en modo texto."
         fi
@@ -2524,6 +2535,8 @@ prefixed() {
 # por root, podria haberlo dejado preparado otro usuario.
 EXIT_TMP="$(mktemp)"
 trap 'rm -f "$EXIT_TMP"' EXIT
+# Al cancelar, salir por 'exit' para que tambien se borre.
+trap 'exit 130' INT TERM HUP
 
 # Ejecuta un paso, muestra su salida y deja su codigo en $step_status.
 run_step() {
