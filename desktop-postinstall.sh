@@ -357,7 +357,7 @@ setup_applets() {
 # arrancan desde /etc/sway/config.d (que el config de Sway incluye al final).
 setup_sway_barra() {
     log_info "Sway: barra con menu de aplicaciones, wifi y volumen (waybar)..."
-    install_pkgs waybar font-awesome fuzzel network-manager-applet pavucontrol
+    install_pkgs waybar font-awesome fuzzel network-manager-applet pavucontrol polkit-gnome
 
     if ! apk info -e waybar >/dev/null 2>&1; then
         log_warn "Sway: no se pudo instalar waybar; queda la barra original."
@@ -373,6 +373,9 @@ setup_sway_barra() {
             echo "exec pulseaudio --start"
         fi
         echo "exec nm-applet --indicator"
+        # Ventana de contrasena para acciones de administrador (wifi
+        # protegido, actualizaciones); Sway no trae una propia.
+        echo "exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
         echo "# Super+D abre el mismo menu que el boton de la barra."
         echo "bindsym --no-warn \$mod+d exec fuzzel"
         echo "# Super+F1 muestra la lista de atajos de teclado."
@@ -403,7 +406,7 @@ lista() {
     # shellcheck disable=SC2086
     awk -v es="$es" '
     function nombre_tecla(k,   n, i, p, out, t) {
-        n = split(k, p, "+"); out = ""
+        n = split(k, p, "[+]"); out = ""
         for (i = 1; i <= n; i++) {
             t = p[i]
             if (t == "Mod4") t = "Super"
@@ -529,8 +532,14 @@ ATAJOS
         [ -n "$base" ] || continue
         config_nuevo=no
         [ -d "$base/.config" ] || config_nuevo=yes
+        waybar_conf="$base/.config/waybar/config.jsonc"
+        # Si ya hay una configuracion (propia del usuario), se respeta.
+        if [ -e "$waybar_conf" ] || [ -L "$waybar_conf" ] || [ -L "$base/.config/waybar" ]; then
+            log_info "Sway: ya existe $waybar_conf; no se cambia."
+            continue
+        fi
         mkdir -p "$base/.config/waybar"
-        cat > "$base/.config/waybar/config.jsonc" <<'WAYBAR'
+        cat > "$waybar_conf" <<'WAYBAR'
 {
     "layer": "top",
     "position": "top",
@@ -580,7 +589,7 @@ ATAJOS
 WAYBAR
         if [ "$base" = "$TARGET_HOME" ] && [ -n "$TARGET_USER" ]; then
             grupo="$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")"
-            chown -R "$TARGET_USER:$grupo" "$base/.config/waybar" \
+            chown -h "$TARGET_USER:$grupo" "$base/.config/waybar" "$waybar_conf" \
                 || log_warn "No se pudo dar la configuracion de waybar a '$TARGET_USER'."
             if [ "$config_nuevo" = yes ]; then
                 chown "$TARGET_USER:$grupo" "$base/.config" || true
@@ -1400,7 +1409,7 @@ setup_earlyoom() {
 # siempre (Bloque 19), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         if rc-update show default 2>/dev/null | grep -q '^ *acpid '; then
             rc-update del acpid default >/dev/null 2>&1 || true
             log_info "acpid quitado del arranque: con escritorio, elogind maneja el boton de encendido y la tapa (igual que hace setup-desktop)."
@@ -2325,12 +2334,12 @@ setup_update_shortcut() {
     # de contrasena. Sin el, pkexec falla con "No authentication agent
     # found" y la actualizacion nunca empieza. Plasma (polkit-kde-agent),
     # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 19)
-    # ya traen el suyo; XFCE y MATE se cubren aqui. Ademas, el lanzador
+    # ya traen el suyo; XFCE, MATE y Sway se cubren aqui. Ademas, el lanzador
     # comprueba en cada ejecucion que el agente este CORRIENDO y lo
     # inicia si hace falta: instalar el paquete no garantiza que arranque,
     # porque el autoarranque de polkit-gnome suele estar restringido a
     # ciertos escritorios segun la distribucion.
-    if [ "$DE_XFCE" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         install_pkgs polkit-gnome
     fi
     if [ "$DE_MATE" = "yes" ]; then
@@ -2984,7 +2993,7 @@ set_default_app() {
 install_daily_apps() {
     log_info "== Aplicaciones de uso diario =="
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ]; then
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
         log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
         return 0
     fi
@@ -2996,7 +3005,7 @@ install_daily_apps() {
     if [ "$DE_PLASMA" = "yes" ]; then
         install_pkgs okular
     fi
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         install_pkgs evince
     fi
     if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
@@ -3025,14 +3034,14 @@ install_daily_apps() {
     # --- Tienda de aplicaciones ---
     # Plasma trae Discover y GNOME trae GNOME Software (los instala
     # setup-desktop). En los demas: Discover en LXQt (Qt, como el
-    # escritorio) y GNOME Software en XFCE y MATE (GTK). Ambas instalan y
+    # escritorio) y GNOME Software en XFCE, MATE y Sway (GTK). Ambas instalan y
     # actualizan paquetes de Alpine y, con Flatpak (Bloque 25), tambien
     # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
     # (install_if) cuando flatpak esta instalado.
     if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
         install_pkgs discover
     fi
-    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
+    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
         install_pkgs gnome-software gnome-software-plugin-apk2 apk-polkit-rs
     fi
 
