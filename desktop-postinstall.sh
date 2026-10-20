@@ -13,7 +13,7 @@ log_ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$1" | tee -a "$LOG_FILE"; 
 log_warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$1" | tee -a "$LOG_FILE"; }
 log_error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" | tee -a "$LOG_FILE"; }
 
-trap 'log_error "Ocurrió un error inesperado. Abortando script."; exit 1' EXIT INT TERM
+trap 'log_error "Ocurrió un error inesperado. Abortando script."; apk_detener; exit 1' EXIT INT TERM
 
 ask_yes_no() {
     prompt="$1"
@@ -60,23 +60,29 @@ check_root() {
 # ------------------------------------------------------------------------------
 update_system() {
     log_info "Actualizando índice de paquetes..."
-    apk update || { log_error "Fallo al actualizar apk."; exit 1; }
+    apk_vigilado update 3>&1 || { log_error "Fallo al actualizar apk."; exit 1; }
 }
 
-# apk_add: 'apk add --no-cache' que no se queda colgado para siempre.
+# apk_vigilado: ejecuta apk (con los argumentos dados) sin que se quede
+# colgado para siempre.
 # CORRECCION: apk (3.0) baja los paquetes por HTTPS con el socket en modo
 # bloqueante, y su --timeout solo se aplica si la conexion TLS pidio
 # esperar; si el servidor deja de mandar datos a mitad de un paquete,
 # apk espera indefinidamente (visto en una VM: 20+ minutos quieto, sin
 # usar CPU, en "apk add pulseaudio" y luego en "apk add lang"). Aqui se
-# vigila: si apk pasa 120 s sin leer ni escribir nada y sin ningun
-# proceso hijo (los scripts de instalacion, como mkinitfs, pueden tardar),
-# se corta y se reintenta (hasta 3 veces). Cortar apk mientras descarga
-# no deja nada a medias: solo confirma lo que termino de instalar.
-apk_add() {
+# vigila: si apk pasa 120 s sin leer ni escribir nada (eso incluye
+# descomprimir y escribir en el disco) y sin ningun proceso hijo (los
+# scripts de instalacion, como mkinitfs, pueden tardar), se corta y se
+# reintenta (hasta 3 veces). apk confirma cada paquete al terminar de
+# instalarlo, asi que el reintento sigue donde quedo.
+# El aviso de reintento va al descriptor 3 (quien llama hace "3>&1"), porque
+# los que llaman suelen mandar la salida de apk a /dev/null. Si los 3
+# intentos se quedan colgados, devuelve 124.
+_apk_pid=""
+apk_vigilado() {
     _apk_intento=1
     while :; do
-        apk add --no-cache "$@" &
+        apk "$@" &
         _apk_pid=$!
         _apk_antes=""
         _apk_quieto=0
@@ -92,25 +98,41 @@ apk_add() {
                 _apk_quieto=$((_apk_quieto + 5))
             fi
             if [ "$_apk_quieto" -ge 120 ]; then
-                log_warn "apk lleva 2 minutos sin avanzar (descarga detenida). Se corta y se reintenta ($_apk_intento/3)..."
-                kill "$_apk_pid" 2>/dev/null
-                sleep 2
-                kill -9 "$_apk_pid" 2>/dev/null
+                log_warn "apk lleva 2 minutos sin avanzar (descarga detenida). Se corta y se reintenta ($_apk_intento/3)..." >&3
+                apk_detener
                 break
             fi
         done
         wait "$_apk_pid"
         _apk_rc=$?
+        _apk_pid=""
         [ "$_apk_quieto" -ge 120 ] || return "$_apk_rc"
-        [ "$_apk_intento" -lt 3 ] || return 1
+        [ "$_apk_intento" -lt 3 ] || return 124
         _apk_intento=$((_apk_intento + 1))
     done
+}
+
+# Corta el apk que este corriendo (si hay uno). Antes de forzarlo se
+# comprueba que ese numero de proceso siga siendo apk: si ya termino, el
+# numero pudo pasar a otro programa.
+apk_detener() {
+    [ -n "$_apk_pid" ] || return 0
+    kill "$_apk_pid" 2>/dev/null
+    sleep 2
+    if [ "$(cat "/proc/$_apk_pid/comm" 2>/dev/null)" = apk ]; then
+        kill -9 "$_apk_pid" 2>/dev/null
+    fi
+    return 0
+}
+
+apk_add() {
+    apk_vigilado add --no-cache "$@"
 }
 
 install_pkg() {
     pkg="$1"
     log_info "Instalando: $pkg"
-    if apk_add "$pkg" >/dev/null 2>&1; then
+    if apk_add "$pkg" 3>&1 >/dev/null 2>&1; then
         log_ok "'$pkg' instalado."
     else
         log_warn "Fallo al instalar '$pkg' (puede no existir en tu rama/arquitectura)."
@@ -127,10 +149,16 @@ install_pkg() {
 # gana velocidad en el caso normal sin sacrificar la resiliencia.
 install_pkgs() {
     log_info "Instalando en lote: $*"
-    if apk_add "$@" >/dev/null 2>&1; then
+    apk_add "$@" 3>&1 >/dev/null 2>&1
+    _lote_rc=$?
+    if [ "$_lote_rc" -eq 0 ]; then
         for p in "$@"; do
             log_ok "'$p' instalado (lote)."
         done
+    elif [ "$_lote_rc" -eq 124 ]; then
+        # La descarga siguio detenida en los 3 intentos: probar paquete por
+        # paquete solo sumaria esperas. Se sigue con el resto del script.
+        log_warn "No se pudo descargar el lote (la conexion se detuvo en los 3 intentos): $*"
     else
         log_warn "La instalacion en lote fallo (probablemente algun paquete no existe en tu rama). Reintentando uno por uno..."
         for p in "$@"; do
