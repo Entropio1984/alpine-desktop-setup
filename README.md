@@ -256,7 +256,7 @@ Solo si se marcó en el menú. Instala CUPS y su configurador; la administració
 ### Bloque 21 — `install_archive_tools`
 Instala `zip`, `unzip` y `7zip`.
 
-### Bloque 22 — `setup_locale_es`
+### Bloque 22 — `setup_locale`
 Configura español (`es_ES.UTF-8`), u otro idioma si se indica con la variable `OPT_LANG` (por ejemplo `OPT_LANG=pt_BR.UTF-8`, como hace el instalador de Lázaro Linux), en tres capas: `/etc/profile.d` para las consolas, `/etc/environment` para las sesiones gráficas, y el archivo propio de idioma de Plasma. También instala el metapaquete `lang`, que agrega solo las traducciones de todo lo instalado. musl, la biblioteca de C de Alpine, no tiene variantes regionales como `es_CO`, pero las traducciones de los programas son las mismas.
 
 ### Bloque 23 — `install_fonts`

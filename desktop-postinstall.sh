@@ -183,6 +183,18 @@ install_pkgs() {
     fi
 }
 
+# Devuelve 0 si el paquete $1 esta instalado.
+pkg_installed() { apk info -e "$1" >/dev/null 2>&1; }
+
+# enable_service SERVICIO [RUNLEVEL] [AVISO]: agrega el servicio de OpenRC
+# al runlevel (por defecto "default"). Si falla, avisa y sigue; AVISO
+# reemplaza el mensaje de siempre.
+enable_service() {
+    _svc_nivel="${2:-default}"
+    _svc_aviso="No se pudo agregar '$1' al runlevel $_svc_nivel."
+    rc-update add "$1" "$_svc_nivel" || log_warn "${3:-$_svc_aviso}"
+}
+
 # ensure_hw_tools: garantiza las versiones COMPLETAS de lspci y lsusb.
 # CORRECCION: antes se usaba "command -v lsusb || install_pkg usbutils".
 # El BusyBox de Alpine trae su propio 'lsusb' (verificado en la
@@ -195,8 +207,8 @@ install_pkgs() {
 HW_TOOLS_READY="no"
 ensure_hw_tools() {
     [ "$HW_TOOLS_READY" = "yes" ] && return 0
-    apk info -e pciutils >/dev/null 2>&1 || install_pkg "pciutils"
-    apk info -e usbutils >/dev/null 2>&1 || install_pkg "usbutils"
+    pkg_installed pciutils || install_pkg "pciutils"
+    pkg_installed usbutils || install_pkg "usbutils"
     # El shell recuerda la ruta de los comandos ya usados; se olvida para
     # que 'lsusb' apunte al recien instalado y no al de BusyBox.
     hash -r 2>/dev/null || true
@@ -207,7 +219,7 @@ ensure_hw_tools() {
 # lspci y lsusb (las de BusyBox no muestran nombres, asi que un adaptador
 # USB pasaria desapercibido) y las dos funcionaron.
 hw_revisado() {
-    apk info -e pciutils >/dev/null 2>&1 && apk info -e usbutils >/dev/null 2>&1 &&
+    pkg_installed pciutils && pkg_installed usbutils &&
         lspci >/dev/null 2>&1 && lsusb >/dev/null 2>&1
 }
 
@@ -298,24 +310,30 @@ DE_MATE="no"
 DE_LXQT="no"
 DE_SWAY="no"
 
+# Devuelve 0 si se detecto al menos un entorno de escritorio.
+has_desktop() {
+    [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]
+}
+
 detect_desktop_environment() {
     log_info "== Detectando entorno de escritorio instalado =="
 
-    apk info -e xfce4-session >/dev/null 2>&1 && { DE_XFCE="yes"; log_ok "XFCE detectado."; }
+    pkg_installed xfce4-session && { DE_XFCE="yes"; log_ok "XFCE detectado."; }
 
     # Se comprueban ambos nombres: plasma-desktop-meta (metapaquete usado
     # por setup-desktop) y plasma-desktop (paquete real que trae como
     # dependencia). Cubre también instalaciones manuales/no estándar que
     # no pasaron por el metapaquete.
-    apk info -e plasma-desktop-meta >/dev/null 2>&1 && { DE_PLASMA="yes"; log_ok "KDE Plasma detectado."; }
-    apk info -e plasma-desktop >/dev/null 2>&1 && { DE_PLASMA="yes"; log_ok "KDE Plasma detectado."; }
+    if pkg_installed plasma-desktop-meta || pkg_installed plasma-desktop; then
+        DE_PLASMA="yes"; log_ok "KDE Plasma detectado."
+    fi
 
-    apk info -e gnome-shell >/dev/null 2>&1 && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
-    apk info -e mate-session-manager >/dev/null 2>&1 && { DE_MATE="yes"; log_ok "MATE detectado."; }
-    apk info -e lxqt-session >/dev/null 2>&1 && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
-    apk info -e sway >/dev/null 2>&1 && { DE_SWAY="yes"; log_ok "Sway detectado."; }
+    pkg_installed gnome-shell && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
+    pkg_installed mate-session-manager && { DE_MATE="yes"; log_ok "MATE detectado."; }
+    pkg_installed lxqt-session && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
+    pkg_installed sway && { DE_SWAY="yes"; log_ok "Sway detectado."; }
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
+    if ! has_desktop; then
         log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
     fi
 }
@@ -366,9 +384,9 @@ detect_target_user() {
 #     Xfce, MATE, LXQt o sin escritorio -> PulseAudio.
 AUDIO_SERVER=""
 choose_audio_server() {
-    if apk info -e pipewire-pulse >/dev/null 2>&1; then
+    if pkg_installed pipewire-pulse; then
         AUDIO_SERVER="pipewire"
-    elif apk info -e pulseaudio >/dev/null 2>&1; then
+    elif pkg_installed pulseaudio; then
         AUDIO_SERVER="pulseaudio"
     elif [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ]; then
         AUDIO_SERVER="pipewire"
@@ -401,13 +419,11 @@ setup_applets() {
     log_info "Inyectando applets de interfaz específicos..."
 
     if [ "$DE_XFCE" = "yes" ]; then
-        install_pkg "network-manager-applet"
-        install_pkg "xfce4-pulseaudio-plugin"
+        install_pkgs network-manager-applet xfce4-pulseaudio-plugin
     fi
 
     if [ "$DE_PLASMA" = "yes" ]; then
-        install_pkg "plasma-nm"
-        install_pkg "plasma-pa"
+        install_pkgs plasma-nm plasma-pa
     fi
 
     if [ "$DE_GNOME" = "yes" ]; then
@@ -418,8 +434,7 @@ setup_applets() {
 
     if [ "$DE_MATE" = "yes" ]; then
         # MATE es altamente compatible con el ecosistema GTK de NM.
-        install_pkg "network-manager-applet"
-        install_pkg "mate-media"
+        install_pkgs network-manager-applet mate-media
     fi
 
     if [ "$DE_LXQT" = "yes" ]; then
@@ -437,7 +452,7 @@ setup_applets() {
         setup_sway_barra
     fi
 
-    rc-update add networkmanager default || log_warn "No se pudo agregar 'networkmanager' al runlevel default."
+    enable_service networkmanager
 
     log_ok "Arquitectura de red y audio acoplada al entorno visual."
 }
@@ -455,11 +470,19 @@ setup_sway_barra() {
     log_info "Sway: barra con menu de aplicaciones, wifi y volumen (waybar)..."
     install_pkgs waybar font-awesome fuzzel network-manager-applet pavucontrol polkit-gnome
 
-    if ! apk info -e waybar >/dev/null 2>&1; then
+    if ! pkg_installed waybar; then
         log_warn "Sway: no se pudo instalar waybar; queda la barra original."
         return 0
     fi
 
+    sway_conf_sesion
+    sway_instalar_atajos
+    sway_config_waybar
+    log_ok "Sway: barra waybar con menu, wifi y volumen lista."
+}
+
+# Programas de la sesion, atajos y barra en /etc/sway/config.d.
+sway_conf_sesion() {
     mkdir -p /etc/sway/config.d
     {
         echo "# Lazaro Linux / desktop-postinstall.sh: barra y programas de la sesion."
@@ -479,10 +502,12 @@ setup_sway_barra() {
         echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
         echo "bar bar-0 swaybar_command waybar"
     } > /etc/sway/config.d/50-lazaro-barra.conf
+}
 
-    # Lista de atajos de teclado (boton de teclado en la barra y Super+F1),
-    # leida de la configuracion real de Sway y con el ratón: rueda para
-    # recorrerla y se puede escribir para buscar.
+# Lista de atajos de teclado (boton de teclado en la barra y Super+F1),
+# leida de la configuracion real de Sway y con el ratón: rueda para
+# recorrerla y se puede escribir para buscar.
+sway_instalar_atajos() {
     mkdir -p /usr/local/bin
     cat > /usr/local/bin/sway-atajos <<'ATAJOS'
 #!/bin/sh
@@ -621,9 +646,11 @@ else
 fi
 ATAJOS
     chmod 755 /usr/local/bin/sway-atajos
+}
 
-    # Configuracion de waybar para el usuario y para los usuarios nuevos.
-    # Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
+# Configuracion de waybar para el usuario y para los usuarios nuevos.
+# Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
+sway_config_waybar() {
     for base in /etc/skel "$TARGET_HOME"; do
         [ -n "$base" ] || continue
         config_nuevo=no
@@ -692,7 +719,6 @@ WAYBAR
             fi
         fi
     done
-    log_ok "Sway: barra waybar con menu, wifi y volumen lista."
 }
 
 # ------------------------------------------------------------------------------
@@ -897,7 +923,7 @@ install_bluetooth() {
         install_pkgs linux-firmware-intel
     fi
 
-    rc-update add bluetooth default || log_warn "No se pudo agregar 'bluetooth' al runlevel default."
+    enable_service bluetooth
 
     log_ok "Soporte Bluetooth instalado y activado (servicio OpenRC: bluetooth)."
 }
@@ -1030,11 +1056,11 @@ install_drivers() {
         # pantalla) y la gestion de energia de LXQt se cierra con "Unsupported
         # extension". El driver "modesetting" de Xorg maneja QXL sin ese fallo.
         install_pkgs xf86-video-vmware spice-vdagent
-        if apk info -e xf86-video-qxl >/dev/null 2>&1; then
+        if pkg_installed xf86-video-qxl; then
             apk del -q xf86-video-qxl >/dev/null 2>&1 \
                 || log_warn "No se pudo quitar xf86-video-qxl."
         fi
-        rc-update add spice-vdagentd default || log_warn "Fallo al habilitar spice-vdagentd."
+        enable_service spice-vdagentd default "Fallo al habilitar spice-vdagentd."
     fi
 
     if [ "$GPU_HAS_NVIDIA" = "yes" ]; then
@@ -1491,7 +1517,7 @@ EOF
         } >> /etc/sysctl.conf
     fi
 
-    rc-update add zram-init default || log_warn "No se pudo agregar 'zram-init' al runlevel default."
+    enable_service zram-init
 
     log_ok "zram configurado (swap comprimido = 100% de la RAM, algoritmo zstd)."
 }
@@ -1502,7 +1528,7 @@ EOF
 setup_earlyoom() {
     log_info "== Configurando EarlyOOM =="
     install_pkgs earlyoom earlyoom-openrc
-    rc-update add earlyoom default || log_warn "No se pudo agregar 'earlyoom' al runlevel default."
+    enable_service earlyoom
     log_ok "EarlyOOM configurado."
 }
 
@@ -1517,7 +1543,7 @@ setup_earlyoom() {
 # siempre (Bloque 19), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
+    if has_desktop; then
         if rc-update show default 2>/dev/null | grep -q '^ *acpid '; then
             rc-update del acpid default >/dev/null 2>&1 || true
             log_info "acpid quitado del arranque: con escritorio, elogind maneja el boton de encendido y la tapa (igual que hace setup-desktop)."
@@ -1526,11 +1552,10 @@ setup_power() {
         return 0
     fi
     install_pkgs acpid acpid-openrc
-    rc-update add acpid default || log_warn "No se pudo agregar 'acpid' al runlevel default."
+    enable_service acpid
     log_ok "acpid configurado (sistema sin escritorio)."
 }
 
-# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # BLOQUE 18: Optimizacion de discos duros mecanicos (HDD)
 # ------------------------------------------------------------------------------
@@ -1684,19 +1709,18 @@ setup_usb_automount() {
     # mensajes del sistema para funcionar. Se instala aquí explícitamente
     # en vez de asumir que ya llegó como dependencia transitiva de la DE.
     install_pkg "dbus"
-    rc-update add dbus default || log_warn "No se pudo agregar 'dbus' al runlevel default."
+    enable_service dbus
 
     install_pkg "udisks2"
 
     install_pkg "elogind"
-    rc-update add elogind default || log_warn "No se pudo agregar 'elogind' al runlevel default."
+    enable_service elogind
 
     install_pkg "polkit-elogind"
-    rc-update add polkit default || log_warn "No se pudo agregar 'polkit' al runlevel default."
+    enable_service polkit
 
     if [ "$DE_XFCE" = "yes" ]; then
-        install_pkg "gvfs"
-        install_pkg "thunar-volman"
+        install_pkgs gvfs thunar-volman
     fi
 
     if [ "$DE_GNOME" = "yes" ]; then
@@ -1708,8 +1732,7 @@ setup_usb_automount() {
     fi
 
     if [ "$DE_LXQT" = "yes" ]; then
-        install_pkg "gvfs"
-        install_pkg "lxqt-policykit"
+        install_pkgs gvfs lxqt-policykit
     fi
 
     if [ "$DE_PLASMA" = "yes" ]; then
@@ -1732,7 +1755,7 @@ setup_printing() {
 
     log_info "== Configurando soporte de impresión (CUPS) =="
     install_pkgs cups cups-openrc cups-filters system-config-printer
-    rc-update add cupsd default || log_warn "No se pudo agregar 'cupsd' al runlevel default."
+    enable_service cupsd
     log_ok "CUPS configurado. Interfaz web disponible en http://localhost:631"
 }
 
@@ -1748,7 +1771,7 @@ install_archive_tools() {
 # ------------------------------------------------------------------------------
 # BLOQUE 22: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
-setup_locale_es() {
+setup_locale() {
     # Idioma: espanol de Espana salvo que se indique otro con OPT_LANG
     # (por ejemplo el que se eligio en el instalador de Lazaro Linux).
     idioma="${OPT_LANG:-es_ES.UTF-8}"
@@ -1773,8 +1796,7 @@ setup_locale_es() {
     esac
     log_info "== Configurando el idioma del sistema ($idioma) =="
 
-    install_pkg "musl-locales"
-    install_pkg "musl-locales-lang"
+    install_pkgs musl-locales musl-locales-lang
 
     if [ -f /etc/rc.conf ] && ! grep -q '^unicode="YES"' /etc/rc.conf; then
         sed -i 's/#unicode="NO"/#unicode="NO"\nunicode="YES"/' /etc/rc.conf 2>/dev/null || true
@@ -1805,8 +1827,7 @@ EOF
 
     if [ "$DE_PLASMA" = "yes" ]; then
         log_info "Reforzando traducciones específicas de Plasma..."
-        install_pkg "plasma-desktop-lang"
-        install_pkg "kdeplasma-addons-lang"
+        install_pkgs plasma-desktop-lang kdeplasma-addons-lang
 
         mkdir -p /etc/xdg
         cat > /etc/xdg/plasma-localerc <<EOF
@@ -1861,7 +1882,7 @@ install_fonts() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 24: LibreOffice + paquete de idioma español
+# BLOQUE 24: LibreOffice + paquete de idioma del sistema
 # ------------------------------------------------------------------------------
 install_libreoffice() {
     log_info "== LibreOffice =="
@@ -1871,7 +1892,7 @@ install_libreoffice() {
         return 0
     fi
 
-    # Paquete de idioma: el del sistema ya validado por setup_locale_es,
+    # Paquete de idioma: el del sistema ya validado por setup_locale,
     # que corre antes (por defecto espanol).
     # Alpine los nombra por region (libreoffice-lang-pt_br) o por idioma
     # (libreoffice-lang-es); el ingles viene incluido.
@@ -1945,7 +1966,7 @@ setup_flatpak() {
 
     log_info "== Configurando Flatpak y repositorio Flathub =="
 
-    # dbus ya se instaló y habilitó en el Bloque 18 (setup_usb_automount).
+    # dbus ya se instaló y habilitó en el Bloque 19 (setup_usb_automount).
     # Portal GTK como base universal (XFCE/GNOME/MATE, y red de seguridad
     # para cualquier entorno). El propio xdg-desktop-portal elige el
     # backend correcto en tiempo real según XDG_CURRENT_DESKTOP, así que
@@ -2032,13 +2053,13 @@ setup_display_manager() {
     setup_greetd_idioma
 
     dm_installed=""
-    apk info -e lightdm >/dev/null 2>&1 && dm_installed="$dm_installed lightdm"
-    apk info -e sddm >/dev/null 2>&1 && dm_installed="$dm_installed sddm"
-    apk info -e gdm >/dev/null 2>&1 && dm_installed="$dm_installed gdm"
+    pkg_installed lightdm && dm_installed="$dm_installed lightdm"
+    pkg_installed sddm && dm_installed="$dm_installed sddm"
+    pkg_installed gdm && dm_installed="$dm_installed gdm"
 
     if [ -z "$dm_installed" ]; then
         # Sway y XFCE Wayland usan greetd, que se habilita aparte.
-        if apk info -e greetd >/dev/null 2>&1; then
+        if pkg_installed greetd; then
             dm_tras_hostname greetd
             if rc-update add greetd default >/dev/null 2>&1; then
                 log_ok "Pantalla de inicio 'greetd' habilitada."
@@ -2068,7 +2089,7 @@ setup_display_manager() {
     fi
 
     dm_tras_hostname "$chosen"
-    rc-update add "$chosen" default || log_warn "Fallo al habilitar '$chosen'."
+    enable_service "$chosen" default "Fallo al habilitar '$chosen'."
     log_ok "Display Manager '$chosen' habilitado en el runlevel default."
 }
 
@@ -2080,15 +2101,14 @@ setup_display_manager() {
 # si greetd es la que esta instalada.
 setup_greetd_sway() {
     [ "$DE_SWAY" = "yes" ] || return 0
-    if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1 \
-            || apk info -e gdm >/dev/null 2>&1; then
+    if pkg_installed lightdm || pkg_installed sddm || pkg_installed gdm; then
         log_info "Sway: ya hay otra pantalla de inicio instalada; no se agrega greetd."
         return 0
     fi
 
     log_info "Sway: instalando pantalla de inicio grafica (greetd + gtkgreet)..."
     install_pkg "greetd-gtkgreet"
-    if ! apk info -e greetd-gtkgreet >/dev/null 2>&1; then
+    if ! pkg_installed greetd-gtkgreet; then
         log_warn "Sway: no se pudo instalar greetd-gtkgreet; se entrara por consola escribiendo 'sway'."
         return 0
     fi
@@ -2104,7 +2124,7 @@ setup_greetd_sway() {
     addgroup greetd seat 2>/dev/null || true
     rc-update add dbus default >/dev/null 2>&1 || true
     dm_tras_hostname greetd
-    rc-update add greetd default || log_warn "Fallo al habilitar 'greetd'."
+    enable_service greetd default "Fallo al habilitar 'greetd'."
     log_ok "Sway: pantalla de inicio greetd habilitada."
 }
 
@@ -2142,14 +2162,28 @@ PANTALLA_DIR="/usr/local/libexec/pantalla-inicio"
 setup_greeter_resolution() {
     log_info "== Resolucion de la pantalla de inicio =="
 
-    if ! apk info -e lightdm >/dev/null 2>&1 && ! apk info -e sddm >/dev/null 2>&1 \
-            && ! apk info -e gdm >/dev/null 2>&1; then
+    if ! pkg_installed lightdm && ! pkg_installed sddm && ! pkg_installed gdm; then
         log_info "No hay pantalla de inicio grafica: nada que ajustar."
         return 0
     fi
 
     mkdir -p "$PANTALLA_DIR"
+    pantalla_guardar_script
+    pantalla_aplicar_script
+    chmod 755 "$PANTALLA_DIR/guardar" "$PANTALLA_DIR/aplicar" "$PANTALLA_DIR/sddm-xsetup"
+    pantalla_autoarranque
 
+    if pkg_installed lightdm || pkg_installed sddm; then
+        install_pkgs xrandr xauth
+    fi
+    pantalla_lightdm
+    pantalla_sddm
+    pantalla_gdm
+    log_info "La pantalla de inicio toma la resolucion despues del primer inicio de sesion con la resolucion nueva."
+}
+
+# "guardar": anota la resolucion de la sesion del usuario.
+pantalla_guardar_script() {
     cat > "$PANTALLA_DIR/guardar" <<'EOF'
 #!/bin/sh
 # Generado por desktop-postinstall.sh. Anota la resolucion de la sesion
@@ -2262,7 +2296,10 @@ done
 [ -z "$comodin" ] || rm -f "$comodin"
 exit 0
 EOF
+}
 
+# "aplicar": la aplica al abrir la pantalla de inicio (LightDM y SDDM).
+pantalla_aplicar_script() {
     cat > "$PANTALLA_DIR/aplicar" <<'EOF'
 #!/bin/sh
 # Generado por desktop-postinstall.sh. Corre como root al abrir la
@@ -2324,8 +2361,10 @@ EOF
 [ -x /usr/share/sddm/scripts/Xsetup ] && exec /usr/share/sddm/scripts/Xsetup
 exit 0
 EOF
-    chmod 755 "$PANTALLA_DIR/guardar" "$PANTALLA_DIR/aplicar" "$PANTALLA_DIR/sddm-xsetup"
+}
 
+# Autoarranque de "guardar" en las sesiones (GNOME usa monitors.xml).
+pantalla_autoarranque() {
     mkdir -p /etc/xdg/autostart
     cat > /etc/xdg/autostart/pantalla-inicio.desktop <<EOF
 [Desktop Entry]
@@ -2336,11 +2375,10 @@ NoDisplay=true
 NotShowIn=GNOME;
 X-GNOME-Autostart-enabled=true
 EOF
+}
 
-    if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1; then
-        install_pkgs xrandr xauth
-    fi
-    if apk info -e lightdm >/dev/null 2>&1; then
+pantalla_lightdm() {
+    if pkg_installed lightdm; then
         mkdir -p /etc/lightdm/lightdm.conf.d
         cat > /etc/lightdm/lightdm.conf.d/50-pantalla-inicio.conf <<EOF
 # Generado por desktop-postinstall.sh: resolucion elegida por el usuario.
@@ -2349,7 +2387,10 @@ display-setup-script=$PANTALLA_DIR/aplicar
 EOF
         log_ok "LightDM usara la resolucion de la ultima sesion."
     fi
-    if apk info -e sddm >/dev/null 2>&1; then
+}
+
+pantalla_sddm() {
+    if pkg_installed sddm; then
         mkdir -p /etc/sddm.conf.d
         # Plasma pone la pantalla de inicio de SDDM sobre Wayland (kwin),
         # donde no hay un paso para aplicar la resolucion: se usa la
@@ -2357,14 +2398,14 @@ EOF
         # Xorg; si no se pudo instalar, SDDM se deja como estaba (sin
         # Xorg la pantalla de inicio no apareceria).
         if { [ ! -x /usr/libexec/Xorg ] && [ ! -x /usr/bin/Xorg ]; } \
-                || ! apk info -e xf86-input-libinput >/dev/null 2>&1; then
+                || ! pkg_installed xf86-input-libinput; then
             install_pkgs xorg-server xf86-input-libinput
         fi
         servidor=""
         # Hace falta Xorg y su controlador de teclado y raton (libinput);
         # la pantalla usa modesetting, que viene con Xorg.
         if { [ -x /usr/libexec/Xorg ] || [ -x /usr/bin/Xorg ]; } \
-                && apk info -e xf86-input-libinput >/dev/null 2>&1; then
+                && pkg_installed xf86-input-libinput; then
             servidor="[General]
 DisplayServer=x11
 "
@@ -2376,7 +2417,10 @@ DisplayCommand=$PANTALLA_DIR/sddm-xsetup
 EOF
         log_ok "SDDM usara la resolucion de la ultima sesion."
     fi
-    if apk info -e gdm >/dev/null 2>&1; then
+}
+
+pantalla_gdm() {
+    if pkg_installed gdm; then
         cat > /etc/init.d/pantalla-inicio-gdm <<'EOF'
 #!/sbin/openrc-run
 # Generado por desktop-postinstall.sh. Copia la configuracion de pantallas
@@ -2421,10 +2465,8 @@ EOF
             || log_warn "No se pudo habilitar 'pantalla-inicio-gdm'."
         log_ok "GDM usara la resolucion de la ultima sesion de GNOME."
     fi
-    log_info "La pantalla de inicio toma la resolucion despues del primer inicio de sesion con la resolucion nueva."
 }
 
-# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # BLOQUE 27: Acceso directo de actualizacion en el menu de aplicaciones
 # ------------------------------------------------------------------------------
@@ -2456,11 +2498,25 @@ setup_update_shortcut() {
         return 0
     fi
 
-    # util-linux-misc trae 'script', necesario mas abajo en
-    # alpine-update-root.sh para forzar a apk/flatpak a comportarse como
+    shortcut_install_deps
+    shortcut_add_wheel
+    shortcut_write_root_script
+    shortcut_write_launcher
+    shortcut_prepare_log
+    shortcut_write_desktop_file
+
+    log_ok "Acceso directo creado: aparecera como 'Actualizar el sistema' en el menu de aplicaciones."
+    log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
+    log_info "Si hay una version estable nueva de Alpine, el boton preguntara antes si se quiere cambiar a ella."
+}
+
+# Programas que usan el lanzador y el agente de autenticacion polkit.
+shortcut_install_deps() {
+    # util-linux-misc trae 'script', necesario en alpine-update-root.sh
+    # (shortcut_write_root_script) para forzar a apk/flatpak a comportarse como
     # si escribieran a una terminal real.
     # coreutils trae la version de 'tail' con soporte para --pid, usada
-    # mas abajo para que la ventana de progreso sepa cuando terminar sola
+    # en el lanzador (shortcut_write_launcher) para que la ventana de progreso sepa cuando terminar sola
     # (el 'tail' de BusyBox, el de por defecto en Alpine, no tiene esa
     # opcion).
     install_pkgs zenity util-linux-misc coreutils
@@ -2481,7 +2537,10 @@ setup_update_shortcut() {
     if [ "$DE_MATE" = "yes" ]; then
         install_pkgs mate-polkit
     fi
+}
 
+# pkexec pide la contrasena del propio usuario solo si esta en "wheel".
+shortcut_add_wheel() {
     if [ -z "$TARGET_USER" ]; then
         log_warn "No se determino un usuario estandar; el acceso directo se creara igual, pero verifica manualmente que el usuario este en el grupo 'wheel' para que pkexec pida solo su propia contrasena."
     else
@@ -2489,7 +2548,10 @@ setup_update_shortcut() {
             adduser "$TARGET_USER" wheel && log_ok "Usuario '$TARGET_USER' agregado al grupo 'wheel' (requerido por pkexec)." || log_warn "No se pudo agregar '$TARGET_USER' al grupo 'wheel'."
         fi
     fi
+}
 
+# alpine-update-root.sh: el trabajo como root (apk + flatpak).
+shortcut_write_root_script() {
     cat > /usr/local/bin/alpine-update-root.sh <<'INNEREOF'
 #!/bin/sh
 # Ejecutado como root via pkexec. Imprime a stdout/stderr a proposito
@@ -2666,7 +2728,10 @@ exit "$apk_status"
 INNEREOF
     chmod 755 /usr/local/bin/alpine-update-root.sh
     chown root:root /usr/local/bin/alpine-update-root.sh
+}
 
+# alpine-update-launcher.sh: la parte grafica, como el usuario.
+shortcut_write_launcher() {
     cat > /usr/local/bin/alpine-update-launcher.sh <<'INNEREOF'
 #!/bin/sh
 # Corre como el usuario normal; pide autenticacion via pkexec y muestra
@@ -2867,16 +2932,21 @@ fi
 INNEREOF
     chmod 755 /usr/local/bin/alpine-update-launcher.sh
     chown root:root /usr/local/bin/alpine-update-launcher.sh
+}
 
+shortcut_prepare_log() {
     # CORRECCION: el lanzador corre como el usuario normal, que NO puede
     # escribir en /var/log. Sin esto, 'tee -a' fallaba en silencio: la
     # ventana funcionaba, pero el log nunca se guardaba. Se crea el
     # archivo perteneciente al grupo 'wheel' (al que el usuario ya se
-    # agrego arriba) con permiso de escritura para el grupo.
+    # agrego en shortcut_add_wheel) con permiso de escritura para el grupo.
     touch /var/log/alpine-update.log
     chown root:wheel /var/log/alpine-update.log
     chmod 664 /var/log/alpine-update.log
+}
 
+# Entrada del menu de aplicaciones.
+shortcut_write_desktop_file() {
     mkdir -p /usr/share/applications
     cat > /usr/share/applications/alpine-update.desktop <<'INNEREOF'
 [Desktop Entry]
@@ -2889,12 +2959,9 @@ Terminal=false
 Categories=System;
 StartupNotify=true
 INNEREOF
-
-    log_ok "Acceso directo creado: aparecera como 'Actualizar el sistema' en el menu de aplicaciones."
-    log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
-    log_info "Si hay una version estable nueva de Alpine, el boton preguntara antes si se quiere cambiar a ella."
 }
 
+# ------------------------------------------------------------------------------
 # BLOQUE 28: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
@@ -2919,7 +2986,7 @@ setup_user_groups() {
 # ------------------------------------------------------------------------------
 # BLOQUE 29: Menu de casillas con todas las decisiones al inicio
 # ------------------------------------------------------------------------------
-# Antes, las 9 preguntas aparecian repartidas a lo largo de una ejecucion
+# Antes, las 10 preguntas aparecian repartidas a lo largo de una ejecucion
 # larga, obligando a vigilar la terminal de principio a fin. Aqui se
 # reunen en UNA pantalla al inicio (casillas con 'dialog', que funciona
 # tanto en una consola TTY como en una terminal grafica), se confirma un
@@ -2936,8 +3003,6 @@ setup_user_groups() {
 # Si el menu no se puede mostrar (sin terminal interactiva, o sin poder
 # instalar 'dialog'), las variables OPT_* quedan vacias y want() vuelve
 # a preguntar cada opcion por separado, como antes.
-MENU_USED="no"
-
 # Convierte yes/no al formato de estado de una casilla de dialog.
 menu_state() {
     if [ "$1" = "yes" ]; then echo on; else echo off; fi
@@ -2957,6 +3022,37 @@ select_options_menu() {
         return 0
     fi
 
+    menu_defaults
+
+    while :; do
+        menu_checklist
+        menu_read_selection
+
+        # Portatil Optimus: elegir que hacer con la NVIDIA. "Volver"
+        # regresa a la pantalla de casillas.
+        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+            menu_nvidia_mode || continue
+        fi
+
+        menu_summary
+
+        if dialog --title "Confirmar" \
+                --yes-label "Comenzar" --no-label "Volver" \
+                --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
+                0 0; then
+            break
+        fi
+        # "Volver" (o ESC): se repite el menu con las marcas actuales.
+    done
+
+    clear 2>/dev/null || true
+    # '%b' interpreta los \n del resumen sin usarlo como cadena de
+    # formato: si una descripcion llegara a contener un '%', printf no
+    # lo confundiria con una directiva (antes: error y linea cortada).
+    log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
+}
+
+menu_defaults() {
     # Valores por defecto (casillas premarcadas). Criterios:
     #  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
     #    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
@@ -2980,117 +3076,112 @@ select_options_menu() {
     OPT_ONLYOFFICE=no
     OPT_CHROME=no
     OPT_UPDATE_SHORTCUT=yes
+}
 
-    while :; do
-        # Se arma la lista de casillas con los valores ACTUALES: si el
-        # usuario vuelve desde el resumen, encuentra lo que ya habia
-        # marcado, no los valores por defecto.
-        set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
-        if [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ]; then
-            set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
-        fi
-        set -- "$@" \
-            GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
-            CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
-            LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
-            FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
-            FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
-            ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
-            CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
-            UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
+# Muestra la pantalla de casillas y deja las etiquetas elegidas en $sel.
+# "Salir" termina el script sin hacer cambios.
+menu_checklist() {
+    # Se arma la lista de casillas con los valores ACTUALES: si el
+    # usuario vuelve desde el resumen, encuentra lo que ya habia
+    # marcado, no los valores por defecto.
+    set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
+    if [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ]; then
+        set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
+    fi
+    set -- "$@" \
+        GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
+        CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
+        LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
+        FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
+        FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
+        ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
+        CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+        UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
 
-        # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
-        # segun el contenido y la pantalla disponible. Con un tamano fijo
-        # (antes 20x72), en pantallas amplias las descripciones quedaban
-        # cortadas; en pantallas chicas dialog igual recorta la ventana y
-        # la lista se vuelve desplazable, asi que no se pierde ninguna
-        # opcion.
-        # --no-tags: oculta los nombres internos (KEYBOARD, CUPS...), que
-        # no le dicen nada al usuario y ocupaban ~17 columnas -- sin ellos,
-        # todas las descripciones caben completas en una consola de 80
-        # columnas. dialog SIGUE devolviendo esos nombres al confirmar, que
-        # es lo que el script lee mas abajo (verificado).
-        if ! sel="$(dialog --stdout --separate-output --no-tags \
-                --backtitle "Configuracion post-instalacion de Alpine Linux" \
-                --title "Acciones a realizar" \
-                --ok-label "Continuar" --cancel-label "Salir" \
-                --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
-                0 0 0 "$@")"; then
-            clear 2>/dev/null || true
-            log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
-            trap - EXIT INT TERM
-            exit 0
-        fi
+    # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
+    # segun el contenido y la pantalla disponible. Con un tamano fijo
+    # (antes 20x72), en pantallas amplias las descripciones quedaban
+    # cortadas; en pantallas chicas dialog igual recorta la ventana y
+    # la lista se vuelve desplazable, asi que no se pierde ninguna
+    # opcion.
+    # --no-tags: oculta los nombres internos (KEYBOARD, CUPS...), que
+    # no le dicen nada al usuario y ocupaban ~17 columnas -- sin ellos,
+    # todas las descripciones caben completas en una consola de 80
+    # columnas. dialog SIGUE devolviendo esos nombres al confirmar, que
+    # es lo que el script lee mas abajo (verificado).
+    if ! sel="$(dialog --stdout --separate-output --no-tags \
+            --backtitle "Configuracion post-instalacion de Alpine Linux" \
+            --title "Acciones a realizar" \
+            --ok-label "Continuar" --cancel-label "Salir" \
+            --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
+            0 0 0 "$@")"; then
+        clear 2>/dev/null || true
+        log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
+        trap - EXIT INT TERM
+        exit 0
+    fi
+}
 
-        # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
-        # Las etiquetas se validan contra una lista fija antes del eval.
-        for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
-            eval "OPT_$k=no"
-        done
-        for tag in $sel; do
-            case "$tag" in
-                KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
-                    eval "OPT_$tag=yes" ;;
-            esac
-        done
-
-        # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
-        if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ]; then
-            OPT_FLATPAK=yes
-        fi
-
-        # Portatil Optimus: elegir que hacer con la NVIDIA. "Volver"
-        # regresa a la pantalla de casillas.
-        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
-            if ! nv_sel="$(dialog --stdout --no-tags \
-                    --backtitle "Configuracion post-instalacion de Alpine Linux" \
-                    --title "Grafica NVIDIA (portatil con graficos hibridos)" \
-                    --ok-label "Continuar" --cancel-label "Volver" \
-                    --radiolist "Este portatil tiene una grafica integrada y una NVIDIA.\nFLECHAS para moverse, ESPACIO elige, ENTER continua." \
-                    0 0 0 \
-                    optimus "Apagarla y usar la integrada (ahorro, recomendado)" "$( [ "$OPT_NVIDIA_MODE" = optimus ] && echo on || echo off)" \
-                    safe "Bloquearla por completo (sin driver)" "$( [ "$OPT_NVIDIA_MODE" = safe ] && echo on || echo off)" \
-                    active "Dejarla activa con nouveau (riesgo en tarjetas viejas)" "$( [ "$OPT_NVIDIA_MODE" = active ] && echo on || echo off)")"; then
-                continue
-            fi
-            case "$nv_sel" in
-                optimus|safe|active) OPT_NVIDIA_MODE="$nv_sel" ;;
-            esac
-        fi
-
-        summary=""
-        [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
-        [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
-        case "$OPT_NVIDIA_MODE" in
-            optimus) summary="$summary\n  - NVIDIA apagada, todo en la grafica integrada (ahorro)" ;;
-            safe)    summary="$summary\n  - NVIDIA bloqueada (modo seguro)" ;;
-            active)  summary="$summary\n  - NVIDIA activa con nouveau" ;;
+# Pasa las etiquetas de $sel a las variables OPT_*.
+menu_read_selection() {
+    # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
+    # Las etiquetas se validan contra una lista fija antes del eval.
+    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
+        eval "OPT_$k=no"
+    done
+    for tag in $sel; do
+        case "$tag" in
+            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
+                eval "OPT_$tag=yes" ;;
         esac
-        [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
-        [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
-        [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
-        [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
-        [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
-        [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
-        [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
-        [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
-        [ -z "$summary" ] && summary="\n  (ninguna opcional)"
-
-        if dialog --title "Confirmar" \
-                --yes-label "Comenzar" --no-label "Volver" \
-                --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
-                0 0; then
-            break
-        fi
-        # "Volver" (o ESC): se repite el menu con las marcas actuales.
     done
 
-    clear 2>/dev/null || true
-    MENU_USED="yes"
-    # '%b' interpreta los \n del resumen sin usarlo como cadena de
-    # formato: si una descripcion llegara a contener un '%', printf no
-    # lo confundiria con una directiva (antes: error y linea cortada).
-    log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
+    # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
+    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ]; then
+        OPT_FLATPAK=yes
+    fi
+}
+
+# Portatil Optimus: segunda pantalla con los tres modos de la NVIDIA.
+# Devuelve 1 si se eligio "Volver".
+menu_nvidia_mode() {
+    if ! nv_sel="$(dialog --stdout --no-tags \
+            --backtitle "Configuracion post-instalacion de Alpine Linux" \
+            --title "Grafica NVIDIA (portatil con graficos hibridos)" \
+            --ok-label "Continuar" --cancel-label "Volver" \
+            --radiolist "Este portatil tiene una grafica integrada y una NVIDIA.\nFLECHAS para moverse, ESPACIO elige, ENTER continua." \
+            0 0 0 \
+            optimus "Apagarla y usar la integrada (ahorro, recomendado)" "$( [ "$OPT_NVIDIA_MODE" = optimus ] && echo on || echo off)" \
+            safe "Bloquearla por completo (sin driver)" "$( [ "$OPT_NVIDIA_MODE" = safe ] && echo on || echo off)" \
+            active "Dejarla activa con nouveau (riesgo en tarjetas viejas)" "$( [ "$OPT_NVIDIA_MODE" = active ] && echo on || echo off)")"; then
+        return 1
+    fi
+    case "$nv_sel" in
+        optimus|safe|active) OPT_NVIDIA_MODE="$nv_sel" ;;
+    esac
+}
+
+# Arma en $summary la lista de lo que se va a instalar.
+menu_summary() {
+    summary=""
+    [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
+    [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
+    case "$OPT_NVIDIA_MODE" in
+        optimus) summary="$summary\n  - NVIDIA apagada, todo en la grafica integrada (ahorro)" ;;
+        safe)    summary="$summary\n  - NVIDIA bloqueada (modo seguro)" ;;
+        active)  summary="$summary\n  - NVIDIA activa con nouveau" ;;
+    esac
+    [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
+    [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
+    [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
+    [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
+    [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
+    [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
+    [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
+    [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
+    if [ -z "$summary" ]; then
+        summary="\n  (ninguna opcional)"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -3141,7 +3232,7 @@ set_default_app() {
 install_daily_apps() {
     log_info "== Aplicaciones de uso diario =="
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
+    if ! has_desktop; then
         log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
         return 0
     fi
@@ -3255,7 +3346,7 @@ main() {
     setup_usb_automount
     setup_printing
     install_archive_tools
-    setup_locale_es
+    setup_locale
     install_fonts
     install_libreoffice
     install_daily_apps
