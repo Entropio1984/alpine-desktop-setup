@@ -200,6 +200,7 @@ DE_PLASMA="no"
 DE_GNOME="no"
 DE_MATE="no"
 DE_LXQT="no"
+DE_SWAY="no"
 
 detect_desktop_environment() {
     log_info "== Detectando entorno de escritorio instalado =="
@@ -216,8 +217,9 @@ detect_desktop_environment() {
     apk info -e gnome-shell >/dev/null 2>&1 && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
     apk info -e mate-session-manager >/dev/null 2>&1 && { DE_MATE="yes"; log_ok "MATE detectado."; }
     apk info -e lxqt-session >/dev/null 2>&1 && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
+    apk info -e sway >/dev/null 2>&1 && { DE_SWAY="yes"; log_ok "Sway detectado."; }
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ]; then
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
         log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
     fi
 }
@@ -335,9 +337,266 @@ setup_applets() {
         install_pkg "pavucontrol-qt"
     fi
 
+    if [ "$DE_SWAY" = "yes" ]; then
+        setup_sway_barra
+    fi
+
     rc-update add networkmanager default || log_warn "No se pudo agregar 'networkmanager' al runlevel default."
 
     log_ok "Arquitectura de red y audio acoplada al entorno visual."
+}
+
+# Sway trae de fabrica una barra que solo muestra la fecha: sin wifi, sin
+# volumen y sin menu de aplicaciones. Se cambia por waybar, con:
+#   - boton de menu (fuzzel, muestra los programas instalados),
+#   - boton con la lista de atajos de teclado (sway-atajos),
+#   - icono de wifi de NetworkManager (nm-applet) en la bandeja,
+#   - volumen (clic: pavucontrol; rueda del raton: subir/bajar),
+#   - red, bateria, brillo y reloj.
+# Sway tampoco lee /etc/xdg/autostart, asi que el audio y nm-applet se
+# arrancan desde /etc/sway/config.d (que el config de Sway incluye al final).
+setup_sway_barra() {
+    log_info "Sway: barra con menu de aplicaciones, wifi y volumen (waybar)..."
+    install_pkgs waybar font-awesome fuzzel network-manager-applet pavucontrol polkit-gnome
+
+    if ! apk info -e waybar >/dev/null 2>&1; then
+        log_warn "Sway: no se pudo instalar waybar; queda la barra original."
+        return 0
+    fi
+
+    mkdir -p /etc/sway/config.d
+    {
+        echo "# Lazaro Linux / desktop-postinstall.sh: barra y programas de la sesion."
+        if [ -x /usr/libexec/pipewire-launcher ]; then
+            echo "exec /usr/libexec/pipewire-launcher"
+        elif command -v pulseaudio >/dev/null 2>&1; then
+            echo "exec pulseaudio --start"
+        fi
+        echo "exec nm-applet --indicator"
+        # Ventana de contrasena para acciones de administrador (wifi
+        # protegido, actualizaciones); Sway no trae una propia.
+        echo "exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
+        echo "# Super+D abre el mismo menu que el boton de la barra."
+        echo "bindsym --no-warn \$mod+d exec fuzzel"
+        echo "# Super+F1 muestra la lista de atajos de teclado."
+        echo "bindsym --no-warn \$mod+F1 exec sway-atajos"
+        echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
+        echo "bar bar-0 swaybar_command waybar"
+    } > /etc/sway/config.d/50-lazaro-barra.conf
+
+    # Lista de atajos de teclado (boton de teclado en la barra y Super+F1),
+    # leida de la configuracion real de Sway y con el ratón: rueda para
+    # recorrerla y se puede escribir para buscar.
+    mkdir -p /usr/local/bin
+    cat > /usr/local/bin/sway-atajos <<'ATAJOS'
+#!/bin/sh
+# Muestra los atajos de teclado de Sway (boton de la barra y Super+F1).
+# Lee la misma configuracion que Sway: la del usuario si existe; si no,
+# la del sistema, mas /etc/sway/config.d.
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/sway/config"
+[ -f "$conf" ] || conf="${SWAY_ATAJOS_CONFIG:-/etc/sway/config}"
+idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+case "$idioma" in es*) es=1 ;; *) es=0 ;; esac
+extra=""
+for f in /etc/sway/config.d/*; do
+    [ -f "$f" ] && extra="$extra $f"
+done
+
+lista() {
+    # shellcheck disable=SC2086
+    awk -v es="$es" '
+    function nombre_tecla(k,   n, i, p, out, t) {
+        n = split(k, p, "[+]"); out = ""
+        for (i = 1; i <= n; i++) {
+            t = p[i]
+            if (t == "Mod4") t = "Super"
+            else if (t == "Mod1") t = "Alt"
+            else if (t == "Shift") t = es ? "Mayús" : "Shift"
+            else if (t == "Control" || t == "Ctrl") t = "Ctrl"
+            else if (t == "Return") t = es ? "Intro" : "Enter"
+            else if (t == "space") t = es ? "Espacio" : "Space"
+            else if (t == "minus") t = "-"
+            else if (t == "Left") t = "←"
+            else if (t == "Right") t = "→"
+            else if (t == "Up") t = "↑"
+            else if (t == "Down") t = "↓"
+            else if (t == "Escape") t = "Esc"
+            else if (t == "Print") t = es ? "ImprPant" : "Print"
+            else if (t ~ /^XF86AudioRaiseVolume$/) t = es ? "Tecla subir volumen" : "Volume up key"
+            else if (t ~ /^XF86AudioLowerVolume$/) t = es ? "Tecla bajar volumen" : "Volume down key"
+            else if (t ~ /^XF86AudioMute$/) t = es ? "Tecla silenciar" : "Mute key"
+            else if (t ~ /^XF86AudioMicMute$/) t = es ? "Tecla silenciar micrófono" : "Mic mute key"
+            else if (t ~ /^XF86MonBrightnessUp$/) t = es ? "Tecla subir brillo" : "Brightness up key"
+            else if (t ~ /^XF86MonBrightnessDown$/) t = es ? "Tecla bajar brillo" : "Brightness down key"
+            else if (length(t) == 1) t = toupper(t)
+            out = out (out == "" ? "" : "+") t
+        }
+        return out
+    }
+    function lado(d) {
+        if (d == "left") return "la izquierda"
+        if (d == "right") return "la derecha"
+        if (d == "up") return "arriba"
+        return "abajo"
+    }
+    function describir(c,   w, n) {
+        if (!es) return c
+        n = split(c, w, " ")
+        if (c ~ /^exec (foot|\$term)/) return "Abrir la terminal"
+        if (c ~ /^exec (fuzzel|wmenu|\$menu|dmenu|wofi)/) return "Menú de aplicaciones"
+        if (c ~ /^exec sway-atajos/) return "Ver esta lista de atajos"
+        if (c ~ /^exec swaynag.*exit/) return "Salir de Sway (cerrar sesión)"
+        if (c ~ /set-sink-mute/) return "Silenciar el sonido"
+        if (c ~ /set-sink-volume.*-/) return "Bajar el volumen"
+        if (c ~ /set-sink-volume/) return "Subir el volumen"
+        if (c ~ /set-source-mute/) return "Silenciar el micrófono"
+        if (c ~ /brightnessctl.*-$/) return "Bajar el brillo"
+        if (c ~ /brightnessctl/) return "Subir el brillo"
+        if (c ~ /^exec grim/) return "Captura de pantalla (se guarda en la carpeta personal)"
+        if (c == "kill") return "Cerrar la ventana"
+        if (c == "reload") return "Recargar la configuración de Sway"
+        if (w[1] == "focus" && w[2] ~ /^(left|right|up|down)$/) return "Pasar a la ventana de " lado(w[2])
+        if (w[1] == "move" && w[2] ~ /^(left|right|up|down)$/) return "Mover la ventana hacia " lado(w[2])
+        if (c ~ /^workspace number/) return "Ir al escritorio " w[3]
+        if (c ~ /^move container to workspace number/) return "Mover la ventana al escritorio " w[6]
+        if (c == "splith") return "Abrir la próxima ventana al lado"
+        if (c == "splitv") return "Abrir la próxima ventana debajo"
+        if (c == "layout stacking") return "Ventanas apiladas"
+        if (c == "layout tabbed") return "Ventanas en pestañas"
+        if (c == "layout toggle split") return "Cambiar entre lado a lado y una debajo de otra"
+        if (c == "fullscreen") return "Pantalla completa (sí/no)"
+        if (c == "floating toggle") return "Ventana flotante (sí/no)"
+        if (c == "focus mode_toggle") return "Cambiar entre ventanas flotantes y fijas"
+        if (c == "focus parent") return "Seleccionar el grupo de ventanas"
+        if (c == "move scratchpad") return "Esconder la ventana (cajón)"
+        if (c == "scratchpad show") return "Mostrar la ventana escondida (cajón)"
+        if (c ~ /^mode "?resize"?$/) return "Modo cambiar tamaño (salir con Esc)"
+        if (c ~ /^mode "?default"?$/) return "Salir del modo cambiar tamaño"
+        if (c ~ /^resize shrink width/) return "Más angosta"
+        if (c ~ /^resize grow width/) return "Más ancha"
+        if (c ~ /^resize shrink height/) return "Más baja"
+        if (c ~ /^resize grow height/) return "Más alta"
+        return c
+    }
+    function expandir(s,   k) {
+        for (k in var) {
+            while (index(s, "$" k " ") || substr(s, length(s) - length(k)) == "$" k || index(s, "$" k "+")) {
+                s = substr(s, 1, index(s, "$" k) - 1) var[k] substr(s, index(s, "$" k) + length(k) + 1)
+            }
+        }
+        return s
+    }
+    {
+        sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+        if ($0 ~ /^#/ || $0 == "") next
+        if ($1 == "set" && substr($2, 1, 1) == "$") {
+            v = $0; sub(/^set[ \t]+\$[^ \t]+[ \t]+/, "", v)
+            var[substr($2, 2)] = v; next
+        }
+        if ($1 == "mode" && $NF == "{") { modo = $2; gsub(/"/, "", modo); next }
+        if ($0 == "}") { modo = ""; next }
+        if ($1 != "bindsym") next
+        i = 2
+        while (substr($i, 1, 2) == "--") i++
+        tecla = expandir($i)
+        cmd = $0
+        sub(/^bindsym[ \t]+/, "", cmd)
+        while (cmd ~ /^--/) sub(/^--[^ \t]+[ \t]+/, "", cmd)
+        sub(/^[^ \t]+[ \t]+/, "", cmd)
+        cmd = expandir(cmd)
+        k = (modo == "" ? "" : modo ":") tecla
+        if (!(k in desc)) orden[++total] = k
+        desc[k] = describir(cmd)
+        etiqueta[k] = (modo == "" ? "" : (es ? "[cambiar tamaño] " : "[" modo "] ")) nombre_tecla(tecla)
+    }
+    END {
+        for (j = 1; j <= total; j++) {
+            k = orden[j]
+            printf "%s  →  %s\n", etiqueta[k], desc[k]
+        }
+    }' "$conf" $extra
+}
+
+if [ "${1:-}" = "--lista" ] || [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    lista
+else
+    if [ "$es" = 1 ]; then prompt="Atajos (escribe para buscar): "; else prompt="Shortcuts: "; fi
+    lista | fuzzel --dmenu --width 70 --lines 25 --prompt "$prompt" >/dev/null
+fi
+ATAJOS
+    chmod 755 /usr/local/bin/sway-atajos
+
+    # Configuracion de waybar para el usuario y para los usuarios nuevos.
+    # Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
+    for base in /etc/skel "$TARGET_HOME"; do
+        [ -n "$base" ] || continue
+        config_nuevo=no
+        [ -d "$base/.config" ] || config_nuevo=yes
+        waybar_conf="$base/.config/waybar/config.jsonc"
+        # Si ya hay una configuracion (propia del usuario), se respeta.
+        if [ -e "$waybar_conf" ] || [ -L "$waybar_conf" ] || [ -L "$base/.config/waybar" ]; then
+            log_info "Sway: ya existe $waybar_conf; no se cambia."
+            continue
+        fi
+        mkdir -p "$base/.config/waybar"
+        cat > "$waybar_conf" <<'WAYBAR'
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "modules-left": ["custom/menu", "custom/atajos", "sway/workspaces", "sway/mode"],
+    "modules-center": ["clock"],
+    "modules-right": ["tray", "pulseaudio", "network", "backlight", "battery"],
+    "custom/menu": {
+        "format": "    ",
+        "tooltip": false,
+        "on-click": "fuzzel"
+    },
+    "custom/atajos": {
+        "format": " \uf11c ",
+        "tooltip": false,
+        "on-click": "sway-atajos"
+    },
+    "clock": {
+        "format": "{:%a %d %b  %H:%M}",
+        "tooltip-format": "<tt>{calendar}</tt>"
+    },
+    "tray": { "spacing": 8 },
+    "pulseaudio": {
+        "format": "{icon} {volume}%",
+        "format-muted": "",
+        "format-icons": { "default": ["", "", ""] },
+        "on-click": "pavucontrol"
+    },
+    "network": {
+        "format-wifi": " {signalStrength}%",
+        "format-ethernet": "",
+        "format-disconnected": "",
+        "tooltip-format": "{ifname} {ipaddr}",
+        "tooltip-format-wifi": "{essid} {ipaddr}",
+        "on-click": "foot nmtui"
+    },
+    "backlight": {
+        "format": " {percent}%"
+    },
+    "battery": {
+        "states": { "warning": 25, "critical": 10 },
+        "format": "{icon} {capacity}%",
+        "format-charging": " {capacity}%",
+        "format-icons": ["", "", "", "", ""]
+    }
+}
+WAYBAR
+        if [ "$base" = "$TARGET_HOME" ] && [ -n "$TARGET_USER" ]; then
+            grupo="$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")"
+            chown -h "$TARGET_USER:$grupo" "$base/.config/waybar" "$waybar_conf" \
+                || log_warn "No se pudo dar la configuracion de waybar a '$TARGET_USER'."
+            if [ "$config_nuevo" = yes ]; then
+                chown "$TARGET_USER:$grupo" "$base/.config" || true
+            fi
+        fi
+    done
+    log_ok "Sway: barra waybar con menu, wifi y volumen lista."
 }
 
 # ------------------------------------------------------------------------------
@@ -1150,7 +1409,7 @@ setup_earlyoom() {
 # siempre (Bloque 19), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         if rc-update show default 2>/dev/null | grep -q '^ *acpid '; then
             rc-update del acpid default >/dev/null 2>&1 || true
             log_info "acpid quitado del arranque: con escritorio, elogind maneja el boton de encendido y la tapa (igual que hace setup-desktop)."
@@ -1645,6 +1904,9 @@ setup_flatpak() {
 setup_display_manager() {
     log_info "== Detectando y habilitando Gestor de Inicio de Sesión =="
 
+    setup_greetd_sway
+    setup_greetd_idioma
+
     dm_installed=""
     apk info -e lightdm >/dev/null 2>&1 && dm_installed="$dm_installed lightdm"
     apk info -e sddm >/dev/null 2>&1 && dm_installed="$dm_installed sddm"
@@ -1675,6 +1937,54 @@ setup_display_manager() {
     log_ok "Display Manager '$chosen' habilitado en el runlevel default."
 }
 
+# Sway: setup-desktop de Alpine no instala pantalla de inicio para Sway
+# (hay que entrar por consola y escribir "sway"). Se le pone la misma que
+# Alpine usa para XFCE Wayland: greetd con gtkgreet (dentro de cage), que
+# es liviana y no necesita Xorg. Si ya hay otra pantalla de inicio (por
+# ejemplo, Sway junto a XFCE), Sway se agrega como sesion en greetd solo
+# si greetd es la que esta instalada.
+setup_greetd_sway() {
+    [ "$DE_SWAY" = "yes" ] || return 0
+    if apk info -e lightdm >/dev/null 2>&1 || apk info -e sddm >/dev/null 2>&1 \
+            || apk info -e gdm >/dev/null 2>&1; then
+        log_info "Sway: ya hay otra pantalla de inicio instalada; no se agrega greetd."
+        return 0
+    fi
+
+    log_info "Sway: instalando pantalla de inicio grafica (greetd + gtkgreet)..."
+    install_pkg "greetd-gtkgreet"
+    if ! apk info -e greetd-gtkgreet >/dev/null 2>&1; then
+        log_warn "Sway: no se pudo instalar greetd-gtkgreet; se entrara por consola escribiendo 'sway'."
+        return 0
+    fi
+    # Mismos pasos que setup-desktop hace para XFCE Wayland.
+    if ! grep -q '^rc_need' /etc/conf.d/greetd 2>/dev/null; then
+        echo 'rc_need="seatd dbus"' >> /etc/conf.d/greetd
+    fi
+    # Igual que el lanzador de Sway de Alpine (sway.desktop): con su propio
+    # bus de sesion, que necesitan la bandeja de la barra y el audio.
+    if ! grep -qx 'dbus-run-session sway' /etc/greetd/environments 2>/dev/null; then
+        echo "dbus-run-session sway" >> /etc/greetd/environments
+    fi
+    addgroup greetd seat 2>/dev/null || true
+    rc-update add dbus default >/dev/null 2>&1 || true
+    rc-update add greetd default || log_warn "Fallo al habilitar 'greetd'."
+    log_ok "Sway: pantalla de inicio greetd habilitada."
+}
+
+# gtkgreet corre como el usuario greetd, que no pasa por /etc/profile:
+# sin esto, la pantalla de inicio de Sway y XFCE Wayland sale en ingles.
+setup_greetd_idioma() {
+    [ -f /etc/greetd/config.toml ] || return 0
+    gtkgreet_re='^command = "\(env LANG=[^ ]* \)\{0,1\}cage -s -- gtkgreet"'
+    grep -q "$gtkgreet_re" /etc/greetd/config.toml || return 0
+    idioma_greetd="$(sed -n 's/^LANG=//p' /etc/environment 2>/dev/null | tail -n 1)"
+    [ -n "$idioma_greetd" ] || return 0
+    sed -i "s|$gtkgreet_re|command = \"env LANG=$idioma_greetd cage -s -- gtkgreet\"|" \
+        /etc/greetd/config.toml
+    log_ok "Pantalla de inicio greetd en idioma $idioma_greetd."
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 26b: La pantalla de inicio usa la resolucion elegida por el usuario
 # ------------------------------------------------------------------------------
@@ -1690,7 +2000,7 @@ setup_display_manager() {
 #   - GNOME guarda la resolucion en ~/.config/monitors.xml, el mismo
 #     formato que lee GDM: un servicio la copia al arrancar.
 # Sway y XFCE Wayland (greetd) quedan fuera: su pantalla de inicio no tiene
-# un paso donde aplicar la resolucion.
+# un paso donde aplicar la resolucion (usa la que sugiere el monitor).
 PANTALLA_DIR="/usr/local/libexec/pantalla-inicio"
 
 setup_greeter_resolution() {
@@ -2024,12 +2334,12 @@ setup_update_shortcut() {
     # de contrasena. Sin el, pkexec falla con "No authentication agent
     # found" y la actualizacion nunca empieza. Plasma (polkit-kde-agent),
     # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 19)
-    # ya traen el suyo; XFCE y MATE se cubren aqui. Ademas, el lanzador
+    # ya traen el suyo; XFCE, MATE y Sway se cubren aqui. Ademas, el lanzador
     # comprueba en cada ejecucion que el agente este CORRIENDO y lo
     # inicia si hace falta: instalar el paquete no garantiza que arranque,
     # porque el autoarranque de polkit-gnome suele estar restringido a
     # ciertos escritorios segun la distribucion.
-    if [ "$DE_XFCE" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         install_pkgs polkit-gnome
     fi
     if [ "$DE_MATE" = "yes" ]; then
@@ -2683,7 +2993,7 @@ set_default_app() {
 install_daily_apps() {
     log_info "== Aplicaciones de uso diario =="
 
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ]; then
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_PLASMA" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_SWAY" = "no" ]; then
         log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
         return 0
     fi
@@ -2695,7 +3005,7 @@ install_daily_apps() {
     if [ "$DE_PLASMA" = "yes" ]; then
         install_pkgs okular
     fi
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         install_pkgs evince
     fi
     if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
@@ -2724,14 +3034,14 @@ install_daily_apps() {
     # --- Tienda de aplicaciones ---
     # Plasma trae Discover y GNOME trae GNOME Software (los instala
     # setup-desktop). En los demas: Discover en LXQt (Qt, como el
-    # escritorio) y GNOME Software en XFCE y MATE (GTK). Ambas instalan y
+    # escritorio) y GNOME Software en XFCE, MATE y Sway (GTK). Ambas instalan y
     # actualizan paquetes de Alpine y, con Flatpak (Bloque 25), tambien
     # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
     # (install_if) cuando flatpak esta instalado.
     if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
         install_pkgs discover
     fi
-    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
+    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
         install_pkgs gnome-software gnome-software-plugin-apk2 apk-polkit-rs
     fi
 
