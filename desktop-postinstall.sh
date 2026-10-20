@@ -103,8 +103,8 @@ apk_vigilado() {
                 break
             fi
         done
-        wait "$_apk_pid"
-        _apk_rc=$?
+        _apk_rc=0
+        wait "$_apk_pid" || _apk_rc=$?
         _apk_pid=""
         [ "$_apk_quieto" -ge 120 ] || return "$_apk_rc"
         [ "$_apk_intento" -lt 3 ] || return 124
@@ -117,10 +117,10 @@ apk_vigilado() {
 # numero pudo pasar a otro programa.
 apk_detener() {
     [ -n "$_apk_pid" ] || return 0
-    kill "$_apk_pid" 2>/dev/null
+    kill "$_apk_pid" 2>/dev/null || true
     sleep 2
     if [ "$(cat "/proc/$_apk_pid/comm" 2>/dev/null)" = apk ]; then
-        kill -9 "$_apk_pid" 2>/dev/null
+        kill -9 "$_apk_pid" 2>/dev/null || true
     fi
     return 0
 }
@@ -149,8 +149,10 @@ install_pkg() {
 # gana velocidad en el caso normal sin sacrificar la resiliencia.
 install_pkgs() {
     log_info "Instalando en lote: $*"
-    apk_add "$@" 3>&1 >/dev/null 2>&1
-    _lote_rc=$?
+    # Con "set -e", el codigo de salida se toma con "||" para que un lote
+    # fallido no termine el script.
+    _lote_rc=0
+    apk_add "$@" 3>&1 >/dev/null 2>&1 || _lote_rc=$?
     if [ "$_lote_rc" -eq 0 ]; then
         for p in "$@"; do
             log_ok "'$p' instalado (lote)."
