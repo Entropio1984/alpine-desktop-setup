@@ -1897,16 +1897,15 @@ setup_flatpak() {
 # arranque), el nombre cambia con la sesion ya abierta y los programas que
 # la sesion abre despues (en MATE, el panel) no pueden conectarse a la
 # pantalla ("Authorization required"). Se le pide a OpenRC que ponga el
-# nombre antes de arrancarla.
+# nombre antes de arrancarla. OpenRC lee /etc/conf.d como un script de
+# shell, asi que se agrega una linea al final que suma "hostname" a lo que
+# el archivo ya pida, sin tener que entender como esta escrito.
 dm_tras_hostname() {
     _conf="/etc/conf.d/$1"
-    grep -qs '^rc_need=.*hostname' "$_conf" && return 0
-    if grep -qs '^rc_need=' "$_conf"; then
-        sed -i 's/^rc_need="\(.*\)"/rc_need="\1 hostname"/' "$_conf"
-    else
-        mkdir -p /etc/conf.d
-        echo 'rc_need="hostname"' >> "$_conf"
-    fi
+    _linea='rc_need="${rc_need:-} hostname"'
+    grep -qsxF "$_linea" "$_conf" && return 0
+    mkdir -p /etc/conf.d
+    printf '%s\n' "$_linea" >> "$_conf"
 }
 
 # No basta con que setup-desktop lo haya dejado instalado: hay reportes
