@@ -8,12 +8,27 @@ set -eu
 
 LOG_FILE="/var/log/desktop-postinstall.log"
 
+# Descriptor 3 = la salida normal del script. Los avisos de apk_vigilado van
+# ahi, aunque quien lo llame mande la salida de apk a otra parte.
+exec 3>&1
+
 log_info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$1" | tee -a "$LOG_FILE"; }
 log_ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$1" | tee -a "$LOG_FILE"; }
 log_warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$1" | tee -a "$LOG_FILE"; }
 log_error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" | tee -a "$LOG_FILE"; }
 
-trap 'log_error "Ocurrió un error inesperado. Abortando script."; apk_detener; exit 1' EXIT INT TERM
+# Un error no previsto (set -e) termina el script por la trampa EXIT. Ctrl+C
+# o una orden de terminar pasan por la segunda trampa, que quita la primera
+# para no mostrar dos mensajes. Los errores ya explicados usan "morir".
+trap 'apk_detener; log_error "Ocurrió un error inesperado. Abortando script."' EXIT
+trap 'trap - EXIT; apk_detener; log_error "Script interrumpido."; exit 130' INT TERM
+
+morir() {
+    trap - EXIT
+    apk_detener
+    log_error "$1"
+    exit 1
+}
 
 ask_yes_no() {
     prompt="$1"
@@ -49,8 +64,7 @@ want() {
 # ------------------------------------------------------------------------------
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        log_error "Este script debe ejecutarse como root."
-        exit 1
+        morir "Este script debe ejecutarse como root."
     fi
     log_ok "Permisos de superusuario verificados."
 }
@@ -60,7 +74,7 @@ check_root() {
 # ------------------------------------------------------------------------------
 update_system() {
     log_info "Actualizando índice de paquetes..."
-    apk_vigilado update 3>&1 || { log_error "Fallo al actualizar apk."; exit 1; }
+    apk_vigilado update || morir "Fallo al actualizar apk."
 }
 
 # apk_vigilado: ejecuta apk (con los argumentos dados) sin que se quede
@@ -75,9 +89,9 @@ update_system() {
 # scripts de instalacion, como mkinitfs, pueden tardar), se corta y se
 # reintenta (hasta 3 veces). apk confirma cada paquete al terminar de
 # instalarlo, asi que el reintento sigue donde quedo.
-# El aviso de reintento va al descriptor 3 (quien llama hace "3>&1"), porque
-# los que llaman suelen mandar la salida de apk a /dev/null. Si los 3
-# intentos se quedan colgados, devuelve 124.
+# El aviso de reintento va al descriptor 3 (ver arriba), porque los que
+# llaman suelen mandar la salida de apk al registro. Si los 3 intentos se
+# quedan colgados, devuelve 124.
 _apk_pid=""
 apk_vigilado() {
     _apk_intento=1
@@ -132,7 +146,7 @@ apk_add() {
 install_pkg() {
     pkg="$1"
     log_info "Instalando: $pkg"
-    if apk_add "$pkg" 3>&1 >/dev/null 2>&1; then
+    if apk_add "$pkg" >>"$LOG_FILE" 2>&1; then
         log_ok "'$pkg' instalado."
     else
         log_warn "Fallo al instalar '$pkg' (puede no existir en tu rama/arquitectura)."
@@ -152,7 +166,7 @@ install_pkgs() {
     # Con "set -e", el codigo de salida se toma con "||" para que un lote
     # fallido no termine el script.
     _lote_rc=0
-    apk_add "$@" 3>&1 >/dev/null 2>&1 || _lote_rc=$?
+    apk_add "$@" >>"$LOG_FILE" 2>&1 || _lote_rc=$?
     if [ "$_lote_rc" -eq 0 ]; then
         for p in "$@"; do
             log_ok "'$p' instalado (lote)."
@@ -704,13 +718,20 @@ detect_wifi_hardware() {
         net_usb="$(lsusb | grep -Ei '802\.11|wlan|wi-?fi|wireless network|network adapter' || true)"
     fi
 
-    WIFI_INFO="$net_pci
-$net_usb"
-
     if [ -z "$net_pci" ] && [ -z "$net_usb" ]; then
-        log_warn "No se detecto informacion de adaptadores de red (PCI ni USB)."
+        if command -v lspci >/dev/null 2>&1 && command -v lsusb >/dev/null 2>&1; then
+            log_info "No se detecto ningun adaptador de red inalambrica (PCI ni USB)."
+            WIFI_INFO=""
+        else
+            # Sin las herramientas no se sabe: se instala el firmware general
+            # (Bloque 8), como si hubiera un adaptador desconocido.
+            log_warn "No se pudo revisar el hardware (faltan lspci/lsusb)."
+            WIFI_INFO="desconocido"
+        fi
         return 0
     fi
+    WIFI_INFO="$net_pci
+$net_usb"
 
     log_info "Adaptadores de red detectados:"
     log_info "$WIFI_INFO"
@@ -806,13 +827,18 @@ detect_bluetooth_hardware() {
         bt_usb="$(lsusb | grep -Ei 'bluetooth' || true)"
     fi
 
-    BT_INFO="$bt_pci
-$bt_usb"
-
     if [ -z "$bt_pci" ] && [ -z "$bt_usb" ]; then
-        log_info "No se detecto ningun adaptador Bluetooth (PCI ni USB)."
+        if command -v lspci >/dev/null 2>&1 && command -v lsusb >/dev/null 2>&1; then
+            log_info "No se detecto ningun adaptador Bluetooth (PCI ni USB)."
+            BT_INFO=""
+        else
+            log_warn "No se pudo revisar el hardware (faltan lspci/lsusb); se instala Bluetooth por si acaso."
+            BT_INFO="desconocido"
+        fi
         return 0
     fi
+    BT_INFO="$bt_pci
+$bt_usb"
 
     log_info "Adaptador(es) Bluetooth detectado(s):"
     log_info "$BT_INFO"
@@ -1932,7 +1958,7 @@ setup_flatpak() {
     fi
 
     if ! command -v flatpak >/dev/null 2>&1; then
-        log_error "flatpak no quedó instalado. Verifica el repositorio 'community'. Se omite esta sección."
+        log_warn "flatpak no quedó instalado. Verifica el repositorio 'community'. Se omite esta sección."
         return 0
     fi
 
@@ -2003,7 +2029,14 @@ setup_display_manager() {
     apk info -e gdm >/dev/null 2>&1 && dm_installed="$dm_installed gdm"
 
     if [ -z "$dm_installed" ]; then
-        log_warn "No se detectó un Display Manager instalado (lightdm/sddm/gdm). El sistema arrancará en modo texto."
+        # Sway y XFCE Wayland usan greetd, que se habilita aparte.
+        if apk info -e greetd >/dev/null 2>&1; then
+            dm_tras_hostname greetd
+            rc-update add greetd default >/dev/null 2>&1 || log_warn "Fallo al habilitar 'greetd'."
+            log_ok "Pantalla de inicio 'greetd' habilitada."
+        else
+            log_warn "No se detectó un Display Manager instalado (lightdm/sddm/gdm/greetd). El sistema arrancará en modo texto."
+        fi
         return 0
     fi
 
@@ -2487,13 +2520,17 @@ prefixed() {
     done
 }
 
-EXIT_TMP="/tmp/.alpine-update-exit"
+# Archivo temporal propio (nombre unico): un nombre fijo en /tmp, escrito
+# por root, podria haberlo dejado preparado otro usuario.
+EXIT_TMP="$(mktemp)"
+trap 'rm -f "$EXIT_TMP"' EXIT
 
 # Ejecuta un paso, muestra su salida y deja su codigo en $step_status.
 run_step() {
+    : > "$EXIT_TMP"
     run_raw "$1; echo \$? > $EXIT_TMP" | prefixed
-    step_status="$(cat "$EXIT_TMP" 2>/dev/null || echo 1)"
-    rm -f "$EXIT_TMP"
+    step_status="$(cat "$EXIT_TMP" 2>/dev/null)"
+    [ -n "$step_status" ] || step_status=1
     return "$step_status"
 }
 
@@ -2856,7 +2893,13 @@ setup_user_groups() {
     fi
 
     for grp in audio video lpadmin; do
-        adduser "$TARGET_USER" "$grp" && log_ok "Agregado a '$grp'." || log_warn "No se pudo agregar a '$grp'."
+        # lpadmin lo crea CUPS: si no se instalo la impresora, no existe.
+        getent group "$grp" >/dev/null 2>&1 || continue
+        if adduser "$TARGET_USER" "$grp"; then
+            log_ok "Agregado a '$grp'."
+        else
+            log_warn "No se pudo agregar a '$grp'."
+        fi
     done
 }
 
