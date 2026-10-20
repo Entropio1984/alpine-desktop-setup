@@ -31,7 +31,7 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 ## Requisitos
 
 - Alpine Linux instalado con `setup-alpine`.
-- Un escritorio instalado con `setup-desktop`: XFCE, KDE Plasma, GNOME, MATE o LXQt. El script **no instala el escritorio**; lo complementa.
+- Un escritorio instalado con `setup-desktop`: XFCE, KDE Plasma, GNOME, MATE, LXQt o Sway. El script **no instala el escritorio**; lo complementa.
 - Repositorios `main` y `community` habilitados en `/etc/apk/repositories`. Casi todo lo que instala el script está en `community`.
 - Conexión a internet.
 - Acceso de administrador (`doas` o una sesión de `root`).
@@ -111,7 +111,7 @@ Cada ejecución queda registrada en `/var/log/alpine-update.log`.
 
 ## Qué hace cada bloque
 
-El script tiene 31 bloques. `main()` los ejecuta casi en orden, con una excepción: la detección de gráficas (Bloque 11) y el menú (Bloque 29) van al principio, para tomar todas las decisiones antes de instalar nada.
+El script tiene 31 bloques (más dos intermedios, 18b y 26b). `main()` los ejecuta casi en orden, con dos excepciones: la detección de gráficas (Bloque 11) y el menú (Bloque 29) van al principio, para tomar todas las decisiones antes de instalar nada, y las aplicaciones de uso diario (Bloque 30) se instalan antes de Flatpak (Bloque 25).
 
 Principios que siguen todos los bloques:
 
@@ -124,6 +124,8 @@ Comprueba que el script corre como administrador; si no, se detiene con un mensa
 
 ### Bloque 2 — `update_system`, `install_pkg`, `install_pkgs`
 `update_system` ejecuta `apk update` una vez al principio. `install_pkgs` instala varios paquetes en una sola operación de `apk`, que es mucho más rápido. Si esa operación falla (por ejemplo, porque un nombre no existe en esta versión), reintenta paquete por paquete con `install_pkg`, que tolera fallos individuales.
+
+**Vigilante de descargas (`apk_vigilado`).** A veces el servidor deja de mandar datos a mitad de una descarga y `apk` se queda esperando para siempre. Por eso cada llamada a `apk` se vigila: si pasa **2 minutos sin avanzar** (sin leer ni escribir nada y sin ningún programa de instalación trabajando), se corta y se reintenta, **hasta 3 veces**. El reintento sigue donde quedó, porque `apk` guarda cada paquete al terminar de instalarlo. Si los 3 intentos se quedan detenidos, el script anota un aviso y sigue con el resto, sin probar paquete por paquete (solo sumaría esperas).
 
 `ensure_hw_tools` instala `pciutils` y `usbutils`. El BusyBox de Alpine trae un `lsusb` reducido que solo muestra códigos numéricos, sin los nombres que necesitan los bloques de detección.
 
@@ -140,7 +142,7 @@ Solo si se marcó en el menú. Configura la distribución latinoamericana (`lata
 Lo que el usuario elija después en la configuración del escritorio tiene prioridad sobre estos valores.
 
 ### Bloque 4 — `detect_desktop_environment`
-Pregunta a `apk` qué escritorios están instalados y guarda el resultado en `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE` y `DE_LXQT`. Si hay más de uno, configura todos.
+Pregunta a `apk` qué escritorios están instalados y guarda el resultado en `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE`, `DE_LXQT` y `DE_SWAY`. Si hay más de uno, configura todos.
 
 ### Bloque 5 — `detect_target_user`
 Identifica al usuario real (no root) a partir de `$DOAS_USER` o `logname`, para aplicarle el idioma y los grupos más adelante. Si no lo encuentra, los bloques que lo necesitan avisan y siguen.
@@ -149,7 +151,7 @@ Identifica al usuario real (no root) a partir de `$DOAS_USER` o `logname`, para 
 Instala NetworkManager y un servidor de audio:
 
 - Si el sistema ya tiene **PipeWire** (`pipewire-pulse`) o **PulseAudio**, lo respeta.
-- Si no tiene ninguno: PipeWire en Plasma y GNOME; PulseAudio en XFCE, MATE y LXQt.
+- Si no tiene ninguno: PipeWire en Plasma y GNOME; PulseAudio en XFCE, MATE, LXQt y Sway.
 
 En Alpine, el paquete real `pulseaudio` y `pipewire-pulse` se excluyen entre sí. Hoy, al instalar Plasma, Alpine elige PulseAudio, y PipeWire corre al lado para compartir pantalla. Respetar lo instalado evita que el script contradiga a Alpine si algún día cambia su elección.
 
@@ -164,12 +166,21 @@ Luego instala los indicadores de red y volumen de cada escritorio:
 | GNOME | integrado | `pavucontrol` (mezclador avanzado) |
 | MATE | `network-manager-applet` | `mate-media` |
 | LXQt | `network-manager-applet` | `pavucontrol-qt` (el control de la bandeja ya viene en `lxqt-panel`) |
+| Sway | `network-manager-applet` (en la bandeja de `waybar`) | control de volumen de `waybar`; al hacer clic abre `pavucontrol` |
+
+**Sway** trae de fábrica una barra que solo muestra la fecha: sin WiFi, sin volumen y sin menú de aplicaciones. El script la cambia por **`waybar`** (con iconos de `font-awesome`), que tiene:
+
+- un botón de **menú de aplicaciones** (`fuzzel`), que también se abre con **Super+D**;
+- un botón con la **lista de atajos de teclado** (`sway-atajos`), que también se abre con **Super+F1**. La lista se lee de la configuración real de Sway, sale en español si el sistema está en español, y se puede escribir para buscar;
+- el icono de WiFi de NetworkManager, el volumen (la rueda del ratón lo sube y lo baja), la red (al hacer clic abre `nmtui`), la batería, el brillo y el reloj.
+
+Como Sway no arranca los programas de `/etc/xdg/autostart`, el script los agrega en `/etc/sway/config.d/50-lazaro-barra.conf`: el servidor de audio, el icono de WiFi y la ventana de contraseña de administrador (`polkit-gnome`). La configuración de `waybar` se copia al usuario y a `/etc/skel` (usuarios nuevos); si el usuario ya tenía una propia, no se toca. Si `waybar` no se puede instalar, queda la barra original.
 
 ### Bloques 7 y 8 — WiFi
-Detecta adaptadores WiFi internos (`lspci`) y USB (`lsusb`), y según el fabricante instala su firmware (`linux-firmware-intel`, `-realtek`, `-ath10k`, etc.). Si no reconoce el fabricante, instala un conjunto amplio. En una instalación normal de Alpine ese firmware ya está, así que este paso solo cambia algo en sistemas reducidos.
+Detecta adaptadores WiFi internos (`lspci`) y USB (`lsusb`), y según el fabricante instala su firmware (`linux-firmware-intel`, `-realtek`, `-ath10k`, etc.). Si **no hay adaptador WiFi, no instala nada**. El conjunto amplio de firmware (de varios fabricantes) se instala solo en dos casos: hay un adaptador pero no se reconoce el fabricante, o no se pudo revisar el hardware (faltan `lspci` o `lsusb`). En una instalación normal de Alpine ese firmware ya está, así que este paso solo cambia algo en sistemas reducidos.
 
 ### Bloques 9 y 10 — Bluetooth
-Detecta adaptadores Bluetooth y, si hay alguno, instala `bluez`, su firmware y el **puente de audio** del servidor elegido en el Bloque 6 (`pulseaudio-bluez` o `pipewire-spa-bluez`). Sin ese puente, los audífonos se emparejan pero no suenan. Si no hay adaptador, no instala nada.
+Detecta adaptadores Bluetooth y, si hay alguno, instala `bluez`, su firmware y el **puente de audio** del servidor elegido en el Bloque 6 (`pulseaudio-bluez` o `pipewire-spa-bluez`). Sin ese puente, los audífonos se emparejan pero no suenan. Si no hay adaptador, **no instala nada** (ni `bluez` ni firmware). Solo si no se pudo revisar el hardware (faltan `lspci` o `lsusb`) instala Bluetooth por si acaso.
 
 ### Bloque 11 — `detect_hardware`
 Clasifica todas las tarjetas gráficas leyendo `/sys` (fabricante y tipo en números, sin depender del texto de `lspci`). Además averigua:
@@ -257,8 +268,24 @@ Solo si se marcó en el menú. LibreOffice con su paquete de idioma español.
 ### Bloque 25 — `setup_flatpak`
 Solo si se marcó Flatpak, OnlyOffice o Chrome. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas.
 
+**Si una aplicación de Flathub no se puede instalar en ese momento** (por ejemplo, Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano: una vez por minuto, hasta 20 veces. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
+
 ### Bloque 26 — `setup_display_manager`
-Habilita la pantalla de inicio de sesión que corresponde al escritorio: SDDM para Plasma, GDM para GNOME y LightDM para los demás. Si hay más de una instalada, avisa cuál eligió.
+Habilita la pantalla de inicio de sesión que corresponde al escritorio: SDDM para Plasma, GDM para GNOME y LightDM para los demás. Si hay más de una instalada, avisa cuál eligió. Si no hay ninguna de esas tres pero está **greetd** (la que usan Sway y XFCE Wayland), habilita greetd.
+
+- **Sway:** `setup-desktop` no le instala pantalla de inicio (hay que entrar por la consola y escribir `sway`). Si no hay otra pantalla de inicio instalada, el script le pone la misma que Alpine usa para XFCE Wayland: **greetd con gtkgreet**, liviana y sin Xorg. Para eso hace los mismos pasos que `setup-desktop`: `rc_need="seatd dbus"` en `/etc/conf.d/greetd`, agrega `dbus-run-session sway` a `/etc/greetd/environments` y suma el usuario `greetd` al grupo `seat`. Si ya hay otra pantalla de inicio (por ejemplo, Sway junto a XFCE), no agrega greetd.
+- **Idioma de greetd** (`setup_greetd_idioma`): gtkgreet no lee la configuración de idioma del sistema, así que saldría en inglés. El script agrega el idioma (`env LANG=...`) a la línea de gtkgreet en `/etc/greetd/config.toml`.
+- **Nombre del equipo primero** (`dm_tras_hostname`): agrega `rc_need="${rc_need:-} hostname"` al final de `/etc/conf.d/<pantalla de inicio>`. Si la pantalla de inicio arranca antes de que se ponga el nombre del equipo (pasa en el primer arranque), los programas que abre la sesión después (en MATE, el panel) no pueden conectarse a la pantalla ("Authorization required").
+
+### Bloque 26b — `setup_greeter_resolution`
+La pantalla de inicio usa la **resolución que el usuario eligió** en su escritorio. Sin esto, LightDM, SDDM y GDM arrancan siempre con la que sugiere el monitor, que no siempre es la correcta (máquinas virtuales, monitores externos).
+
+- **Guardar:** en cada sesión corre `/usr/local/libexec/pantalla-inicio/guardar` (lo arranca `/etc/xdg/autostart/pantalla-inicio.desktop`). Anota la resolución en `~/.config/pantalla-inicio` cada vez que cambia. La lee con `xrandr` en XFCE, MATE y LXQt, y con `kscreen-doctor` en Plasma.
+- **Aplicar con LightDM:** `/etc/lightdm/lightdm.conf.d/50-pantalla-inicio.conf` hace que LightDM ejecute `aplicar`, que pone con `xrandr` la resolución anotada más reciente.
+- **Aplicar con SDDM:** `/etc/sddm.conf.d/50-pantalla-inicio.conf` hace lo mismo. Además deja la pantalla de inicio de SDDM **sobre Xorg**: en Plasma corre sobre Wayland, donde no hay un paso para aplicar la resolución. Como Plasma no trae Xorg, el script instala `xorg-server` y `xf86-input-libinput`; si no se pudieron instalar, SDDM se deja con su servidor de siempre (sin Xorg la pantalla de inicio no aparecería).
+- **GDM:** GNOME guarda la resolución en `~/.config/monitors.xml`, el mismo formato que lee GDM. El servicio `pantalla-inicio-gdm` copia el más reciente para GDM al apagar y al arrancar, antes de GDM.
+
+Si hay varios usuarios, gana la última sesión. La resolución nueva se aplica a partir del primer inicio de sesión hecho con ella. Sway y XFCE Wayland (greetd) quedan fuera: su pantalla de inicio no tiene un paso donde aplicarla.
 
 ### Bloque 27 — `setup_update_shortcut`
 Crea el botón "Actualizar el sistema" (ver [la sección del botón](#el-botón-actualizar-el-sistema)). Funciona con dos scripts:
@@ -270,7 +297,7 @@ Detalles de funcionamiento:
 
 - **La ventana aparece después de la contraseña**, para no tapar el diálogo de `pkexec`.
 - **Muestra una sola línea que se va reemplazando.** Para que la ventana se cierre bien al terminar se usa `tail --pid` de GNU coreutils (el `tail` de BusyBox no tiene esa opción), y `script` (de `util-linux-misc`) hace que `apk` muestre su avance línea por línea.
-- **Agente de contraseña:** XFCE y MATE necesitan uno aparte (`polkit-gnome`, `mate-polkit`). El lanzador comprueba que esté corriendo y, si no, lo inicia.
+- **Agente de contraseña:** XFCE, MATE y Sway necesitan uno aparte (`polkit-gnome` en XFCE y Sway, `mate-polkit` en MATE). El lanzador comprueba que esté corriendo y, si no, lo inicia.
 - **Aviso de reinicio:** el lanzador avisa si el kernel en uso ya no está instalado o si cambió la versión de Alpine.
 
 ### Bloque 28 — `setup_user_groups`
@@ -287,6 +314,9 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 | PDF | Evince (Okular en Plasma) |
 | Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 12 |
 | Navegador | Firefox (opcional en el menú) |
+| Tienda de aplicaciones | Discover en LXQt; GNOME Software (con `gnome-software-plugin-apk2` y `apk-polkit-rs`) en XFCE, MATE y Sway. Plasma y GNOME ya traen la suya |
+
+La tienda instala y actualiza paquetes de Alpine y, si se activó Flatpak, también aplicaciones de Flathub.
 
 Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
 
@@ -303,6 +333,9 @@ Ejecuta los bloques en el orden necesario.
 | `/etc/xdg/plasma-workspace/env/teclado-latam.sh`, `/etc/profile.d/teclado-latam.sh` | 3 | `XKB_DEFAULT_LAYOUT=latam` para Wayland |
 | `/etc/xdg/kxkbrc` | 3 | Teclado `latam` por defecto en Plasma |
 | `/usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override` | 3 | Teclado `latam` por defecto en GNOME |
+| `/etc/sway/config.d/50-lazaro-barra.conf` | 6 | Sway: barra `waybar`, audio, WiFi, agente de contraseña y atajos Super+D y Super+F1 |
+| `/usr/local/bin/sway-atajos` | 6 | Sway: lista de atajos de teclado |
+| `~/.config/waybar/config.jsonc`, `/etc/skel/.config/waybar/config.jsonc` | 6 | Sway: botones y módulos de la barra (solo si no existía) |
 | `/etc/modprobe.d/blacklist-nouveau.conf` | 12 | Bloqueo de `nouveau` (modo seguro) |
 | `/etc/local.d/nvidia-optimus.start` | 12 | Modo ahorro: audio HDMI y salidas fantasma de la NVIDIA |
 | `/etc/xdg/plasma-workspace/env/gpu-integrada.sh`, `/etc/profile.d/gpu-integrada.sh` | 12 | Modo ahorro: escritorio y video en la gráfica integrada |
@@ -314,6 +347,17 @@ Ejecuta los bloques en el orden necesario.
 | `/etc/profile.d/idioma-sistema.sh`, `/etc/environment` | 22 | Idioma del sistema |
 | `/etc/xdg/plasma-localerc`, `~/.config/plasma-localerc` | 22 | Idioma de Plasma (solo con Plasma) |
 | `/etc/rc.conf` | 22 | Agrega `unicode="YES"` si falta |
+| `/etc/flatpak-pendientes`, `/etc/local.d/flatpak-pendientes.start` | 25 | Aplicaciones de Flathub por reintentar en cada arranque (se borran solos al terminar) |
+| `/var/log/flatpak-pendientes.log` | 25 | Registro de esos reintentos |
+| `/etc/conf.d/<pantalla de inicio>` (`lightdm`, `sddm`, `gdm` o `greetd`) | 26 | Línea `rc_need` para arrancar después del nombre del equipo |
+| `/etc/conf.d/greetd`, `/etc/greetd/environments` | 26 | Sway: pantalla de inicio greetd (`seatd`, `dbus` y la sesión `dbus-run-session sway`) |
+| `/etc/greetd/config.toml` | 26 | Idioma de la pantalla de inicio greetd (se modifica la línea de gtkgreet) |
+| `/usr/local/libexec/pantalla-inicio/` (`guardar`, `aplicar`, `sddm-xsetup`) | 26b | Resolución de la pantalla de inicio |
+| `/etc/xdg/autostart/pantalla-inicio.desktop` | 26b | Arranca `guardar` en cada sesión (salvo GNOME) |
+| `~/.config/pantalla-inicio` | 26b | Resolución anotada por `guardar` (lo escribe la sesión del usuario) |
+| `/etc/lightdm/lightdm.conf.d/50-pantalla-inicio.conf` | 26b | LightDM aplica esa resolución |
+| `/etc/sddm.conf.d/50-pantalla-inicio.conf` | 26b | SDDM aplica esa resolución y usa Xorg |
+| `/etc/init.d/pantalla-inicio-gdm` | 26b | Servicio que copia `monitors.xml` a `/var/lib/gdm/.config/` |
 | `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas |
 | `/usr/local/bin/alpine-update-root.sh`, `/usr/local/bin/alpine-update-launcher.sh` | 27 | Botón de actualización |
 | `/usr/share/applications/alpine-update.desktop` | 27 | Entrada "Actualizar el sistema" en el menú |
@@ -323,20 +367,25 @@ Ejecuta los bloques en el orden necesario.
 
 ## Servicios que habilita
 
-En el arranque normal (`default`): `networkmanager`, `dbus`, `elogind`, `polkit`, `zram-init`, `earlyoom`, la pantalla de inicio que corresponda (`lightdm`, `sddm` o `gdm`), y según el caso:
+En el arranque normal (`default`): `networkmanager`, `dbus`, `elogind`, `polkit`, `zram-init`, `earlyoom`, la pantalla de inicio que corresponda (`lightdm`, `sddm`, `gdm` o `greetd`), y según el caso:
 
 - `bluetooth`, si hay adaptador Bluetooth;
 - `cupsd`, si se marcaron las impresoras;
-- `local`, en el modo de ahorro de NVIDIA;
+- `local`, en el modo de ahorro de NVIDIA o si quedó alguna aplicación de Flathub por reintentar;
+- `pantalla-inicio-gdm`, con GDM (resolución de la pantalla de inicio);
 - `spice-vdagentd`, en máquinas virtuales;
 - `crond`, si hay un SSD (para el TRIM semanal);
 - `acpid`, solo en sistemas sin escritorio.
+
+`seatd` no se agrega al arranque: con greetd (Sway), OpenRC lo arranca antes de greetd porque el script lo pone como requisito en `/etc/conf.d/greetd`.
 
 `udisks2`, `wpa_supplicant` y el servidor de audio no se habilitan como servicios: se activan solos cuando se necesitan o con cada sesión de usuario.
 
 ## Registro (log) y reejecución
 
 Todo queda en `/var/log/desktop-postinstall.log` con cuatro niveles: `[INFO]` (paso en curso), `[OK]` (paso completado), `[WARN]` (algo falló, pero el script sigue) y `[ERROR]` (fallo grave que detiene el script). El registro se acumula entre ejecuciones.
+
+La salida completa de `apk` (y de otros programas como `mkinitfs` y `flatpak`) va **solo al registro**, no a la pantalla, que muestra un resumen de cada paso. Si un paquete falla, el motivo exacto está en el registro.
 
 El script se puede ejecutar varias veces sin hacer daño: instalar un paquete que ya está no hace nada, habilitar un servicio dos veces no lo duplica, y los archivos de configuración se reescriben completos. Sirve para cambiar una opción del menú o después de instalar otro escritorio.
 
@@ -349,7 +398,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 - **Todos los paquetes del script existen en las cuatro versiones.**
 - **apk-tools 3** (desde 3.23) acepta todas las órdenes que usa el script y el botón.
 - **/usr-merge** (convertir `/bin`, `/sbin` y `/lib` en enlaces a `/usr`): estaba previsto para 3.23, se pospuso, y será obligatorio en una versión futura (Alpine mencionó 3.26 o 3.27). El script no escribe en esas carpetas. Cuando llegue, conviene leer las notas de esa versión antes de usar el cambio de versión del botón.
-- **Wayland:** en Alpine, Plasma solo tiene sesión Wayland desde 3.22 y GNOME desde 3.24; edge ya trae Plasma 6.8. XFCE, MATE y LXQt siguen en Xorg. Por eso el teclado se configura en ambos.
+- **Wayland:** en Alpine, Plasma solo tiene sesión Wayland desde 3.22 y GNOME desde 3.24; edge ya trae Plasma 6.8. Sway es solo Wayland. MATE y LXQt siguen en Xorg, y XFCE también, salvo su variante Wayland (con greetd). Por eso el teclado se configura en ambos.
 - **PipeWire:** Alpine marcó como obsoleto su lanzador automático en favor de los servicios de usuario de OpenRC. El script detecta si falta y avisa.
 
 ## Limitaciones conocidas
@@ -359,6 +408,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 - **Modo seguro de NVIDIA:** deja la tarjeta sin driver, pero encendida. En un portátil Optimus conviene el modo de ahorro.
 - **Cambio de versión de Alpine:** probado en una simulación, no todavía en un equipo real.
 - **Montaje de USB:** depende de que `elogind` reconozca la sesión gráfica como activa. Si al montar pide la contraseña de root, el problema está ahí, no en los grupos del usuario.
+- **Resolución de la pantalla de inicio:** no funciona con greetd (Sway, XFCE Wayland), que usa la resolución que sugiere el monitor. Con varios usuarios, la pantalla de inicio usa la resolución de la última sesión, sea de quien sea.
 - **El script no instala el escritorio:** hay que instalarlo antes con `setup-desktop`.
 
 ## Solución de problemas
@@ -372,6 +422,12 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 **El cambio de versión quedó incompleto.** No reinicies. Conéctate a internet y vuelve a pulsar el botón, o ejecuta `doas apk upgrade --available` en una terminal. La versión anterior de los repositorios está en `/var/backups/alpine-update/`.
 
 **Flatpak no se instaló.** Revisa que el repositorio `community` esté habilitado y que haya internet.
+
+**Una aplicación de Flathub (OnlyOffice o Chrome) no aparece.** Si no se pudo instalar durante el script, se reintenta sola en cada arranque con internet. Revisa `/etc/flatpak-pendientes` (lo que falta) y `/var/log/flatpak-pendientes.log` (los intentos).
+
+**La pantalla de inicio no usa la resolución que elegí.** Inicia sesión una vez con la resolución nueva y espera unos segundos antes de cerrarla o reiniciar: la pantalla de inicio la usa desde la próxima vez que aparezca.
+
+**La instalación parece detenida.** Si `apk` pasa 2 minutos sin avanzar, el script lo corta y lo reintenta solo (hasta 3 veces); en pantalla aparece el aviso. Si los 3 intentos fallan, revisa la conexión a internet y vuelve a ejecutar el script.
 
 **Las memorias USB no se montan solas.** Comprueba que `elogind` y `polkit` estén corriendo (`rc-service elogind status`, `rc-service polkit status`) y que hayas reiniciado después de ejecutar el script.
 
@@ -389,11 +445,16 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Impresoras | `rc-update del cupsd` y `apk del cups cups-filters system-config-printer` |
 | Planificador de discos | Borrar `/etc/udev/rules.d/60-ioscheduler.rules` y reiniciar |
 | TRIM semanal | Borrar `/etc/periodic/weekly/fstrim` |
+| Barra de Sway | Borrar `/etc/sway/config.d/50-lazaro-barra.conf` (vuelve la barra original) y, si se quiere, `~/.config/waybar/config.jsonc` y `/usr/local/bin/sway-atajos` |
+| Pantalla de inicio greetd (Sway) | `rc-update del greetd` y `apk del greetd-gtkgreet`; se vuelve a entrar por la consola escribiendo `sway` |
+| Resolución de la pantalla de inicio | Borrar `/usr/local/libexec/pantalla-inicio/`, `/etc/xdg/autostart/pantalla-inicio.desktop` y los dos `50-pantalla-inicio.conf` (con eso SDDM vuelve también a su servidor de siempre); con GDM, además, `rc-update del pantalla-inicio-gdm` y borrar `/etc/init.d/pantalla-inicio-gdm` |
+| Reintentos de Flathub | Borrar `/etc/flatpak-pendientes` y `/etc/local.d/flatpak-pendientes.start` |
 
 ## Historial de correcciones
 
 Cambios importantes respecto a versiones anteriores del script, para quien venga de una de ellas:
 
+- **Revisión general:** el firmware de Bluetooth y de WiFi ya no se instala si no hay adaptador; greetd se reconoce como pantalla de inicio; la salida de `apk` va al registro en vez de a la pantalla; y `apk_vigilado` corta y reintenta (hasta 3 veces) las descargas que pasan 2 minutos sin avanzar, que antes podían dejar el script detenido indefinidamente (ver Bloque 2).
 - **Modo seguro de NVIDIA:** escribía `20-nouveau-safe.conf`, que pedía a Xorg usar el driver `nouveau` sin decir en qué tarjeta. Con el módulo bloqueado ese driver no funciona, y en un portátil híbrido Xorg lo aplicaba a la Intel: causa probable de la pantalla negra. Ya no se crea, y se borra si existe.
 - **`acpid`:** se habilitaba siempre; ahora solo sin escritorio (ver Bloque 17).
 - **Audio:** se forzaba PulseAudio; ahora se respeta el servidor que ya tenga el sistema (ver Bloque 6).
