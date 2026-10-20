@@ -1892,6 +1892,23 @@ setup_flatpak() {
 # ------------------------------------------------------------------------------
 # BLOQUE 26: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
+# La llave de X que crea la pantalla de inicio queda atada al nombre del
+# equipo. Si arranca antes que el servicio "hostname" (pasa en el primer
+# arranque), el nombre cambia con la sesion ya abierta y los programas que
+# la sesion abre despues (en MATE, el panel) no pueden conectarse a la
+# pantalla ("Authorization required"). Se le pide a OpenRC que ponga el
+# nombre antes de arrancarla.
+dm_tras_hostname() {
+    _conf="/etc/conf.d/$1"
+    grep -qs '^rc_need=.*hostname' "$_conf" && return 0
+    if grep -qs '^rc_need=' "$_conf"; then
+        sed -i 's/^rc_need="\(.*\)"/rc_need="\1 hostname"/' "$_conf"
+    else
+        mkdir -p /etc/conf.d
+        echo 'rc_need="hostname"' >> "$_conf"
+    fi
+}
+
 # No basta con que setup-desktop lo haya dejado instalado: hay reportes
 # reales de lightdm/sddm fallando al no quedar correctamente enganchados
 # al runlevel default. A diferencia de una prioridad fija, aquí se usan
@@ -1933,6 +1950,7 @@ setup_display_manager() {
         log_warn "Se detectaron varios Display Managers instalados ($dm_installed). Se habilita '$chosen' según el entorno de escritorio detectado."
     fi
 
+    dm_tras_hostname "$chosen"
     rc-update add "$chosen" default || log_warn "Fallo al habilitar '$chosen'."
     log_ok "Display Manager '$chosen' habilitado en el runlevel default."
 }
@@ -1968,6 +1986,7 @@ setup_greetd_sway() {
     fi
     addgroup greetd seat 2>/dev/null || true
     rc-update add dbus default >/dev/null 2>&1 || true
+    dm_tras_hostname greetd
     rc-update add greetd default || log_warn "Fallo al habilitar 'greetd'."
     log_ok "Sway: pantalla de inicio greetd habilitada."
 }
