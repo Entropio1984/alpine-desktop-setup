@@ -63,10 +63,54 @@ update_system() {
     apk update || { log_error "Fallo al actualizar apk."; exit 1; }
 }
 
+# apk_add: 'apk add --no-cache' que no se queda colgado para siempre.
+# CORRECCION: apk (3.0) baja los paquetes por HTTPS con el socket en modo
+# bloqueante, y su --timeout solo se aplica si la conexion TLS pidio
+# esperar; si el servidor deja de mandar datos a mitad de un paquete,
+# apk espera indefinidamente (visto en una VM: 20+ minutos quieto, sin
+# usar CPU, en "apk add pulseaudio" y luego en "apk add lang"). Aqui se
+# vigila: si apk pasa 120 s sin leer ni escribir nada y sin ningun
+# proceso hijo (los scripts de instalacion, como mkinitfs, pueden tardar),
+# se corta y se reintenta (hasta 3 veces). Cortar apk mientras descarga
+# no deja nada a medias: solo confirma lo que termino de instalar.
+apk_add() {
+    _apk_intento=1
+    while :; do
+        apk add --no-cache "$@" &
+        _apk_pid=$!
+        _apk_antes=""
+        _apk_quieto=0
+        while kill -0 "$_apk_pid" 2>/dev/null; do
+            sleep 5
+            _apk_ahora="$(awk '/^(rchar|wchar):/ { s += $2 } END { print s }' "/proc/$_apk_pid/io" 2>/dev/null)"
+            # Sin /proc no se puede medir: entonces nunca se corta.
+            if [ -z "$_apk_ahora" ] || [ "$_apk_ahora" != "$_apk_antes" ] \
+                    || grep -qs "^PPid:[[:space:]]*$_apk_pid\$" /proc/[0-9]*/status; then
+                _apk_antes="$_apk_ahora"
+                _apk_quieto=0
+            else
+                _apk_quieto=$((_apk_quieto + 5))
+            fi
+            if [ "$_apk_quieto" -ge 120 ]; then
+                log_warn "apk lleva 2 minutos sin avanzar (descarga detenida). Se corta y se reintenta ($_apk_intento/3)..."
+                kill "$_apk_pid" 2>/dev/null
+                sleep 2
+                kill -9 "$_apk_pid" 2>/dev/null
+                break
+            fi
+        done
+        wait "$_apk_pid"
+        _apk_rc=$?
+        [ "$_apk_quieto" -ge 120 ] || return "$_apk_rc"
+        [ "$_apk_intento" -lt 3 ] || return 1
+        _apk_intento=$((_apk_intento + 1))
+    done
+}
+
 install_pkg() {
     pkg="$1"
     log_info "Instalando: $pkg"
-    if apk add --no-cache "$pkg" >/dev/null 2>&1; then
+    if apk_add "$pkg" >/dev/null 2>&1; then
         log_ok "'$pkg' instalado."
     else
         log_warn "Fallo al instalar '$pkg' (puede no existir en tu rama/arquitectura)."
@@ -83,7 +127,7 @@ install_pkg() {
 # gana velocidad en el caso normal sin sacrificar la resiliencia.
 install_pkgs() {
     log_info "Instalando en lote: $*"
-    if apk add --no-cache "$@" >/dev/null 2>&1; then
+    if apk_add "$@" >/dev/null 2>&1; then
         for p in "$@"; do
             log_ok "'$p' instalado (lote)."
         done
