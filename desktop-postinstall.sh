@@ -2589,6 +2589,10 @@ fi
 # de escribirla, sobre todo al procesar muchas lineas seguidas.
 prefixed() {
     while IFS= read -r linea; do
+        case "$linea" in
+            # Aviso propio de 'script' cuando run_step corta un paso.
+            "Session terminated"*) continue ;;
+        esac
         echo "# $linea"
     done
 }
@@ -2600,13 +2604,94 @@ trap 'rm -f "$EXIT_TMP"' EXIT
 # Al cancelar, salir por 'exit' para que tambien se borre.
 trap 'exit 130' INT TERM HUP
 
+# Un solo boton a la vez: si se pulsa otra vez mientras el primero sigue
+# trabajando (por ejemplo, porque parecia detenido), el segundo avisa y
+# sale en vez de quedarse esperando a que apk suelte su base de datos.
+LOCK_DIR=/run/alpine-update.lock
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    otro="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+    if [ -n "$otro" ] && kill -0 "$otro" 2>/dev/null; then
+        echo "# Ya hay una actualizacion en curso. Espera a que termine (su ventana puede estar detras de otras)."
+        exit 75
+    fi
+    # Quedo de una ejecucion que se corto (apagado, corte de luz).
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || { echo "# No se pudo empezar la actualizacion."; exit 75; }
+fi
+echo $$ > "$LOCK_DIR/pid"
+trap 'rm -f "$EXIT_TMP"; rm -rf "$LOCK_DIR"' EXIT
+
+# Todos los procesos que cuelgan de $1 (hijos, nietos...).
+descendants() {
+    d_todos="$1"
+    d_nuevos="$1"
+    while [ -n "$d_nuevos" ]; do
+        d_padres="$(echo "$d_nuevos" | tr ' ' '|')"
+        d_nuevos="$(grep -H '^PPid:' /proc/[0-9]*/status 2>/dev/null \
+            | awk -v p="^($d_padres)\$" '$2 ~ p { split($1, f, "/"); print f[3] }' | tr '\n' ' ')"
+        d_nuevos="${d_nuevos% }"
+        [ -z "$d_nuevos" ] || d_todos="$d_todos $d_nuevos"
+    done
+    echo "$d_todos"
+}
+
+# Bytes leidos y escritos por esos procesos: si no cambia, no avanzan.
+io_total() {
+    for io_pid in $1; do
+        cat "/proc/$io_pid/io" 2>/dev/null
+    done | awk '/^(rchar|wchar):/ { s += $2 } END { print s + 0 }'
+}
+
 # Ejecuta un paso, muestra su salida y deja su codigo en $step_status.
+#
+# Vigilado: apk 3 (y a veces flatpak) puede quedarse para siempre
+# esperando una descarga que el servidor dejo de enviar, sin error y sin
+# avanzar, y la ventana solo mostraba la barra moviendose. Si en 3
+# minutos ni el programa ni lo que el lance (scripts, mkinitfs...) lee
+# o escribe nada, se corta y se repite el paso (hasta 3 intentos): la
+# repeticion retoma lo que ya se habia descargado.
+STALL_LIMIT=180
 run_step() {
-    : > "$EXIT_TMP"
-    run_raw "$1; echo \$? > $EXIT_TMP" | prefixed
-    step_status="$(cat "$EXIT_TMP" 2>/dev/null)"
-    [ -n "$step_status" ] || step_status=1
-    return "$step_status"
+    rs_intento=1
+    while :; do
+        : > "$EXIT_TMP"
+        ( run_raw "$1; echo \$? > $EXIT_TMP" | prefixed ) &
+        rs_pid=$!
+        rs_antes=""
+        rs_quieto=0
+        while kill -0 "$rs_pid" 2>/dev/null; do
+            sleep 5
+            rs_procs="$(descendants "$rs_pid")"
+            rs_ahora="$(io_total "$rs_procs")"
+            if [ "$rs_ahora" != "$rs_antes" ]; then
+                rs_antes="$rs_ahora"
+                rs_quieto=0
+            else
+                rs_quieto=$((rs_quieto + 5))
+            fi
+            if [ "$rs_quieto" -ge "$STALL_LIMIT" ]; then
+                echo "# La descarga lleva 3 minutos detenida. Se corta y se intenta de nuevo ($rs_intento de 3)..."
+                # shellcheck disable=SC2086
+                kill $rs_procs 2>/dev/null
+                sleep 2
+                # shellcheck disable=SC2086
+                kill -9 $(descendants "$rs_pid") 2>/dev/null
+                break
+            fi
+        done
+        wait "$rs_pid" 2>/dev/null
+        step_status="$(cat "$EXIT_TMP" 2>/dev/null)"
+        [ -n "$step_status" ] || step_status=1
+        if [ "$rs_quieto" -lt "$STALL_LIMIT" ]; then
+            return "$step_status"
+        fi
+        if [ "$rs_intento" -ge 3 ]; then
+            echo "# La descarga se detuvo 3 veces. Revisa la conexion a internet e intentalo mas tarde."
+            step_status=124
+            return 124
+        fi
+        rs_intento=$((rs_intento + 1))
+    done
 }
 
 # --- Siguiente version estable de Alpine ----------------------------------
@@ -2714,7 +2799,7 @@ fi
 if command -v flatpak >/dev/null 2>&1; then
     echo "# "
     echo "# ===== Actualizando aplicaciones Flatpak ====="
-    run_raw "flatpak update -y" | prefixed
+    run_step "flatpak update -y --noninteractive" || true
 fi
 
 echo "# "
@@ -2902,8 +2987,25 @@ tail -n1 -f --pid="$BGPID" "$LOG" | zenity --progress --pulsate \
     --width=420 &
 ZPID=$!
 
-wait "$BGPID"
+# Si se cierra la ventana (Cancelar) antes de terminar, el trabajo de
+# fondo NO se detiene: cortar apk a mitad de una instalacion podria
+# dejar el sistema a medio actualizar. Se avisa y, al terminar, se
+# muestra el resultado.
 wait "$ZPID" 2>/dev/null
+if kill -0 "$BGPID" 2>/dev/null; then
+    zenity --info --title="La actualizacion sigue" --width=400 \
+        --text="La actualizacion sigue trabajando en segundo plano: cortarla a la mitad podria dejar el sistema a medio actualizar.\n\nNo apagues el equipo. Te avisaremos cuando termine." \
+        2>/dev/null &
+    wait "$BGPID"
+    if tail -n 3 "$LOG" | grep -q "completada sin errores"; then
+        zenity --info --title="Actualizacion terminada" --width=380 \
+            --text="La actualizacion termino sin errores." 2>/dev/null
+    else
+        zenity --warning --title="Actualizacion terminada" --width=420 \
+            --text="La actualizacion termino con errores. Los detalles estan en $LOG." 2>/dev/null
+    fi
+fi
+wait "$BGPID" 2>/dev/null
 
 # --- Aviso de reinicio ---------------------------------------------
 # modules.order pertenece al PAQUETE del kernel: desaparece al
