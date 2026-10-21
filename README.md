@@ -67,11 +67,12 @@ Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se
 | Flatpak/Flathub | No | Tienda de aplicaciones Flatpak |
 | OnlyOffice | No | Por Flatpak; marcarla activa Flatpak |
 | Google Chrome | No | Por Flatpak (paquete comunitario, no oficial de Google); marcarla activa Flatpak |
+| Brave | No | Navegador por Flatpak; marcarla activa Flatpak |
 | Botón "Actualizar el sistema" | Sí | Acceso directo en el menú de aplicaciones |
 
 **Portátiles Optimus** (gráfica integrada más una NVIDIA): en lugar de la casilla de NVIDIA aparece una segunda pantalla con tres modos: *ahorro* (recomendado y marcado por defecto), *seguro* o *activa*. Ver [Bloque 12](#bloque-12--install_drivers).
 
-**Por qué esos valores por defecto:** en el hardware viejo al que apunta el proyecto, dejar `nouveau` activo puede terminar en pantalla negra, así que el modo seguro viene marcado. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice o Chrome.
+**Por qué esos valores por defecto:** en el hardware viejo al que apunta el proyecto, dejar `nouveau` activo puede terminar en pantalla negra, así que el modo seguro viene marcado. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
 
 **Si el menú no se puede mostrar** (por ejemplo, sin una terminal interactiva), el script hace cada pregunta por separado cuando la necesita. Solo las respuestas que empiezan por `s` o `y` cuentan como "sí"; Enter vacío es "no".
 
@@ -110,6 +111,14 @@ Detalles importantes:
 Si una descarga se queda detenida (3 minutos sin avanzar), el botón corta ese paso y lo repite, hasta 3 veces. Si se pulsa el botón mientras otra actualización sigue en curso, avisa y no empieza otra. Cerrar la ventana no detiene la actualización (cortarla a la mitad podría dejar el sistema a medio actualizar): sigue en segundo plano y avisa al terminar.
 
 Cada ejecución queda registrada en `/var/log/alpine-update.log`.
+
+**Aviso de actualizaciones.** Cada 6 horas (con `crond`, desde `/etc/periodic/hourly/alpine-update-revisar`) se leen los repositorios y se anota cuántos paquetes se pueden actualizar en `/var/lib/alpine-update/pendientes`. Si hay alguno:
+
+- En XFCE, MATE y LXQt aparece un icono en la bandeja del panel y una notificación con el botón "Actualizar ahora". En GNOME, que no tiene bandeja, solo la notificación. Los dos abren "Actualizar el sistema" (`/usr/local/bin/alpine-update-aviso`, que arranca con la sesión desde `/etc/xdg/autostart`).
+- En Sway aparece un icono con el número en waybar; un clic abre el botón.
+- Plasma no lleva este aviso: trae el suyo (Discover).
+
+Al terminar una actualización, el número se cuenta otra vez y el icono desaparece.
 
 ## Qué hace cada bloque
 
@@ -268,7 +277,7 @@ Instala DejaVu, Liberation (compatible en medidas con Arial, Times y Courier, pa
 Solo si se marcó en el menú. LibreOffice con su paquete de idioma español.
 
 ### Bloque 25 — `setup_flatpak`
-Solo si se marcó Flatpak, OnlyOffice o Chrome. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas.
+Solo si se marcó Flatpak, OnlyOffice, Chrome o Brave. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas.
 
 **Si una aplicación de Flathub no se puede instalar en ese momento** (por ejemplo, Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano: una vez por minuto, hasta 20 veces. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
 
@@ -362,6 +371,8 @@ Ejecuta los bloques en el orden necesario.
 | `/etc/init.d/pantalla-inicio-gdm` | 26b | Servicio que copia `monitors.xml` a `/var/lib/gdm/.config/` |
 | `/etc/xdg/mimeapps.list` | 30 | Aplicaciones predeterminadas |
 | `/usr/local/bin/alpine-update-root.sh`, `/usr/local/bin/alpine-update-launcher.sh` | 27 | Botón de actualización |
+| `/etc/periodic/hourly/alpine-update-revisar`, `/var/lib/alpine-update/` | 27 | Revisión periódica de actualizaciones |
+| `/usr/local/bin/alpine-update-aviso`, `/etc/xdg/autostart/alpine-update-aviso.desktop` | 27 | Icono y notificación de actualizaciones (no en Plasma ni Sway) |
 | `/usr/share/applications/alpine-update.desktop` | 27 | Entrada "Actualizar el sistema" en el menú |
 | `/var/log/alpine-update.log` | 27 | Registro del botón |
 | `/var/backups/alpine-update/` | 27 | Copias de `/etc/apk/repositories` antes de cada cambio de versión |

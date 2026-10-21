@@ -669,7 +669,7 @@ sway_config_waybar() {
     "height": 30,
     "modules-left": ["custom/menu", "custom/atajos", "sway/workspaces", "sway/mode"],
     "modules-center": ["clock"],
-    "modules-right": ["tray", "pulseaudio", "network", "backlight", "battery"],
+    "modules-right": ["custom/actualizaciones", "tray", "pulseaudio", "network", "backlight", "battery"],
     "custom/menu": {
         "format": "    ",
         "tooltip": false,
@@ -679,6 +679,13 @@ sway_config_waybar() {
         "format": " \uf11c ",
         "tooltip": false,
         "on-click": "sway-atajos"
+    },
+    "custom/actualizaciones": {
+        "exec": "n=$(cat /var/lib/alpine-update/pendientes 2>/dev/null); [ \"${n:-0}\" -gt 0 ] 2>/dev/null && echo \"$n\" || true",
+        "interval": 60,
+        "format": "\uf019 {}",
+        "tooltip-format": "Hay actualizaciones: clic para instalarlas",
+        "on-click": "/usr/local/bin/alpine-update-launcher.sh"
     },
     "clock": {
         "format": "{:%a %d %b  %H:%M}",
@@ -1954,7 +1961,7 @@ PEND
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 25: Flatpak + Flathub (OnlyOffice y Google Chrome, opcionales)
+# BLOQUE 25: Flatpak + Flathub (OnlyOffice, Google Chrome y Brave, opcionales)
 # ------------------------------------------------------------------------------
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
@@ -2015,6 +2022,15 @@ setup_flatpak() {
         flatpak_app com.google.Chrome "Google Chrome"
     else
         log_info "Se omite Google Chrome."
+    fi
+
+    # Sin preguntas (OPT_* fijadas por un instalador anterior a Brave):
+    # Brave no se pregunta.
+    [ -n "${OPT_BRAVE:-}" ] || [ -z "${OPT_CHROME:-}" ] || OPT_BRAVE=no
+    if want OPT_BRAVE "¿Deseas instalar el navegador Brave vía Flatpak?"; then
+        flatpak_app com.brave.Browser "Brave"
+    else
+        log_info "Se omite Brave."
     fi
 }
 
@@ -2504,10 +2520,13 @@ setup_update_shortcut() {
     shortcut_write_launcher
     shortcut_prepare_log
     shortcut_write_desktop_file
+    shortcut_write_checker
+    shortcut_write_notifier
 
     log_ok "Acceso directo creado: aparecera como 'Actualizar el sistema' en el menu de aplicaciones."
     log_info "Al hacer clic, pedira la contrasena del usuario (no la de root, siempre que pertenezca al grupo 'wheel') y actualizara apk + flatpak."
     log_info "Si hay una version estable nueva de Alpine, el boton preguntara antes si se quiere cambiar a ella."
+    log_info "Cuando haya actualizaciones, un icono en la barra (o un aviso) lleva al boton. Plasma usa su propio aviso."
 }
 
 # Programas que usan el lanzador y el agente de autenticacion polkit.
@@ -2802,6 +2821,13 @@ if command -v flatpak >/dev/null 2>&1; then
     run_step "flatpak update -y --noninteractive" || true
 fi
 
+# El aviso de actualizaciones (alpine-update-revisar) se apaga solo:
+# se cuenta otra vez lo que queda por actualizar.
+if [ -d /var/lib/alpine-update ]; then
+    { apk list -u 2>/dev/null | grep -c . || true; } > /var/lib/alpine-update/pendientes.tmp
+    mv -f /var/lib/alpine-update/pendientes.tmp /var/lib/alpine-update/pendientes
+fi
+
 echo "# "
 if [ "$apk_status" -eq 0 ]; then
     echo "# Actualizacion completada sin errores. ($(date '+%H:%M:%S'))"
@@ -3047,6 +3073,141 @@ shortcut_prepare_log() {
     chmod 664 /var/log/alpine-update.log
 }
 
+# Revision periodica (como root, con crond): cada 6 horas lee los
+# repositorios y anota en /var/lib/alpine-update/pendientes cuantos
+# paquetes se pueden actualizar. El aviso de la sesion solo lee ese
+# numero, sin permisos de administrador.
+shortcut_write_checker() {
+    mkdir -p /var/lib/alpine-update /etc/periodic/hourly
+    cat > /etc/periodic/hourly/alpine-update-revisar <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: cuenta las actualizaciones
+# disponibles para el aviso de la barra. Corre cada hora, pero solo
+# revisa si pasaron 6 horas desde la ultima vez (o si nunca reviso).
+estado=/var/lib/alpine-update
+marca="$estado/ultima-revision"
+mkdir -p "$estado"
+[ -n "$(find "$marca" -mmin -355 2>/dev/null)" ] && exit 0
+# Si el boton "Actualizar el sistema" esta trabajando, no estorbar.
+[ -d /run/alpine-update.lock ] && exit 0
+# Sin internet (o con la descarga detenida) se intenta la hora siguiente.
+timeout 300 apk update -q >/dev/null 2>&1 || exit 0
+touch "$marca"
+{ apk list -u 2>/dev/null | grep -c . || true; } > "$estado/pendientes.tmp"
+mv -f "$estado/pendientes.tmp" "$estado/pendientes"
+INNEREOF
+    chmod 755 /etc/periodic/hourly/alpine-update-revisar
+    enable_service crond
+}
+
+# Aviso en la sesion grafica: un icono en la bandeja del panel (XFCE,
+# MATE, LXQt) y una notificacion con el boton "Actualizar ahora" (en
+# GNOME, que no tiene bandeja, queda solo la notificacion). Los dos
+# abren el boton "Actualizar el sistema". Plasma trae su propio aviso
+# (Discover) y Sway lo muestra en waybar (sway_config_waybar).
+shortcut_write_notifier() {
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_GNOME" = "no" ]; then
+        return 0
+    fi
+    install_pkgs py3-gobject3 gtk+3.0 libnotify
+
+    cat > /usr/local/bin/alpine-update-aviso <<'INNEREOF'
+#!/usr/bin/env python3
+# Generado por desktop-postinstall.sh: avisa en la sesion cuando hay
+# actualizaciones (las cuenta /etc/periodic/hourly/alpine-update-revisar)
+# y al hacer clic abre "Actualizar el sistema".
+import subprocess
+import threading
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import GLib, Gtk  # noqa: E402
+
+PENDIENTES = "/var/lib/alpine-update/pendientes"
+LANZADOR = "/usr/local/bin/alpine-update-launcher.sh"
+ICONO = "system-software-update"
+
+
+def pendientes():
+    try:
+        with open(PENDIENTES) as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def texto(n):
+    if n == 1:
+        return "Hay 1 actualizacion disponible"
+    return "Hay %d actualizaciones disponibles" % n
+
+
+def abrir(*_):
+    subprocess.Popen([LANZADOR], start_new_session=True)
+    return False
+
+
+def notificar(n):
+    # notify-send --wait devuelve el nombre de la accion pulsada.
+    def esperar():
+        try:
+            r = subprocess.run(
+                ["notify-send", "--app-name=Actualizar el sistema", "--icon=" + ICONO,
+                 "--action=abrir=Actualizar ahora", "--wait",
+                 texto(n), "Haz clic en \"Actualizar ahora\" o en el icono de la barra."],
+                capture_output=True, text=True, timeout=3600)
+        except (OSError, subprocess.SubprocessError):
+            return
+        if r.stdout.strip() == "abrir":
+            GLib.idle_add(abrir)
+    threading.Thread(target=esperar, daemon=True).start()
+
+
+class Aviso:
+    def __init__(self):
+        self.avisado = 0
+        self.icono = Gtk.StatusIcon.new_from_icon_name(ICONO)
+        self.icono.set_title("Actualizar el sistema")
+        self.icono.set_visible(False)
+        self.icono.connect("activate", abrir)
+        self.revisar()
+        GLib.timeout_add_seconds(60, self.revisar)
+
+    def revisar(self):
+        n = pendientes()
+        if n > 0:
+            self.icono.set_tooltip_text(texto(n) + ". Haz clic para instalarlas.")
+            self.icono.set_visible(True)
+            if n > self.avisado:
+                notificar(n)
+            self.avisado = n
+        else:
+            self.icono.set_visible(False)
+            self.avisado = 0
+        return True
+
+
+if __name__ == "__main__":
+    Aviso()
+    Gtk.main()
+INNEREOF
+    chmod 755 /usr/local/bin/alpine-update-aviso
+
+    mkdir -p /etc/xdg/autostart
+    cat > /etc/xdg/autostart/alpine-update-aviso.desktop <<'INNEREOF'
+[Desktop Entry]
+Type=Application
+Name=Aviso de actualizaciones
+Comment=Avisa cuando hay actualizaciones y abre "Actualizar el sistema"
+Exec=/usr/local/bin/alpine-update-aviso
+Icon=system-software-update
+NoDisplay=true
+NotShowIn=KDE;
+X-GNOME-Autostart-enabled=true
+INNEREOF
+}
+
 # Entrada del menu de aplicaciones.
 shortcut_write_desktop_file() {
     mkdir -p /usr/share/applications
@@ -3177,6 +3338,7 @@ menu_defaults() {
     OPT_FLATPAK=no
     OPT_ONLYOFFICE=no
     OPT_CHROME=no
+    OPT_BRAVE=no
     OPT_UPDATE_SHORTCUT=yes
 }
 
@@ -3198,6 +3360,7 @@ menu_checklist() {
         FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
         ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
         CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+        BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")" \
         UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
 
     # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
@@ -3228,18 +3391,18 @@ menu_checklist() {
 menu_read_selection() {
     # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
     # Las etiquetas se validan contra una lista fija antes del eval.
-    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME UPDATE_SHORTCUT; do
+    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT; do
         eval "OPT_$k=no"
     done
     for tag in $sel; do
         case "$tag" in
-            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|UPDATE_SHORTCUT)
+            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|BRAVE|UPDATE_SHORTCUT)
                 eval "OPT_$tag=yes" ;;
         esac
     done
 
     # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
-    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ]; then
+    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ] || [ "$OPT_BRAVE" = "yes" ]; then
         OPT_FLATPAK=yes
     fi
 }
@@ -3280,6 +3443,7 @@ menu_summary() {
     [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
     [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
     [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
+    [ "$OPT_BRAVE" = "yes" ]           && summary="$summary\n  - Brave"
     [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
     if [ -z "$summary" ]; then
         summary="\n  (ninguna opcional)"
