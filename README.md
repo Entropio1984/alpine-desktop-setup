@@ -107,6 +107,8 @@ Detalles importantes:
 
 **Por qué importa:** el repositorio `community` (escritorio, Firefox, LibreOffice...) solo recibe actualizaciones durante unos seis meses, hasta que sale la siguiente versión. Ver [Compatibilidad](#compatibilidad-con-futuras-versiones-de-alpine).
 
+Si una descarga se queda detenida (3 minutos sin avanzar), el botón corta ese paso y lo repite, hasta 3 veces. Si se pulsa el botón mientras otra actualización sigue en curso, avisa y no empieza otra. Cerrar la ventana no detiene la actualización (cortarla a la mitad podría dejar el sistema a medio actualizar): sigue en segundo plano y avisa al terminar.
+
 Cada ejecución queda registrada en `/var/log/alpine-update.log`.
 
 ## Qué hace cada bloque
