@@ -43,7 +43,7 @@ ask_yes_no() {
 }
 
 # Consulta una decision tomada en el menu de casillas del inicio
-# (Bloque 29, select_options_menu). $1 es el nombre de la variable
+# (Bloque 4, select_options_menu). $1 es el nombre de la variable
 # (p. ej. OPT_CUPS) y $2 la pregunta de respaldo. Si el menu no se pudo
 # mostrar (sin terminal interactiva, o sin poder instalar 'dialog'), la
 # variable queda vacia y se pregunta como siempre, una por una: el
@@ -224,7 +224,307 @@ hw_revisado() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 3: Distribución de teclado a "latam" (consola + sesión gráfica)
+# BLOQUE 3: Detección de hardware gráfico (soporta configuraciones híbridas)
+# ------------------------------------------------------------------------------
+GPU_HAS_INTEL="no"
+GPU_HAS_AMD="no"
+GPU_HAS_NVIDIA="no"
+GPU_HAS_VIRTUAL="no"
+GPU_COUNT=0
+NVIDIA_COUNT=0
+NVIDIA_SLOT=""      # ranura PCI de la NVIDIA, p. ej. 0000:01:00.0
+PRIMARY_SLOT=""     # GPU que el firmware uso al arrancar (boot_vga)
+PRIMARY_VENDOR=""
+IS_LAPTOP="no"
+OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
+
+detect_hardware() {
+    log_info "== Detectando hardware gráfico =="
+    ensure_hw_tools
+
+    if command -v lspci >/dev/null 2>&1; then
+        log_info "Componentes PCI detectados:"
+        lspci 2>/dev/null | tee -a "$LOG_FILE" || true
+    fi
+
+    # La clasificacion se hace leyendo /sys (clase y fabricante en
+    # numeros), no el texto de lspci: funciona aunque lspci falte o sea
+    # la version reducida de BusyBox, y no depende de como cada version
+    # de la base de datos de nombres describa el dispositivo.
+    #   Clases: 0x0300 VGA, 0x0302 3D (tipico de la NVIDIA en Optimus),
+    #           0x0380 otro controlador de pantalla.
+    #   Fabricantes: 0x8086 Intel, 0x1002 AMD, 0x10de NVIDIA; virtuales:
+    #           0x1af4 virtio, 0x15ad VMware, 0x80ee VirtualBox,
+    #           0x1b36 QXL, 0x1234 QEMU.
+    for dev in /sys/bus/pci/devices/*; do
+        [ -r "$dev/class" ] || continue
+        case "$(cat "$dev/class")" in
+            0x0300*|0x0302*|0x0380*) ;;
+            *) continue ;;
+        esac
+        slot="${dev##*/}"
+        vendor="$(cat "$dev/vendor" 2>/dev/null || echo desconocido)"
+        boot_vga="$(cat "$dev/boot_vga" 2>/dev/null || echo 0)"
+        GPU_COUNT=$((GPU_COUNT + 1))
+        case "$vendor" in
+            0x8086) GPU_HAS_INTEL="yes" ;;
+            0x1002) GPU_HAS_AMD="yes" ;;
+            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot" ;;
+            0x1af4|0x15ad|0x80ee|0x1b36|0x1234) GPU_HAS_VIRTUAL="yes" ;;
+        esac
+        if [ "$boot_vga" = "1" ]; then
+            PRIMARY_SLOT="$slot"
+            PRIMARY_VENDOR="$vendor"
+        fi
+        log_info "GPU en $slot: fabricante $vendor, dispositivo $(cat "$dev/device" 2>/dev/null)$( [ "$boot_vga" = "1" ] && echo ' (principal al arrancar)')"
+    done
+
+    if [ "$GPU_COUNT" -eq 0 ]; then
+        log_warn "No se detectó ningún controlador de video."
+        return 0
+    fi
+
+    # Portatil: tipo de chasis del firmware (8 portatil, 9 laptop,
+    # 10 notebook, 14 sub-notebook, 30-32 tableta/convertible) o, como
+    # respaldo, la presencia de una bateria.
+    case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in
+        8|9|10|11|14|30|31|32) IS_LAPTOP="yes" ;;
+    esac
+    if [ "$IS_LAPTOP" = "no" ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1; then
+        IS_LAPTOP="yes"
+    fi
+
+    # Optimus: portatil donde la pantalla la maneja la grafica integrada
+    # (Intel o AMD, la principal al arrancar) y hay UNA NVIDIA adicional.
+    # Si la principal fuera la NVIDIA (escritorios, o portatiles con
+    # conmutador en modo "solo dedicada"), el modo de ahorro no aplica:
+    # apagarla dejaria sin imagen las salidas conectadas a ella.
+    if [ "$IS_LAPTOP" = "yes" ] && [ "$NVIDIA_COUNT" -eq 1 ]; then
+        case "$PRIMARY_VENDOR" in
+            0x8086|0x1002) OPTIMUS_LAPTOP="yes" ;;
+        esac
+    fi
+
+    log_ok "Resumen GPU -> Intel:$GPU_HAS_INTEL AMD:$GPU_HAS_AMD NVIDIA:$GPU_HAS_NVIDIA Virtual:$GPU_HAS_VIRTUAL (adaptadores: $GPU_COUNT; portatil: $IS_LAPTOP; Optimus: $OPTIMUS_LAPTOP)"
+
+    # Adaptadores de video por USB (docks para multiples monitores) no
+    # aparecen en lspci. DisplayLink es el fabricante mas comun. NO se
+    # intenta instalar nada automaticamente: "evdi" (el driver de kernel
+    # que necesitan) no esta empaquetado en Alpine -- en las distros que
+    # lo ofrecen requiere compilarse vía DKMS contra el kernel en uso, un
+    # flujo que Alpine no tiene estandarizado. Solo se advierte.
+    if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "displaylink"; then
+        log_warn "Adaptador de video USB DisplayLink detectado."
+        log_info "DisplayLink requiere el modulo de kernel 'evdi', que NO esta empaquetado en Alpine (solo existe vía DKMS en otras distros). No se instala nada automaticamente; sera necesario compilarlo manualmente si se necesita soporte multi-monitor por USB."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 4: Menu de casillas con todas las decisiones al inicio
+# ------------------------------------------------------------------------------
+# Antes, las 10 preguntas aparecian repartidas a lo largo de una ejecucion
+# larga, obligando a vigilar la terminal de principio a fin. Aqui se
+# reunen en UNA pantalla al inicio (casillas con 'dialog', que funciona
+# tanto en una consola TTY como en una terminal grafica), se confirma un
+# resumen, y el resto del script corre solo, sin volver a preguntar.
+#
+# Aunque este bloque esta al final del archivo, main() lo ejecuta al
+# principio, justo despues de detect_hardware(): la opcion de NVIDIA
+# solo tiene sentido mostrarla si hay una NVIDIA.
+#
+# Los textos del menu van SIN acentos a proposito: el menu aparece antes
+# de que el script configure el idioma, y en una consola TTY recien
+# instalada los acentos pueden verse como simbolos extranos.
+#
+# Si el menu no se puede mostrar (sin terminal interactiva, o sin poder
+# instalar 'dialog'), las variables OPT_* quedan vacias y want() vuelve
+# a preguntar cada opcion por separado, como antes.
+# Convierte yes/no al formato de estado de una casilla de dialog.
+menu_state() {
+    if [ "$1" = "yes" ]; then echo on; else echo off; fi
+}
+
+select_options_menu() {
+    log_info "== Seleccion de acciones =="
+
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        log_warn "No hay una terminal interactiva: se preguntara cada opcion por separado durante la ejecucion."
+        return 0
+    fi
+
+    command -v dialog >/dev/null 2>&1 || install_pkgs dialog
+    if ! command -v dialog >/dev/null 2>&1; then
+        log_warn "No se pudo instalar 'dialog': se preguntara cada opcion por separado durante la ejecucion."
+        return 0
+    fi
+
+    menu_defaults
+
+    while :; do
+        menu_checklist
+        menu_read_selection
+
+        # Portatil Optimus: elegir que hacer con la NVIDIA. "Volver"
+        # regresa a la pantalla de casillas.
+        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+            menu_nvidia_mode || continue
+        fi
+
+        menu_summary
+
+        if dialog --title "Confirmar" \
+                --yes-label "Comenzar" --no-label "Volver" \
+                --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
+                0 0; then
+            break
+        fi
+        # "Volver" (o ESC): se repite el menu con las marcas actuales.
+    done
+
+    clear 2>/dev/null || true
+    # '%b' interpreta los \n del resumen sin usarlo como cadena de
+    # formato: si una descripcion llegara a contener un '%', printf no
+    # lo confundiria con una directiva (antes: error y linea cortada).
+    log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
+}
+
+menu_defaults() {
+    # Valores por defecto (casillas premarcadas). Criterios:
+    #  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
+    #    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
+    #    negra) es mucho peor que el de marcarlo (perder la aceleracion
+    #    de la NVIDIA, usando la otra GPU).
+    #  - Flatpak y sus aplicaciones: desmarcados. Instalar Flatpak sin
+    #    ninguna aplicacion seria infraestructura para nada; marcar
+    #    OnlyOffice o Chrome activa Flatpak automaticamente.
+    OPT_KEYBOARD=yes
+    OPT_NVIDIA_SAFE=yes
+    # Portatiles Optimus: en vez de la casilla de modo seguro se muestra
+    # una segunda pantalla con tres modos; por defecto, el de ahorro
+    # (probado en el K53SV, ver nvidia_apply_optimus).
+    OPT_NVIDIA_MODE=""
+    [ "$OPTIMUS_LAPTOP" = "yes" ] && OPT_NVIDIA_MODE="optimus"
+    OPT_GCOMPAT=no
+    OPT_CUPS=yes
+    OPT_LIBREOFFICE=yes
+    OPT_FIREFOX=yes
+    OPT_FLATPAK=no
+    OPT_ONLYOFFICE=no
+    OPT_CHROME=no
+    OPT_BRAVE=no
+    OPT_UPDATE_SHORTCUT=yes
+}
+
+# Muestra la pantalla de casillas y deja las etiquetas elegidas en $sel.
+# "Salir" termina el script sin hacer cambios.
+menu_checklist() {
+    # Se arma la lista de casillas con los valores ACTUALES: si el
+    # usuario vuelve desde el resumen, encuentra lo que ya habia
+    # marcado, no los valores por defecto.
+    set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
+    if [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ]; then
+        set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
+    fi
+    set -- "$@" \
+        GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
+        CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
+        LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
+        FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
+        FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
+        ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
+        CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+        BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")" \
+        UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
+
+    # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
+    # segun el contenido y la pantalla disponible. Con un tamano fijo
+    # (antes 20x72), en pantallas amplias las descripciones quedaban
+    # cortadas; en pantallas chicas dialog igual recorta la ventana y
+    # la lista se vuelve desplazable, asi que no se pierde ninguna
+    # opcion.
+    # --no-tags: oculta los nombres internos (KEYBOARD, CUPS...), que
+    # no le dicen nada al usuario y ocupaban ~17 columnas -- sin ellos,
+    # todas las descripciones caben completas en una consola de 80
+    # columnas. dialog SIGUE devolviendo esos nombres al confirmar, que
+    # es lo que el script lee mas abajo (verificado).
+    if ! sel="$(dialog --stdout --separate-output --no-tags \
+            --backtitle "Configuracion post-instalacion de Alpine Linux" \
+            --title "Acciones a realizar" \
+            --ok-label "Continuar" --cancel-label "Salir" \
+            --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
+            0 0 0 "$@")"; then
+        clear 2>/dev/null || true
+        log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
+        trap - EXIT INT TERM
+        exit 0
+    fi
+}
+
+# Pasa las etiquetas de $sel a las variables OPT_*.
+menu_read_selection() {
+    # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
+    # Las etiquetas se validan contra una lista fija antes del eval.
+    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT; do
+        eval "OPT_$k=no"
+    done
+    for tag in $sel; do
+        case "$tag" in
+            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|BRAVE|UPDATE_SHORTCUT)
+                eval "OPT_$tag=yes" ;;
+        esac
+    done
+
+    # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
+    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ] || [ "$OPT_BRAVE" = "yes" ]; then
+        OPT_FLATPAK=yes
+    fi
+}
+
+# Portatil Optimus: segunda pantalla con los tres modos de la NVIDIA.
+# Devuelve 1 si se eligio "Volver".
+menu_nvidia_mode() {
+    if ! nv_sel="$(dialog --stdout --no-tags \
+            --backtitle "Configuracion post-instalacion de Alpine Linux" \
+            --title "Grafica NVIDIA (portatil con graficos hibridos)" \
+            --ok-label "Continuar" --cancel-label "Volver" \
+            --radiolist "Este portatil tiene una grafica integrada y una NVIDIA.\nFLECHAS para moverse, ESPACIO elige, ENTER continua." \
+            0 0 0 \
+            optimus "Apagarla y usar la integrada (ahorro, recomendado)" "$( [ "$OPT_NVIDIA_MODE" = optimus ] && echo on || echo off)" \
+            safe "Bloquearla por completo (sin driver)" "$( [ "$OPT_NVIDIA_MODE" = safe ] && echo on || echo off)" \
+            active "Dejarla activa con nouveau (riesgo en tarjetas viejas)" "$( [ "$OPT_NVIDIA_MODE" = active ] && echo on || echo off)")"; then
+        return 1
+    fi
+    case "$nv_sel" in
+        optimus|safe|active) OPT_NVIDIA_MODE="$nv_sel" ;;
+    esac
+}
+
+# Arma en $summary la lista de lo que se va a instalar.
+menu_summary() {
+    summary=""
+    [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
+    [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
+    case "$OPT_NVIDIA_MODE" in
+        optimus) summary="$summary\n  - NVIDIA apagada, todo en la grafica integrada (ahorro)" ;;
+        safe)    summary="$summary\n  - NVIDIA bloqueada (modo seguro)" ;;
+        active)  summary="$summary\n  - NVIDIA activa con nouveau" ;;
+    esac
+    [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
+    [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
+    [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
+    [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
+    [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
+    [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
+    [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
+    [ "$OPT_BRAVE" = "yes" ]           && summary="$summary\n  - Brave"
+    [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
+    if [ -z "$summary" ]; then
+        summary="\n  (ninguna opcional)"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 5: Distribución de teclado a "latam" (consola + sesión gráfica)
 # ------------------------------------------------------------------------------
 setup_keyboard_layout() {
     log_info "== Distribución de teclado =="
@@ -301,7 +601,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 4: Detección multiparadigma del entorno de escritorio
+# BLOQUE 6: Detección multiparadigma del entorno de escritorio
 # ------------------------------------------------------------------------------
 DE_XFCE="no"
 DE_PLASMA="no"
@@ -339,7 +639,7 @@ detect_desktop_environment() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 5: Detección del usuario real del sistema (vía doas/logname)
+# BLOQUE 7: Detección del usuario real del sistema (vía doas/logname)
 # ------------------------------------------------------------------------------
 TARGET_USER=""
 TARGET_HOME=""
@@ -367,7 +667,7 @@ detect_target_user() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 6: Applets de red y audio (enrutamiento dinámico según DE)
+# BLOQUE 8: Applets de red y audio (enrutamiento dinámico según DE)
 # ------------------------------------------------------------------------------
 # Servidor de audio: PulseAudio o PipeWire.
 # En Alpine, "pulseaudio" es tambien un nombre VIRTUAL: lo provee el
@@ -729,7 +1029,7 @@ WAYBAR
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 7: Deteccion de hardware de red inalambrica (PCI + USB)
+# BLOQUE 9: Deteccion de hardware de red inalambrica (PCI + USB)
 # ------------------------------------------------------------------------------
 # Un adaptador WiFi puede estar conectado por PCI/PCIe (tarjeta interna) o
 # por USB (dongle externo). lspci NO ve dispositivos USB, asi que hace
@@ -765,7 +1065,7 @@ detect_wifi_hardware() {
             WIFI_INFO=""
         else
             # Sin las herramientas no se sabe: se instala el firmware general
-            # (Bloque 8), como si hubiera un adaptador desconocido.
+            # (Bloque 10), como si hubiera un adaptador desconocido.
             log_warn "No se pudo revisar del todo el hardware (lspci/lsusb)."
             WIFI_INFO="desconocido"
         fi
@@ -779,7 +1079,7 @@ $net_usb"
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 8: Firmware de adaptadores WiFi segun fabricante detectado
+# BLOQUE 10: Firmware de adaptadores WiFi segun fabricante detectado
 # ------------------------------------------------------------------------------
 # Alpine divide el firmware en decenas de subpaquetes por fabricante
 # (linux-firmware-intel, linux-firmware-realtek, linux-firmware-ath9k_htc,
@@ -843,7 +1143,7 @@ install_wifi_firmware() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 9: Deteccion de hardware Bluetooth (PCI + USB)
+# BLOQUE 11: Deteccion de hardware Bluetooth (PCI + USB)
 # ------------------------------------------------------------------------------
 # La inmensa mayoria de adaptadores Bluetooth en laptops estan cableados
 # internamente por USB (a menudo combinados con el chip WiFi en el mismo
@@ -886,7 +1186,7 @@ $bt_usb"
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 10: Pila Bluetooth (bluez) y firmware por fabricante
+# BLOQUE 12: Pila Bluetooth (bluez) y firmware por fabricante
 # ------------------------------------------------------------------------------
 # NOTA: a diferencia de lo que sugiere el nombre, NO existe un paquete
 # generico "linux-firmware-bluetooth" en Alpine -- el firmware de
@@ -895,7 +1195,7 @@ $bt_usb"
 # Atheros/Qualcomm, linux-firmware-brcm cubre WiFi+Bluetooth combinado
 # de Broadcom, linux-firmware-intel cubre combos Intel). Muchos chips
 # combo WiFi+Bluetooth ya quedan cubiertos por el firmware que instalo
-# el Bloque 8; aqui solo se completa lo especifico de Bluetooth que
+# el Bloque 10; aqui solo se completa lo especifico de Bluetooth que
 # pueda faltar.
 install_bluetooth() {
     if [ -z "$BT_INFO" ]; then
@@ -907,7 +1207,7 @@ install_bluetooth() {
     # El "puente" que enruta el perfil A2DP hacia el servidor de audio:
     # sin el, bluez permite emparejar el dispositivo pero los
     # audifonos/altavoces Bluetooth no emiten sonido. Depende del servidor
-    # elegido en el Bloque 6.
+    # elegido en el Bloque 8.
     if [ "$AUDIO_SERVER" = "pipewire" ]; then
         install_pkgs bluez bluez-openrc pipewire-spa-bluez
     else
@@ -936,110 +1236,14 @@ install_bluetooth() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 11: Detección de hardware gráfico (soporta configuraciones híbridas)
-# ------------------------------------------------------------------------------
-GPU_HAS_INTEL="no"
-GPU_HAS_AMD="no"
-GPU_HAS_NVIDIA="no"
-GPU_HAS_VIRTUAL="no"
-GPU_COUNT=0
-NVIDIA_COUNT=0
-NVIDIA_SLOT=""      # ranura PCI de la NVIDIA, p. ej. 0000:01:00.0
-PRIMARY_SLOT=""     # GPU que el firmware uso al arrancar (boot_vga)
-PRIMARY_VENDOR=""
-IS_LAPTOP="no"
-OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
-
-detect_hardware() {
-    log_info "== Detectando hardware gráfico =="
-    ensure_hw_tools
-
-    if command -v lspci >/dev/null 2>&1; then
-        log_info "Componentes PCI detectados:"
-        lspci 2>/dev/null | tee -a "$LOG_FILE" || true
-    fi
-
-    # La clasificacion se hace leyendo /sys (clase y fabricante en
-    # numeros), no el texto de lspci: funciona aunque lspci falte o sea
-    # la version reducida de BusyBox, y no depende de como cada version
-    # de la base de datos de nombres describa el dispositivo.
-    #   Clases: 0x0300 VGA, 0x0302 3D (tipico de la NVIDIA en Optimus),
-    #           0x0380 otro controlador de pantalla.
-    #   Fabricantes: 0x8086 Intel, 0x1002 AMD, 0x10de NVIDIA; virtuales:
-    #           0x1af4 virtio, 0x15ad VMware, 0x80ee VirtualBox,
-    #           0x1b36 QXL, 0x1234 QEMU.
-    for dev in /sys/bus/pci/devices/*; do
-        [ -r "$dev/class" ] || continue
-        case "$(cat "$dev/class")" in
-            0x0300*|0x0302*|0x0380*) ;;
-            *) continue ;;
-        esac
-        slot="${dev##*/}"
-        vendor="$(cat "$dev/vendor" 2>/dev/null || echo desconocido)"
-        boot_vga="$(cat "$dev/boot_vga" 2>/dev/null || echo 0)"
-        GPU_COUNT=$((GPU_COUNT + 1))
-        case "$vendor" in
-            0x8086) GPU_HAS_INTEL="yes" ;;
-            0x1002) GPU_HAS_AMD="yes" ;;
-            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot" ;;
-            0x1af4|0x15ad|0x80ee|0x1b36|0x1234) GPU_HAS_VIRTUAL="yes" ;;
-        esac
-        if [ "$boot_vga" = "1" ]; then
-            PRIMARY_SLOT="$slot"
-            PRIMARY_VENDOR="$vendor"
-        fi
-        log_info "GPU en $slot: fabricante $vendor, dispositivo $(cat "$dev/device" 2>/dev/null)$( [ "$boot_vga" = "1" ] && echo ' (principal al arrancar)')"
-    done
-
-    if [ "$GPU_COUNT" -eq 0 ]; then
-        log_warn "No se detectó ningún controlador de video."
-        return 0
-    fi
-
-    # Portatil: tipo de chasis del firmware (8 portatil, 9 laptop,
-    # 10 notebook, 14 sub-notebook, 30-32 tableta/convertible) o, como
-    # respaldo, la presencia de una bateria.
-    case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in
-        8|9|10|11|14|30|31|32) IS_LAPTOP="yes" ;;
-    esac
-    if [ "$IS_LAPTOP" = "no" ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1; then
-        IS_LAPTOP="yes"
-    fi
-
-    # Optimus: portatil donde la pantalla la maneja la grafica integrada
-    # (Intel o AMD, la principal al arrancar) y hay UNA NVIDIA adicional.
-    # Si la principal fuera la NVIDIA (escritorios, o portatiles con
-    # conmutador en modo "solo dedicada"), el modo de ahorro no aplica:
-    # apagarla dejaria sin imagen las salidas conectadas a ella.
-    if [ "$IS_LAPTOP" = "yes" ] && [ "$NVIDIA_COUNT" -eq 1 ]; then
-        case "$PRIMARY_VENDOR" in
-            0x8086|0x1002) OPTIMUS_LAPTOP="yes" ;;
-        esac
-    fi
-
-    log_ok "Resumen GPU -> Intel:$GPU_HAS_INTEL AMD:$GPU_HAS_AMD NVIDIA:$GPU_HAS_NVIDIA Virtual:$GPU_HAS_VIRTUAL (adaptadores: $GPU_COUNT; portatil: $IS_LAPTOP; Optimus: $OPTIMUS_LAPTOP)"
-
-    # Adaptadores de video por USB (docks para multiples monitores) no
-    # aparecen en lspci. DisplayLink es el fabricante mas comun. NO se
-    # intenta instalar nada automaticamente: "evdi" (el driver de kernel
-    # que necesitan) no esta empaquetado en Alpine -- en las distros que
-    # lo ofrecen requiere compilarse vía DKMS contra el kernel en uso, un
-    # flujo que Alpine no tiene estandarizado. Solo se advierte.
-    if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "displaylink"; then
-        log_warn "Adaptador de video USB DisplayLink detectado."
-        log_info "DisplayLink requiere el modulo de kernel 'evdi', que NO esta empaquetado en Alpine (solo existe vía DKMS en otras distros). No se instala nada automaticamente; sera necesario compilarlo manualmente si se necesita soporte multi-monitor por USB."
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# BLOQUE 12: Firmware y controladores de video (NVIDIA: modos ahorro Optimus, seguro y activo)
+# BLOQUE 13: Firmware y controladores de video (NVIDIA: modos ahorro Optimus, seguro y activo)
 # ------------------------------------------------------------------------------
 install_drivers() {
     log_info "== Instalando firmware y controladores =="
 
     # El script no pide el metapaquete "linux-firmware" (depende de todos
     # los subpaquetes de fabricante); solo pide los del hardware detectado.
-    # Ver la NOTA SOBRE EL FIRMWARE del Bloque 8: en una instalacion
+    # Ver la NOTA SOBRE EL FIRMWARE del Bloque 10: en una instalacion
     # normal de Alpine ese metapaquete ya viene incluido.
     install_pkgs mesa-dri-gallium mesa-gl mesa-egl
 
@@ -1324,7 +1528,7 @@ check_vaapi() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 13: Dispositivos sin controlador y capas de compatibilidad
+# BLOQUE 14: Dispositivos sin controlador y capas de compatibilidad
 # ------------------------------------------------------------------------------
 # Hasta aqui el script instalo firmware para el hardware que reconocio.
 # Este bloque cierra el ciclo preguntando algo distinto: ¿quedo algun
@@ -1401,7 +1605,7 @@ check_unclaimed_devices() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 14: Detección de CPU y microcódigo
+# BLOQUE 15: Detección de CPU y microcódigo
 # ------------------------------------------------------------------------------
 CPU_VENDOR=""
 
@@ -1497,7 +1701,7 @@ install_microcode() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 15: zram (memoria comprimida al 100% de la RAM física)
+# BLOQUE 16: zram (memoria comprimida al 100% de la RAM física)
 # ------------------------------------------------------------------------------
 setup_zram() {
     log_info "== Configurando zram =="
@@ -1530,7 +1734,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 16: EarlyOOM
+# BLOQUE 17: EarlyOOM
 # ------------------------------------------------------------------------------
 setup_earlyoom() {
     log_info "== Configurando EarlyOOM =="
@@ -1540,14 +1744,14 @@ setup_earlyoom() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 17: Gestión de energía básica (ACPI)
+# BLOQUE 18: Gestión de energía básica (ACPI)
 # ------------------------------------------------------------------------------
 # CORRECCION: antes se habilitaba acpid siempre. Desde mayo de 2025,
 # setup-desktop (alpine-conf) lo DESHABILITA a proposito en los equipos
 # de escritorio, porque podia apagar el sistema por accidente: con un
 # escritorio, elogind ya atiende el boton de encendido y la tapa, y acpid
 # respondia al mismo evento por su cuenta. Este script instala elogind
-# siempre (Bloque 19), asi que acpid solo se habilita si no hay escritorio.
+# siempre (Bloque 21), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
     if has_desktop; then
@@ -1564,7 +1768,7 @@ setup_power() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 18: Optimizacion de discos duros mecanicos (HDD)
+# BLOQUE 19: Optimizacion de discos duros mecanicos (HDD)
 # ------------------------------------------------------------------------------
 # Equipos "revividos" suelen tener disco mecanico, no SSD. BFQ prioriza
 # que un proceso con mucha carga de E/S (una actualizacion de apk, copiar
@@ -1653,7 +1857,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 18b: TRIM semanal para discos de estado solido
+# BLOQUE 20: TRIM semanal para discos de estado solido
 # ------------------------------------------------------------------------------
 # Un SSD necesita que el sistema le avise que bloques quedaron libres
 # (TRIM); sin eso, en SSD baratos el rendimiento de escritura cae con el
@@ -1695,7 +1899,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 19: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
+# BLOQUE 21: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
 # ------------------------------------------------------------------------------
 # El montaje real lo hace udisks2 (dbus-activated, no requiere su propio
 # servicio OpenRC). Para que un usuario normal (no root) pueda montar sin
@@ -1750,7 +1954,7 @@ setup_usb_automount() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 20: Soporte de impresión (CUPS)
+# BLOQUE 22: Soporte de impresión (CUPS)
 # ------------------------------------------------------------------------------
 setup_printing() {
     log_info "== Soporte de impresión (CUPS) =="
@@ -1767,7 +1971,7 @@ setup_printing() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 21: Backends de compresión
+# BLOQUE 23: Backends de compresión
 # ------------------------------------------------------------------------------
 install_archive_tools() {
     log_info "== Instalando utilidades de compresión =="
@@ -1776,7 +1980,7 @@ install_archive_tools() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 22: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
+# BLOQUE 24: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
 setup_locale() {
     # Idioma: espanol de Espana salvo que se indique otro con OPT_LANG
@@ -1877,7 +2081,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 23: Tipografías base (antes de LibreOffice)
+# BLOQUE 25: Tipografías base (antes de LibreOffice)
 # ------------------------------------------------------------------------------
 install_fonts() {
     log_info "== Instalando tipografías base =="
@@ -1889,7 +2093,7 @@ install_fonts() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 24: LibreOffice + paquete de idioma del sistema
+# BLOQUE 26: LibreOffice + paquete de idioma del sistema
 # ------------------------------------------------------------------------------
 install_libreoffice() {
     log_info "== LibreOffice =="
@@ -1961,7 +2165,137 @@ PEND
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 25: Flatpak + Flathub (OnlyOffice, Google Chrome y Brave, opcionales)
+# BLOQUE 27: Aplicaciones de uso diario y aplicaciones predeterminadas
+# ------------------------------------------------------------------------------
+# Pensado para el usuario comun al que apunta el script: leer PDFs,
+# reproducir audios y videos locales, y navegar. Cada aplicacion se
+# registra ademas como PREDETERMINADA: instalarla no basta, porque varias
+# aplicaciones se declaran capaces de abrir el mismo tipo de archivo (por
+# ejemplo, LibreOffice Draw tambien abre PDF) y cual gana depende del
+# escritorio. Los valores se escriben en /etc/xdg/mimeapps.list, el
+# archivo de preferencias a nivel de sistema del estandar freedesktop.
+# Limite conocido: si el usuario ya eligio otra aplicacion por su cuenta,
+# su eleccion personal (~/.config/mimeapps.list) tiene prioridad.
+MIMEAPPS="/etc/xdg/mimeapps.list"
+
+# Imprime el primer archivo .desktop existente de la lista. Los nombres
+# cambian entre versiones (evince, por ejemplo, usa org.gnome.Evince.desktop),
+# asi que nunca se apunta a una aplicacion que no esta instalada.
+find_desktop_file() {
+    for d in "$@"; do
+        if [ -f "/usr/share/applications/$d" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Registra $1 (archivo .desktop) como predeterminado para los tipos MIME
+# restantes, en la seccion [Default Applications]. Reemplaza una entrada
+# previa del mismo tipo y conserva el resto del archivo intacto.
+set_default_app() {
+    app="$1"; shift
+    mkdir -p /etc/xdg
+    [ -f "$MIMEAPPS" ] || printf '[Default Applications]\n' > "$MIMEAPPS"
+    grep -qx '\[Default Applications\]' "$MIMEAPPS" || printf '\n[Default Applications]\n' >> "$MIMEAPPS"
+    for mime in "$@"; do
+        awk -v m="$mime" -v a="$app" '
+            /^\[/ { insec = ($0 == "[Default Applications]") }
+            insec && index($0, m "=") == 1 { next }
+            { print }
+            $0 == "[Default Applications]" { print m "=" a }
+        ' "$MIMEAPPS" > "$MIMEAPPS.tmp" && mv "$MIMEAPPS.tmp" "$MIMEAPPS"
+    done
+}
+
+install_daily_apps() {
+    log_info "== Aplicaciones de uso diario =="
+
+    if ! has_desktop; then
+        log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
+        return 0
+    fi
+
+    # --- Visor de PDF ---
+    # Okular en Plasma (se integra con el resto del escritorio); evince en
+    # los demas (GTK, liviano). Si conviven Plasma y otro escritorio, se
+    # instalan ambos y el predeterminado de sistema es evince.
+    if [ "$DE_PLASMA" = "yes" ]; then
+        install_pkgs okular
+    fi
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
+        install_pkgs evince
+    fi
+    if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
+        set_default_app "$pdf_app" application/pdf
+        log_ok "Visor de PDF predeterminado: $pdf_app"
+    else
+        log_warn "No se encontro el visor de PDF instalado; no se cambio la aplicacion predeterminada para PDF."
+    fi
+
+    # --- Reproductor multimedia ---
+    # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
+    # de video por hardware (VA-API) instalada en el Bloque 13. Cubre los
+    # audios de WhatsApp (.ogg/.opus) y los videos descargados habituales.
+    install_pkgs mpv
+    if media_app="$(find_desktop_file mpv.desktop io.mpv.Mpv.desktop)"; then
+        set_default_app "$media_app" \
+            audio/ogg audio/x-opus+ogg audio/opus audio/mpeg audio/mp4 audio/aac \
+            audio/x-wav audio/wav audio/flac audio/webm \
+            video/mp4 video/webm video/x-matroska video/quicktime \
+            video/x-msvideo video/3gpp video/mpeg video/ogg
+        log_ok "Reproductor multimedia predeterminado: $media_app"
+    else
+        log_warn "No se encontro el reproductor instalado; no se cambiaron las aplicaciones predeterminadas de audio y video."
+    fi
+
+    # --- Tienda de aplicaciones ---
+    # Plasma trae Discover y GNOME trae GNOME Software (los instala
+    # setup-desktop). En los demas: Discover en LXQt (Qt, como el
+    # escritorio) y GNOME Software en XFCE, MATE y Sway (GTK). Ambas instalan y
+    # actualizan paquetes de Alpine y, con Flatpak (Bloque 28), tambien
+    # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
+    # (install_if) cuando flatpak esta instalado.
+    if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
+        install_pkgs discover
+    fi
+    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
+        install_pkgs gnome-software gnome-software-plugin-apk2 apk-polkit-rs
+    fi
+
+    # --- Navegador ---
+    if want OPT_FIREFOX "¿Deseas instalar el navegador Firefox?"; then
+        install_pkgs firefox
+        if web_app="$(find_desktop_file firefox.desktop org.mozilla.firefox.desktop)"; then
+            set_default_app "$web_app" x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml
+            log_ok "Navegador predeterminado: $web_app"
+        else
+            log_warn "No se encontro Firefox instalado; no se cambio el navegador predeterminado."
+        fi
+        # No se fuerza el idioma: en su primer arranque, Firefox ofrece
+        # descargar el paquete de idioma que coincide con el del sistema
+        # (es_ES u OPT_LANG). Forzar otra variante requeriria descargas atadas a la
+        # version exacta del navegador, que se romperian al actualizarlo.
+        log_info "En su primer arranque, Firefox ofrecera cambiar su interfaz al idioma del sistema."
+    else
+        log_info "Se omite Firefox."
+    fi
+}
+
+# Recomendaciones que el script NO aplica por su cuenta (instalar
+# extensiones sin que el usuario lo vea no es buena practica). Se
+# muestran al final para que las vea quien ejecuto el script.
+print_browser_recommendations() {
+    command -v firefox >/dev/null 2>&1 || return 0
+    log_info "== Recomendaciones para Firefox (instalar desde addons.mozilla.org) =="
+    log_info "  - uBlock Origin: bloquea publicidad y rastreadores, lo que reduce la carga del procesador al navegar."
+    log_info "  - enhanced-h264ify: en equipos antiguos, pide a YouTube video H.264, que la GPU puede decodificar"
+    log_info "    por hardware; los formatos por defecto (VP9/AV1) terminan decodificandose en el procesador."
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 28: Flatpak + Flathub (OnlyOffice, Google Chrome y Brave, opcionales)
 # ------------------------------------------------------------------------------
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
@@ -1973,7 +2307,7 @@ setup_flatpak() {
 
     log_info "== Configurando Flatpak y repositorio Flathub =="
 
-    # dbus ya se instaló y habilitó en el Bloque 19 (setup_usb_automount).
+    # dbus ya se instaló y habilitó en el Bloque 21 (setup_usb_automount).
     # Portal GTK como base universal (XFCE/GNOME/MATE, y red de seguridad
     # para cualquier entorno). El propio xdg-desktop-portal elige el
     # backend correcto en tiempo real según XDG_CURRENT_DESKTOP, así que
@@ -2035,7 +2369,7 @@ setup_flatpak() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 26: Habilitar el Gestor de Inicio de Sesión (Display Manager)
+# BLOQUE 29: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
 # La llave de X que crea la pantalla de inicio queda atada al nombre del
 # equipo. Si arranca antes que el servicio "hostname" (pasa en el primer
@@ -2056,7 +2390,7 @@ dm_tras_hostname() {
 # No basta con que setup-desktop lo haya dejado instalado: hay reportes
 # reales de lightdm/sddm fallando al no quedar correctamente enganchados
 # al runlevel default. A diferencia de una prioridad fija, aquí se usan
-# las banderas DE_* ya detectadas (Bloque 4) para elegir el DM que
+# las banderas DE_* ya detectadas (Bloque 6) para elegir el DM que
 # corresponde por convención -- la misma que usa el propio setup-desktop
 # de Alpine (plasma->sddm, gnome->gdm) -- en vez de encender el primero
 # que aparezca instalado. Esto importa en equipos con más de un entorno
@@ -2158,7 +2492,7 @@ setup_greetd_idioma() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 26b: La pantalla de inicio usa la resolucion elegida por el usuario
+# BLOQUE 30: La pantalla de inicio usa la resolucion elegida por el usuario
 # ------------------------------------------------------------------------------
 # Cada escritorio guarda la resolucion en la configuracion del usuario, que
 # la pantalla de inicio (LightDM, SDDM, GDM) no lee: esta arranca siempre
@@ -2484,7 +2818,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 27: Acceso directo de actualizacion en el menu de aplicaciones
+# BLOQUE 31: Acceso directo de actualizacion en el menu de aplicaciones
 # ------------------------------------------------------------------------------
 # Los archivos .desktop siguen el estandar XDG Desktop Entry: un unico
 # archivo en /usr/share/applications/ aparece automaticamente en el menu
@@ -2492,7 +2826,7 @@ EOF
 # logica especifica por DE -- es justamente para eso que existe el
 # estandar.
 #
-# Autenticacion via pkexec (parte de polkit-elogind, Bloque 19). Por
+# Autenticacion via pkexec (parte de polkit-elogind, Bloque 21). Por
 # defecto, SIN necesidad de ninguna regla de polkit personalizada: si el
 # usuario objetivo esta en el grupo "wheel", pkexec pide UNICAMENTE su
 # propia contrasena (igual que doas), nunca la de root. Es el
@@ -2544,7 +2878,7 @@ shortcut_install_deps() {
     # agente de autenticacion polkit en ejecucion para dibujar la ventana
     # de contrasena. Sin el, pkexec falla con "No authentication agent
     # found" y la actualizacion nunca empieza. Plasma (polkit-kde-agent),
-    # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 19)
+    # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 21)
     # ya traen el suyo; XFCE, MATE y Sway se cubren aqui. Ademas, el lanzador
     # comprueba en cada ejecucion que el agente este CORRIENDO y lo
     # inicia si hace falta: instalar el paquete no garantiza que arranque,
@@ -3225,7 +3559,7 @@ INNEREOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 28: Permisos de grupo para Audio/Video/Impresión
+# BLOQUE 32: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
     log_info "== Configurando permisos de grupo =="
@@ -3247,348 +3581,14 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 29: Menu de casillas con todas las decisiones al inicio
-# ------------------------------------------------------------------------------
-# Antes, las 10 preguntas aparecian repartidas a lo largo de una ejecucion
-# larga, obligando a vigilar la terminal de principio a fin. Aqui se
-# reunen en UNA pantalla al inicio (casillas con 'dialog', que funciona
-# tanto en una consola TTY como en una terminal grafica), se confirma un
-# resumen, y el resto del script corre solo, sin volver a preguntar.
-#
-# Aunque este bloque esta al final del archivo, main() lo ejecuta al
-# principio, justo despues de detect_hardware(): la opcion de NVIDIA
-# solo tiene sentido mostrarla si hay una NVIDIA.
-#
-# Los textos del menu van SIN acentos a proposito: el menu aparece antes
-# de que el script configure el idioma, y en una consola TTY recien
-# instalada los acentos pueden verse como simbolos extranos.
-#
-# Si el menu no se puede mostrar (sin terminal interactiva, o sin poder
-# instalar 'dialog'), las variables OPT_* quedan vacias y want() vuelve
-# a preguntar cada opcion por separado, como antes.
-# Convierte yes/no al formato de estado de una casilla de dialog.
-menu_state() {
-    if [ "$1" = "yes" ]; then echo on; else echo off; fi
-}
-
-select_options_menu() {
-    log_info "== Seleccion de acciones =="
-
-    if [ ! -t 0 ] || [ ! -t 1 ]; then
-        log_warn "No hay una terminal interactiva: se preguntara cada opcion por separado durante la ejecucion."
-        return 0
-    fi
-
-    command -v dialog >/dev/null 2>&1 || install_pkgs dialog
-    if ! command -v dialog >/dev/null 2>&1; then
-        log_warn "No se pudo instalar 'dialog': se preguntara cada opcion por separado durante la ejecucion."
-        return 0
-    fi
-
-    menu_defaults
-
-    while :; do
-        menu_checklist
-        menu_read_selection
-
-        # Portatil Optimus: elegir que hacer con la NVIDIA. "Volver"
-        # regresa a la pantalla de casillas.
-        if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
-            menu_nvidia_mode || continue
-        fi
-
-        menu_summary
-
-        if dialog --title "Confirmar" \
-                --yes-label "Comenzar" --no-label "Volver" \
-                --yesno "Ademas de la configuracion base (red, audio, drivers, idioma, etc.), se instalara:\n$summary\n\nA partir de aqui el script no hara mas preguntas." \
-                0 0; then
-            break
-        fi
-        # "Volver" (o ESC): se repite el menu con las marcas actuales.
-    done
-
-    clear 2>/dev/null || true
-    # '%b' interpreta los \n del resumen sin usarlo como cadena de
-    # formato: si una descripcion llegara a contener un '%', printf no
-    # lo confundiria con una directiva (antes: error y linea cortada).
-    log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
-}
-
-menu_defaults() {
-    # Valores por defecto (casillas premarcadas). Criterios:
-    #  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
-    #    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
-    #    negra) es mucho peor que el de marcarlo (perder la aceleracion
-    #    de la NVIDIA, usando la otra GPU).
-    #  - Flatpak y sus aplicaciones: desmarcados. Instalar Flatpak sin
-    #    ninguna aplicacion seria infraestructura para nada; marcar
-    #    OnlyOffice o Chrome activa Flatpak automaticamente.
-    OPT_KEYBOARD=yes
-    OPT_NVIDIA_SAFE=yes
-    # Portatiles Optimus: en vez de la casilla de modo seguro se muestra
-    # una segunda pantalla con tres modos; por defecto, el de ahorro
-    # (probado en el K53SV, ver nvidia_apply_optimus).
-    OPT_NVIDIA_MODE=""
-    [ "$OPTIMUS_LAPTOP" = "yes" ] && OPT_NVIDIA_MODE="optimus"
-    OPT_GCOMPAT=no
-    OPT_CUPS=yes
-    OPT_LIBREOFFICE=yes
-    OPT_FIREFOX=yes
-    OPT_FLATPAK=no
-    OPT_ONLYOFFICE=no
-    OPT_CHROME=no
-    OPT_BRAVE=no
-    OPT_UPDATE_SHORTCUT=yes
-}
-
-# Muestra la pantalla de casillas y deja las etiquetas elegidas en $sel.
-# "Salir" termina el script sin hacer cambios.
-menu_checklist() {
-    # Se arma la lista de casillas con los valores ACTUALES: si el
-    # usuario vuelve desde el resumen, encuentra lo que ya habia
-    # marcado, no los valores por defecto.
-    set -- KEYBOARD "Teclado en distribucion latinoamericana (latam)" "$(menu_state "$OPT_KEYBOARD")"
-    if [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ]; then
-        set -- "$@" NVIDIA_SAFE "NVIDIA en modo seguro (evita pantalla negra)" "$(menu_state "$OPT_NVIDIA_SAFE")"
-    fi
-    set -- "$@" \
-        GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
-        CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
-        LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
-        FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
-        FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
-        ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
-        CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
-        BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")" \
-        UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
-
-    # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
-    # segun el contenido y la pantalla disponible. Con un tamano fijo
-    # (antes 20x72), en pantallas amplias las descripciones quedaban
-    # cortadas; en pantallas chicas dialog igual recorta la ventana y
-    # la lista se vuelve desplazable, asi que no se pierde ninguna
-    # opcion.
-    # --no-tags: oculta los nombres internos (KEYBOARD, CUPS...), que
-    # no le dicen nada al usuario y ocupaban ~17 columnas -- sin ellos,
-    # todas las descripciones caben completas en una consola de 80
-    # columnas. dialog SIGUE devolviendo esos nombres al confirmar, que
-    # es lo que el script lee mas abajo (verificado).
-    if ! sel="$(dialog --stdout --separate-output --no-tags \
-            --backtitle "Configuracion post-instalacion de Alpine Linux" \
-            --title "Acciones a realizar" \
-            --ok-label "Continuar" --cancel-label "Salir" \
-            --checklist "ESPACIO marca o desmarca, ENTER continua.\nDespues de confirmar, el script corre solo, sin mas preguntas." \
-            0 0 0 "$@")"; then
-        clear 2>/dev/null || true
-        log_info "Configuracion cancelada por el usuario en el menu inicial. No se hicieron cambios."
-        trap - EXIT INT TERM
-        exit 0
-    fi
-}
-
-# Pasa las etiquetas de $sel a las variables OPT_*.
-menu_read_selection() {
-    # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
-    # Las etiquetas se validan contra una lista fija antes del eval.
-    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT; do
-        eval "OPT_$k=no"
-    done
-    for tag in $sel; do
-        case "$tag" in
-            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|BRAVE|UPDATE_SHORTCUT)
-                eval "OPT_$tag=yes" ;;
-        esac
-    done
-
-    # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
-    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ] || [ "$OPT_BRAVE" = "yes" ]; then
-        OPT_FLATPAK=yes
-    fi
-}
-
-# Portatil Optimus: segunda pantalla con los tres modos de la NVIDIA.
-# Devuelve 1 si se eligio "Volver".
-menu_nvidia_mode() {
-    if ! nv_sel="$(dialog --stdout --no-tags \
-            --backtitle "Configuracion post-instalacion de Alpine Linux" \
-            --title "Grafica NVIDIA (portatil con graficos hibridos)" \
-            --ok-label "Continuar" --cancel-label "Volver" \
-            --radiolist "Este portatil tiene una grafica integrada y una NVIDIA.\nFLECHAS para moverse, ESPACIO elige, ENTER continua." \
-            0 0 0 \
-            optimus "Apagarla y usar la integrada (ahorro, recomendado)" "$( [ "$OPT_NVIDIA_MODE" = optimus ] && echo on || echo off)" \
-            safe "Bloquearla por completo (sin driver)" "$( [ "$OPT_NVIDIA_MODE" = safe ] && echo on || echo off)" \
-            active "Dejarla activa con nouveau (riesgo en tarjetas viejas)" "$( [ "$OPT_NVIDIA_MODE" = active ] && echo on || echo off)")"; then
-        return 1
-    fi
-    case "$nv_sel" in
-        optimus|safe|active) OPT_NVIDIA_MODE="$nv_sel" ;;
-    esac
-}
-
-# Arma en $summary la lista de lo que se va a instalar.
-menu_summary() {
-    summary=""
-    [ "$OPT_KEYBOARD" = "yes" ]        && summary="$summary\n  - Teclado latinoamericano"
-    [ "$GPU_HAS_NVIDIA" = "yes" ] && [ "$OPTIMUS_LAPTOP" = "no" ] && [ "$OPT_NVIDIA_SAFE" = "yes" ] && summary="$summary\n  - NVIDIA en modo seguro"
-    case "$OPT_NVIDIA_MODE" in
-        optimus) summary="$summary\n  - NVIDIA apagada, todo en la grafica integrada (ahorro)" ;;
-        safe)    summary="$summary\n  - NVIDIA bloqueada (modo seguro)" ;;
-        active)  summary="$summary\n  - NVIDIA activa con nouveau" ;;
-    esac
-    [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
-    [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
-    [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
-    [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
-    [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
-    [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
-    [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
-    [ "$OPT_BRAVE" = "yes" ]           && summary="$summary\n  - Brave"
-    [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
-    if [ -z "$summary" ]; then
-        summary="\n  (ninguna opcional)"
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# BLOQUE 30: Aplicaciones de uso diario y aplicaciones predeterminadas
-# ------------------------------------------------------------------------------
-# Pensado para el usuario comun al que apunta el script: leer PDFs,
-# reproducir audios y videos locales, y navegar. Cada aplicacion se
-# registra ademas como PREDETERMINADA: instalarla no basta, porque varias
-# aplicaciones se declaran capaces de abrir el mismo tipo de archivo (por
-# ejemplo, LibreOffice Draw tambien abre PDF) y cual gana depende del
-# escritorio. Los valores se escriben en /etc/xdg/mimeapps.list, el
-# archivo de preferencias a nivel de sistema del estandar freedesktop.
-# Limite conocido: si el usuario ya eligio otra aplicacion por su cuenta,
-# su eleccion personal (~/.config/mimeapps.list) tiene prioridad.
-MIMEAPPS="/etc/xdg/mimeapps.list"
-
-# Imprime el primer archivo .desktop existente de la lista. Los nombres
-# cambian entre versiones (evince, por ejemplo, usa org.gnome.Evince.desktop),
-# asi que nunca se apunta a una aplicacion que no esta instalada.
-find_desktop_file() {
-    for d in "$@"; do
-        if [ -f "/usr/share/applications/$d" ]; then
-            echo "$d"
-            return 0
-        fi
-    done
-    return 1
-}
-
-# Registra $1 (archivo .desktop) como predeterminado para los tipos MIME
-# restantes, en la seccion [Default Applications]. Reemplaza una entrada
-# previa del mismo tipo y conserva el resto del archivo intacto.
-set_default_app() {
-    app="$1"; shift
-    mkdir -p /etc/xdg
-    [ -f "$MIMEAPPS" ] || printf '[Default Applications]\n' > "$MIMEAPPS"
-    grep -qx '\[Default Applications\]' "$MIMEAPPS" || printf '\n[Default Applications]\n' >> "$MIMEAPPS"
-    for mime in "$@"; do
-        awk -v m="$mime" -v a="$app" '
-            /^\[/ { insec = ($0 == "[Default Applications]") }
-            insec && index($0, m "=") == 1 { next }
-            { print }
-            $0 == "[Default Applications]" { print m "=" a }
-        ' "$MIMEAPPS" > "$MIMEAPPS.tmp" && mv "$MIMEAPPS.tmp" "$MIMEAPPS"
-    done
-}
-
-install_daily_apps() {
-    log_info "== Aplicaciones de uso diario =="
-
-    if ! has_desktop; then
-        log_warn "No se detecto un entorno de escritorio: se omiten las aplicaciones graficas."
-        return 0
-    fi
-
-    # --- Visor de PDF ---
-    # Okular en Plasma (se integra con el resto del escritorio); evince en
-    # los demas (GTK, liviano). Si conviven Plasma y otro escritorio, se
-    # instalan ambos y el predeterminado de sistema es evince.
-    if [ "$DE_PLASMA" = "yes" ]; then
-        install_pkgs okular
-    fi
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
-        install_pkgs evince
-    fi
-    if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
-        set_default_app "$pdf_app" application/pdf
-        log_ok "Visor de PDF predeterminado: $pdf_app"
-    else
-        log_warn "No se encontro el visor de PDF instalado; no se cambio la aplicacion predeterminada para PDF."
-    fi
-
-    # --- Reproductor multimedia ---
-    # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
-    # de video por hardware (VA-API) instalada en el Bloque 12. Cubre los
-    # audios de WhatsApp (.ogg/.opus) y los videos descargados habituales.
-    install_pkgs mpv
-    if media_app="$(find_desktop_file mpv.desktop io.mpv.Mpv.desktop)"; then
-        set_default_app "$media_app" \
-            audio/ogg audio/x-opus+ogg audio/opus audio/mpeg audio/mp4 audio/aac \
-            audio/x-wav audio/wav audio/flac audio/webm \
-            video/mp4 video/webm video/x-matroska video/quicktime \
-            video/x-msvideo video/3gpp video/mpeg video/ogg
-        log_ok "Reproductor multimedia predeterminado: $media_app"
-    else
-        log_warn "No se encontro el reproductor instalado; no se cambiaron las aplicaciones predeterminadas de audio y video."
-    fi
-
-    # --- Tienda de aplicaciones ---
-    # Plasma trae Discover y GNOME trae GNOME Software (los instala
-    # setup-desktop). En los demas: Discover en LXQt (Qt, como el
-    # escritorio) y GNOME Software en XFCE, MATE y Sway (GTK). Ambas instalan y
-    # actualizan paquetes de Alpine y, con Flatpak (Bloque 25), tambien
-    # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
-    # (install_if) cuando flatpak esta instalado.
-    if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
-        install_pkgs discover
-    fi
-    if { [ "$DE_XFCE" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_SWAY" = "yes" ]; } && [ "$DE_GNOME" = "no" ]; then
-        install_pkgs gnome-software gnome-software-plugin-apk2 apk-polkit-rs
-    fi
-
-    # --- Navegador ---
-    if want OPT_FIREFOX "¿Deseas instalar el navegador Firefox?"; then
-        install_pkgs firefox
-        if web_app="$(find_desktop_file firefox.desktop org.mozilla.firefox.desktop)"; then
-            set_default_app "$web_app" x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml
-            log_ok "Navegador predeterminado: $web_app"
-        else
-            log_warn "No se encontro Firefox instalado; no se cambio el navegador predeterminado."
-        fi
-        # No se fuerza el idioma: en su primer arranque, Firefox ofrece
-        # descargar el paquete de idioma que coincide con el del sistema
-        # (es_ES u OPT_LANG). Forzar otra variante requeriria descargas atadas a la
-        # version exacta del navegador, que se romperian al actualizarlo.
-        log_info "En su primer arranque, Firefox ofrecera cambiar su interfaz al idioma del sistema."
-    else
-        log_info "Se omite Firefox."
-    fi
-}
-
-# Recomendaciones que el script NO aplica por su cuenta (instalar
-# extensiones sin que el usuario lo vea no es buena practica). Se
-# muestran al final para que las vea quien ejecuto el script.
-print_browser_recommendations() {
-    command -v firefox >/dev/null 2>&1 || return 0
-    log_info "== Recomendaciones para Firefox (instalar desde addons.mozilla.org) =="
-    log_info "  - uBlock Origin: bloquea publicidad y rastreadores, lo que reduce la carga del procesador al navegar."
-    log_info "  - enhanced-h264ify: en equipos antiguos, pide a YouTube video H.264, que la GPU puede decodificar"
-    log_info "    por hardware; los formatos por defecto (VP9/AV1) terminan decodificandose en el procesador."
-}
-
-# ------------------------------------------------------------------------------
-# BLOQUE 31: Función principal
+# BLOQUE 33: Función principal
 # ------------------------------------------------------------------------------
 main() {
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
 
     check_root
     update_system
-    # detect_hardware se ejecuta ANTES del menu (Bloque 29) para que la
+    # detect_hardware se ejecuta ANTES del menu (Bloque 4) para que la
     # opcion de NVIDIA solo aparezca si hay una NVIDIA.
     detect_hardware
     select_options_menu
