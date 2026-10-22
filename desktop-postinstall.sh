@@ -2,6 +2,17 @@
 # ==============================================================================
 # Script de configuración post-instalación para entorno de escritorio en Alpine
 # Compatible con: ash (BusyBox) - shell por defecto de Alpine Linux
+#
+# Uso rápido (como root; "--ayuda" muestra todas las opciones):
+#   sh desktop-postinstall.sh                 menú de casillas
+#   sh desktop-postinstall.sh --full          todo, sin preguntar
+#   sh desktop-postinstall.sh --minimo --con libreoffice,brave
+#   sh desktop-postinstall.sh --full --destino /mnt
+#       (sistema recién instalado en /mnt, antes del primer reinicio)
+#
+# Orden del archivo: primero las herramientas comunes (registro, opciones,
+# apk), luego un bloque por tarea en el mismo orden en que las ejecuta
+# main(), al final del archivo.
 # ==============================================================================
 
 set -eu
@@ -20,12 +31,20 @@ log_error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$1" | tee -a "$LOG_FILE"; 
 # Un error no previsto (set -e) termina el script por la trampa EXIT. Ctrl+C
 # o una orden de terminar pasan por la segunda trampa, que quita la primera
 # para no mostrar dos mensajes. Los errores ya explicados usan "morir".
-trap 'apk_detener; log_error "Ocurrió un error inesperado. Abortando script."' EXIT
-trap 'trap - EXIT; apk_detener; log_error "Script interrumpido."; exit 130' INT TERM
+# En todos los casos, "limpiar" corta un apk a medias y, con --destino,
+# desmonta lo que el script montó.
+trap 'limpiar; log_error "Ocurrió un error inesperado. Abortando script."' EXIT
+trap 'trap - EXIT; limpiar; log_error "Script interrumpido."; exit 130' INT TERM
+
+limpiar() {
+    apk_detener
+    rm -f "${_apk_salida:-}"
+    destino_desmontar
+}
 
 morir() {
     trap - EXIT
-    apk_detener
+    limpiar
     log_error "$1"
     exit 1
 }
@@ -42,15 +61,17 @@ ask_yes_no() {
     esac
 }
 
-# Consulta una decision tomada en el menu de casillas del inicio
-# (Bloque 4, select_options_menu). $1 es el nombre de la variable
-# (p. ej. OPT_CUPS) y $2 la pregunta de respaldo. Si el menu no se pudo
-# mostrar (sin terminal interactiva, o sin poder instalar 'dialog'), la
-# variable queda vacia y se pregunta como siempre, una por una: el
-# respaldo vive aqui, en un solo lugar, en vez de repetirse en cada
-# bloque. El nombre de la variable siempre viene del propio script,
-# nunca de la entrada del usuario, asi que el 'eval' es seguro.
+# Consulta una decision ya tomada: por las opciones de la linea de ordenes,
+# por variables OPT_* del entorno o en el menu de casillas del inicio
+# (decidir_opciones). $1 es el nombre de la variable (p. ej. OPT_CUPS) y
+# $2 la pregunta de respaldo. Si nada la fijo (sin opciones y sin
+# terminal para el menu), la variable queda vacia y se pregunta como
+# siempre, una por una: el respaldo vive aqui, en un solo lugar, en vez
+# de repetirse en cada bloque. El nombre de la variable siempre viene del
+# propio script, nunca de la entrada del usuario, asi que el 'eval' es
+# seguro.
 want() {
+    want_val=""
     eval "want_val=\${$1:-}"
     case "$want_val" in
         yes) return 0 ;;
@@ -60,7 +81,196 @@ want() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 1: Validación de permisos de superusuario
+# BLOQUE 1: Opciones de la línea de órdenes
+# ------------------------------------------------------------------------------
+# Sin opciones, el script muestra su menu de casillas (o, sin terminal,
+# pregunta cada cosa por separado), como siempre. Con opciones corre sin
+# preguntar: asi lo puede llamar un instalador grafico (Calamares) con lo
+# que eligio el usuario, o una persona que quiere dejarlo todo listo de una
+# vez con --full.
+#
+# Las decisiones tambien se pueden fijar con variables OPT_* en el entorno
+# (OPT_LIBREOFFICE=yes ...), la forma que usaban los instaladores
+# anteriores. Si se dan las dos, mandan las opciones.
+
+# Programas opcionales que se pueden marcar con --con y --sin.
+PROGRAMAS="impresoras libreoffice firefox vlc fastfetch btop flatpak onlyoffice chrome brave gcompat actualizaciones"
+# Los que solo sirven con escritorio: sin escritorio no se instalan.
+PROGRAMAS_GRAFICOS="libreoffice firefox vlc flatpak onlyoffice chrome brave"
+
+# Nombre de la variable OPT_* de cada programa.
+programa_var() {
+    case "$1" in
+        impresoras|cups)  echo OPT_CUPS ;;
+        libreoffice)      echo OPT_LIBREOFFICE ;;
+        firefox)          echo OPT_FIREFOX ;;
+        vlc)              echo OPT_VLC ;;
+        fastfetch)        echo OPT_FASTFETCH ;;
+        btop)             echo OPT_BTOP ;;
+        flatpak|flathub)  echo OPT_FLATPAK ;;
+        onlyoffice)       echo OPT_ONLYOFFICE ;;
+        chrome)           echo OPT_CHROME ;;
+        brave)            echo OPT_BRAVE ;;
+        gcompat)          echo OPT_GCOMPAT ;;
+        actualizaciones)  echo OPT_UPDATE_SHORTCUT ;;
+        *) return 1 ;;
+    esac
+}
+
+# Escritorios que acepta --escritorio (los de setup-desktop de Alpine).
+ESCRITORIOS="xfce xfce-wayland mate lxqt gnome plasma sway"
+
+ARG_MODO=""          # vacio, "full" o "minimo"
+ARG_MENU="no"        # --menu: mostrar el menu aunque haya opciones
+ARG_CON=""           # programas de --con
+ARG_SIN=""           # programas de --sin
+ARG_NVIDIA=""        # seguro, optimus o activa
+ARG_USUARIO=""
+ARG_ESCRITORIO=""
+ARG_DESTINO=""
+HAY_OPCIONES="no"    # alguna opcion fijo decisiones: no se pregunta nada
+ARGS_INTERNOS=""     # los argumentos sin --destino, para el chroot
+
+mostrar_ayuda() {
+    cat <<'AYUDA'
+Uso: desktop-postinstall.sh [opciones]
+
+Configura un escritorio de Alpine Linux recien instalado: red, audio,
+controladores, idioma, energia, discos, impresoras, programas y el aviso
+de actualizaciones. Se ejecuta como root.
+
+Sin opciones muestra un menu de casillas. Con cualquiera de las opciones
+de abajo (salvo --usuario, --escritorio y --destino) no pregunta nada.
+
+  --full               Todo: todos los programas de la lista de abajo.
+  --minimo             Solo la configuracion base, sin programas opcionales.
+  --con LISTA          Marca estos programas (separados por comas).
+  --sin LISTA          Desmarca estos programas. Gana sobre --con.
+  --menu               Muestra el menu igual, con lo anterior ya marcado.
+  --idioma IDIOMA      Idioma del sistema, p. ej. es_CO.UTF-8 (por defecto
+                       es_ES.UTF-8).
+  --teclado latam|no   Teclado latinoamericano, o no tocar el teclado.
+  --nvidia MODO        Graficas NVIDIA: seguro (bloquearla), optimus
+                       (portatiles con dos graficas: apagarla) o activa.
+  --usuario NOMBRE     Usuario del escritorio (si no se puede adivinar).
+  --escritorio NOMBRE  Instala antes ese escritorio con setup-desktop:
+                       xfce, xfce-wayland, mate, lxqt, gnome, plasma o sway.
+  --destino CARPETA    Configura el sistema instalado en CARPETA (p. ej.
+                       /mnt) sin reiniciar, desde el sistema en uso.
+  --ayuda              Muestra esta ayuda.
+
+Programas para --con y --sin:
+  impresoras, libreoffice, firefox, vlc, fastfetch, btop,
+  flatpak (tienda Flathub), onlyoffice, chrome, brave (estos tres por
+  Flatpak; marcarlos activa Flatpak), gcompat, actualizaciones (boton
+  "Actualizar el sistema" y aviso de actualizaciones).
+  Sin --full ni --minimo, se parte de las casillas premarcadas del menu.
+  Sin escritorio, los programas graficos se omiten.
+
+Ejemplos:
+  desktop-postinstall.sh --full
+  desktop-postinstall.sh --minimo --con libreoffice,vlc,brave
+  desktop-postinstall.sh --full --sin chrome --idioma es_MX.UTF-8
+  desktop-postinstall.sh --escritorio xfce --full --destino /mnt
+
+Registro: /var/log/desktop-postinstall.log
+AYUDA
+}
+
+error_de_uso() {
+    trap - EXIT INT TERM
+    printf 'desktop-postinstall.sh: %s\nUsa --ayuda para ver las opciones.\n' "$1" >&2
+    exit 2
+}
+
+# Agrega $1 a ARGS_INTERNOS entre comillas simples, para recuperarlo
+# despues con 'eval set --' sin que se separen las palabras.
+guardar_arg() {
+    ARGS_INTERNOS="$ARGS_INTERNOS '$(printf '%s' "$1" | sed "s/'/'\\\\''/g")'"
+}
+
+# Comprueba los nombres de una lista separada por comas y la deja en
+# $lista, separada por espacios.
+leer_lista() {
+    lista="$(printf '%s' "$1" | tr ',' ' ')"
+    for _p in $lista; do
+        programa_var "$_p" >/dev/null || error_de_uso "Programa desconocido: '$_p'. Validos: $PROGRAMAS"
+    done
+}
+
+leer_argumentos() {
+    while [ $# -gt 0 ]; do
+        opcion="$1"
+        valor=""
+        case "$opcion" in
+            --*=*) valor="${opcion#*=}"; opcion="${opcion%%=*}" ;;
+        esac
+        case "$opcion" in
+            --con|--sin|--idioma|--teclado|--nvidia|--usuario|--escritorio|--destino)
+                # Forma "--con lista" (dos palabras) o "--con=lista".
+                if [ "$1" = "$opcion" ]; then
+                    [ $# -ge 2 ] || error_de_uso "Falta el valor de $opcion."
+                    valor="$2"
+                    shift
+                fi
+                [ -n "$valor" ] || error_de_uso "Falta el valor de $opcion."
+                ;;
+        esac
+
+        case "$opcion" in
+            --full|--todo)    ARG_MODO="full";   HAY_OPCIONES="yes" ;;
+            --minimo|--mínimo) ARG_MODO="minimo"; HAY_OPCIONES="yes" ;;
+            --menu)           ARG_MENU="yes" ;;
+            --con)            leer_lista "$valor"; ARG_CON="$ARG_CON $lista"; HAY_OPCIONES="yes" ;;
+            --sin)            leer_lista "$valor"; ARG_SIN="$ARG_SIN $lista"; HAY_OPCIONES="yes" ;;
+            --idioma)
+                case "$valor" in
+                    *[!A-Za-z0-9_.@-]*) error_de_uso "Idioma no valido: '$valor' (ejemplo: es_CO.UTF-8)." ;;
+                esac
+                OPT_LANG="$valor"
+                HAY_OPCIONES="yes"
+                ;;
+            --teclado)
+                case "$valor" in
+                    latam)              OPT_KEYBOARD="yes" ;;
+                    no|ninguno|ninguna) OPT_KEYBOARD="no" ;;
+                    *) error_de_uso "Teclado no valido: '$valor' (usa latam o no)." ;;
+                esac
+                HAY_OPCIONES="yes"
+                ;;
+            --nvidia)
+                case "$valor" in
+                    seguro|optimus|activa) ARG_NVIDIA="$valor" ;;
+                    *) error_de_uso "Modo de NVIDIA no valido: '$valor' (usa seguro, optimus o activa)." ;;
+                esac
+                HAY_OPCIONES="yes"
+                ;;
+            --usuario)        ARG_USUARIO="$valor" ;;
+            --escritorio)
+                case " $ESCRITORIOS " in
+                    *" $valor "*) ARG_ESCRITORIO="$valor" ;;
+                    *) error_de_uso "Escritorio no valido: '$valor'. Validos: $ESCRITORIOS" ;;
+                esac
+                ;;
+            --destino)        ARG_DESTINO="$valor" ;;
+            -h|--ayuda|--help)
+                mostrar_ayuda
+                trap - EXIT INT TERM
+                exit 0
+                ;;
+            *) error_de_uso "Opcion desconocida: $1" ;;
+        esac
+
+        # Todo menos --destino se repite dentro del sistema de destino.
+        if [ "$opcion" != "--destino" ]; then
+            if [ -n "$valor" ]; then guardar_arg "$opcion=$valor"; else guardar_arg "$opcion"; fi
+        fi
+        shift
+    done
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 2: Validación de permisos de superusuario
 # ------------------------------------------------------------------------------
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -70,33 +280,187 @@ check_root() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 2: Actualización de repositorios
+# BLOQUE 3: Sistema recién instalado, sin reiniciar (--destino)
+# ------------------------------------------------------------------------------
+# Despues de instalar Alpine en un disco (setup-alpine, setup-disk), el
+# sistema nuevo puede quedar montado, por ejemplo en /mnt. Con --destino
+# /mnt el script se copia ahi y se ejecuta "dentro" de ese sistema
+# (chroot), igual que lo hace el instalador de Lazaro Linux: todo lo que
+# instala y configura queda en el disco nuevo, no en el sistema desde el
+# que se ejecuta. Los servicios quedan habilitados y arrancan al encender
+# el equipo nuevo. Lo que no se puede hacer dentro de un chroot (algunas
+# aplicaciones de Flathub, como Chrome) queda pendiente y se instala solo
+# despues del primer arranque con internet.
+#
+# Sin --destino, el script configura el sistema en el que corre: tanto
+# uno ya arrancado como uno al que se entro a mano con chroot.
+DESTINO_MONTADOS=""
+
+# Monta algo en $1 (dentro del destino) si no estaba montado ya; el resto
+# de argumentos son los de mount. Solo se desmonta al final lo que se
+# monto aqui.
+destino_montar() {
+    _punto="$1"
+    shift
+    mkdir -p "$_punto"
+    mountpoint -q "$_punto" && return 0
+    mount "$@" "$_punto" || morir "No se pudo montar $_punto."
+    DESTINO_MONTADOS="$_punto $DESTINO_MONTADOS"
+}
+
+# Cierra los procesos que quedaron vivos dentro del destino (por ejemplo,
+# servicios de D-Bus que arranca flatpak): si no, no se podria desmontar.
+destino_cerrar_procesos() {
+    for _senal in TERM KILL; do
+        _quedan=""
+        for _proc in /proc/[0-9]*; do
+            [ "$(readlink "$_proc/root" 2>/dev/null)" = "$1" ] || continue
+            kill -s "$_senal" "${_proc#/proc/}" 2>/dev/null && _quedan="si"
+        done
+        [ -n "$_quedan" ] || return 0
+        sleep 1
+    done
+}
+
+destino_desmontar() {
+    [ -n "$DESTINO_MONTADOS" ] || return 0
+    destino_cerrar_procesos "$DESTINO_RAIZ"
+    for _punto in $DESTINO_MONTADOS; do
+        umount "$_punto" 2>/dev/null || umount -l "$_punto" 2>/dev/null \
+            || log_warn "No se pudo desmontar $_punto."
+    done
+    DESTINO_MONTADOS=""
+}
+
+# Ejecuta el script dentro del sistema montado en --destino y termina.
+# shellcheck disable=SC2120  # los argumentos salen de ARGS_INTERNOS
+ejecutar_en_destino() {
+    DESTINO_RAIZ="$(cd "$ARG_DESTINO" 2>/dev/null && pwd -P)" \
+        || morir "La carpeta de --destino no existe: $ARG_DESTINO"
+    case "$DESTINO_RAIZ" in
+        /) morir "--destino no puede ser el sistema en uso: para configurarlo, ejecuta el script sin --destino." ;;
+        *[[:space:]]*) morir "La carpeta de --destino no puede tener espacios: $DESTINO_RAIZ" ;;
+    esac
+    [ -f "$DESTINO_RAIZ/etc/alpine-release" ] \
+        || morir "$DESTINO_RAIZ no parece un Alpine instalado (falta etc/alpine-release). ¿Montaste el disco nuevo ahi?"
+    [ -f "$0" ] || morir "Para usar --destino, guarda el script en un archivo y ejecutalo desde ahi."
+
+    log_info "===== Configurando el sistema instalado en $DESTINO_RAIZ (sin reiniciar) ====="
+    destino_montar "$DESTINO_RAIZ/proc" -t proc proc
+    destino_montar "$DESTINO_RAIZ/sys" -t sysfs sys
+    destino_montar "$DESTINO_RAIZ/dev" -o bind /dev
+    destino_montar "$DESTINO_RAIZ/dev/pts" -o bind /dev/pts
+
+    # El sistema nuevo usa la conexion a internet de este.
+    cp /etc/resolv.conf "$DESTINO_RAIZ/etc/resolv.conf" 2>/dev/null \
+        || log_warn "No se pudo copiar /etc/resolv.conf: dentro del destino puede no haber internet."
+    mkdir -p "$DESTINO_RAIZ/root"
+    cp "$0" "$DESTINO_RAIZ/root/.desktop-postinstall.sh"
+
+    # DOAS_USER vacio: el usuario de este sistema no tiene por que existir
+    # en el nuevo (alli se busca con --usuario o se adivina).
+    eval "set -- $ARGS_INTERNOS"
+    _rc=0
+    env PATH=/usr/sbin:/usr/bin:/sbin:/bin DOAS_USER= \
+        chroot "$DESTINO_RAIZ" /bin/sh /root/.desktop-postinstall.sh "$@" || _rc=$?
+
+    rm -f "$DESTINO_RAIZ/root/.desktop-postinstall.sh"
+    destino_desmontar
+    trap - EXIT INT TERM
+    if [ "$_rc" -eq 0 ]; then
+        log_ok "Sistema en $DESTINO_RAIZ configurado. Ya puedes reiniciar en el sistema nuevo."
+    else
+        log_error "La configuracion dentro de $DESTINO_RAIZ termino con error ($_rc). Detalles en $DESTINO_RAIZ$LOG_FILE"
+    fi
+    exit "$_rc"
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 4: Actualización de repositorios, apk y cortes de internet
 # ------------------------------------------------------------------------------
 update_system() {
     log_info "Actualizando índice de paquetes..."
+    if ! esperar_red 120; then
+        morir "No hay conexion con los repositorios de Alpine. Conectate a internet y vuelve a ejecutar el script."
+    fi
     apk_vigilado update >>"$LOG_FILE" 2>&1 || morir "Fallo al actualizar apk (detalles en $LOG_FILE)."
 }
 
+# --- Cortes de internet -------------------------------------------------------
+# En una conexion inestable (wifi debil, un modem que se reinicia) una
+# descarga puede fallar a la mitad aunque segundos despues la red vuelva.
+# Antes, ese paquete quedaba sin instalar con solo un aviso en el
+# registro. Ahora, cuando apk falla por la red, se espera a que vuelva y
+# se reintenta (apk_vigilado). Si la red no vuelve en unos minutos, se
+# da por caida y las siguientes descargas ya no esperan (cada una
+# fallaria igual): el script sigue con lo que no necesita internet, y al
+# final avisa que hay que volver a ejecutarlo.
+RED_CAIDA="no"
+FALLOS_DE_RED=0
+
+# Devuelve 0 si responde el primer repositorio de internet de apk. Sin
+# repositorios de internet (solo locales) no hay nada que comprobar.
+red_disponible() {
+    _repo="$(grep -m1 '^http' /etc/apk/repositories 2>/dev/null || true)"
+    [ -n "$_repo" ] || return 0
+    wget -q --spider -T 8 "$_repo/$(apk --print-arch)/APKINDEX.tar.gz" 2>/dev/null
+}
+
+# Espera hasta $1 segundos (180 por defecto) a que haya red. Si ya se dio
+# por caida, solo comprueba una vez.
+esperar_red() {
+    _limite="${1:-180}"
+    [ "$RED_CAIDA" = "yes" ] && _limite=0
+    _t=0
+    while ! red_disponible; do
+        if [ "$_t" -ge "$_limite" ]; then
+            RED_CAIDA="yes"
+            return 1
+        fi
+        [ "$_t" -gt 0 ] || log_warn "Sin conexion con el repositorio de Alpine; esperando a que vuelva internet..." >&3
+        sleep 10
+        _t=$((_t + 10))
+    done
+    if [ "$_t" -gt 0 ] || [ "$RED_CAIDA" = "yes" ]; then
+        log_ok "La conexion volvio." >&3
+    fi
+    RED_CAIDA="no"
+    return 0
+}
+
+# Devuelve 0 si la salida de apk (archivo $1) muestra un fallo de red: los
+# mensajes de apk-tools para DNS, TLS, HTTP 5xx, descargas cortadas y los
+# errores de conexion del sistema.
+fallo_de_red() {
+    grep -qiE 'unexpected end of file|DNS:|TLS: unspecified|HTTP 408|HTTP 50[0-9]|remote server returned|connection|network (is )?unreachable|host is unreachable|timed out|I/O error|integrity error|try again later|broken pipe' "$1"
+}
+
 # apk_vigilado: ejecuta apk (con los argumentos dados) sin que se quede
-# colgado para siempre.
-# CORRECCION: apk (3.0) baja los paquetes por HTTPS con el socket en modo
-# bloqueante, y su --timeout solo se aplica si la conexion TLS pidio
-# esperar; si el servidor deja de mandar datos a mitad de un paquete,
-# apk espera indefinidamente (visto en una VM: 20+ minutos quieto, sin
-# usar CPU, en "apk add pulseaudio" y luego en "apk add lang"). Aqui se
-# vigila: si apk pasa 120 s sin leer ni escribir nada (eso incluye
-# descomprimir y escribir en el disco) y sin ningun proceso hijo (los
-# scripts de instalacion, como mkinitfs, pueden tardar), se corta y se
-# reintenta (hasta 3 veces). apk confirma cada paquete al terminar de
-# instalarlo, asi que el reintento sigue donde quedo.
-# El aviso de reintento va al descriptor 3 (ver arriba), porque los que
-# llaman suelen mandar la salida de apk al registro. Si los 3 intentos se
-# quedan colgados, devuelve 124.
+# colgado para siempre y reintentando si falla por la red.
+# 1) Descarga detenida. apk (3.0) baja los paquetes por HTTPS con el
+#    socket en modo bloqueante, y su --timeout solo se aplica si la
+#    conexion TLS pidio esperar; si el servidor deja de mandar datos a
+#    mitad de un paquete, apk espera indefinidamente (visto en una VM: 20+
+#    minutos quieto, sin usar CPU, en "apk add pulseaudio" y luego en "apk
+#    add lang"). Aqui se vigila: si apk pasa 120 s sin leer ni escribir
+#    nada (eso incluye descomprimir y escribir en el disco) y sin ningun
+#    proceso hijo (los scripts de instalacion, como mkinitfs, pueden
+#    tardar), se corta y se reintenta.
+# 2) Corte de internet. Si apk termina con error y su salida muestra un
+#    fallo de red, se espera a que la red vuelva (esperar_red) y se
+#    reintenta.
+# Hasta 4 intentos en total. apk confirma cada paquete al terminar de
+# instalarlo, asi que el reintento sigue donde quedo. La salida de apk se
+# guarda aparte para revisarla y despues se copia a la salida normal (los
+# que llaman la mandan al registro). Los avisos van al descriptor 3 (ver
+# arriba), para que se vean en pantalla. Si la descarga no se pudo
+# completar por la red, devuelve 124.
 _apk_pid=""
 apk_vigilado() {
     _apk_intento=1
+    _apk_salida="$(mktemp)"
     while :; do
-        apk "$@" &
+        apk "$@" >"$_apk_salida" 2>&1 &
         _apk_pid=$!
         _apk_antes=""
         _apk_quieto=0
@@ -112,7 +476,7 @@ apk_vigilado() {
                 _apk_quieto=$((_apk_quieto + 5))
             fi
             if [ "$_apk_quieto" -ge 120 ]; then
-                log_warn "apk lleva 2 minutos sin avanzar (descarga detenida). Se corta y se reintenta ($_apk_intento/3)..." >&3
+                log_warn "apk lleva 2 minutos sin avanzar (descarga detenida). Se corta y se reintenta ($_apk_intento/4)..." >&3
                 apk_detener
                 break
             fi
@@ -120,8 +484,32 @@ apk_vigilado() {
         _apk_rc=0
         wait "$_apk_pid" || _apk_rc=$?
         _apk_pid=""
-        [ "$_apk_quieto" -ge 120 ] || return "$_apk_rc"
-        [ "$_apk_intento" -lt 3 ] || return 124
+        cat "$_apk_salida"
+
+        if [ "$_apk_quieto" -ge 120 ]; then
+            _apk_motivo="detenida"
+        elif [ "$_apk_rc" -ne 0 ] && fallo_de_red "$_apk_salida"; then
+            _apk_motivo="red"
+        else
+            rm -f "$_apk_salida"
+            return "$_apk_rc"
+        fi
+
+        if [ "$_apk_intento" -ge 4 ]; then
+            rm -f "$_apk_salida"
+            FALLOS_DE_RED=$((FALLOS_DE_RED + 1))
+            return 124
+        fi
+        if [ "$_apk_motivo" = "red" ]; then
+            if ! esperar_red; then
+                log_warn "Internet sigue sin responder: se omite esta descarga (apk $*)." >&3
+                rm -f "$_apk_salida"
+                FALLOS_DE_RED=$((FALLOS_DE_RED + 1))
+                return 124
+            fi
+            log_warn "Una descarga fallo por la conexion; se reintenta ($_apk_intento/4)..." >&3
+            sleep $((_apk_intento * 5))
+        fi
         _apk_intento=$((_apk_intento + 1))
     done
 }
@@ -146,11 +534,13 @@ apk_add() {
 install_pkg() {
     pkg="$1"
     log_info "Instalando: $pkg"
-    if apk_add "$pkg" >>"$LOG_FILE" 2>&1; then
-        log_ok "'$pkg' instalado."
-    else
-        log_warn "Fallo al instalar '$pkg' (puede no existir en tu rama/arquitectura)."
-    fi
+    _pkg_rc=0
+    apk_add "$pkg" >>"$LOG_FILE" 2>&1 || _pkg_rc=$?
+    case "$_pkg_rc" in
+        0)   log_ok "'$pkg' instalado." ;;
+        124) log_warn "No se pudo descargar '$pkg' por problemas de conexion." ;;
+        *)   log_warn "Fallo al instalar '$pkg' (puede no existir en tu rama/arquitectura)." ;;
+    esac
 }
 
 # install_pkgs: instala varios paquetes en UNA sola transaccion de apk
@@ -172,9 +562,10 @@ install_pkgs() {
             log_ok "'$p' instalado (lote)."
         done
     elif [ "$_lote_rc" -eq 124 ]; then
-        # La descarga siguio detenida en los 3 intentos: probar paquete por
-        # paquete solo sumaria esperas. Se sigue con el resto del script.
-        log_warn "No se pudo descargar el lote (la conexion se detuvo en los 3 intentos): $*"
+        # La descarga no se pudo completar por la red (ver apk_vigilado):
+        # probar paquete por paquete solo sumaria esperas. Se sigue con el
+        # resto del script.
+        log_warn "No se pudo descargar el lote por problemas de conexion: $*"
     else
         log_warn "La instalacion en lote fallo (probablemente algun paquete no existe en tu rama). Reintentando uno por uno..."
         for p in "$@"; do
@@ -224,7 +615,73 @@ hw_revisado() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 3: Detección de hardware gráfico (soporta configuraciones híbridas)
+# BLOQUE 5: Instalar el escritorio (--escritorio)
+# ------------------------------------------------------------------------------
+# Lo normal es instalar el escritorio antes con la herramienta de Alpine
+# (setup-desktop) y despues ejecutar este script. Con --escritorio NOMBRE
+# el script lo hace por su cuenta, primero, con la misma herramienta. Si
+# el escritorio ya estaba instalado, setup-desktop solo comprueba que no
+# falte nada.
+install_desktop() {
+    [ -n "$ARG_ESCRITORIO" ] || return 0
+    log_info "== Escritorio: $ARG_ESCRITORIO (setup-desktop) =="
+    command -v setup-desktop >/dev/null 2>&1 || install_pkg alpine-conf
+    command -v setup-desktop >/dev/null 2>&1 \
+        || morir "No esta 'setup-desktop' (paquete alpine-conf): no se puede instalar el escritorio."
+    # setup-desktop instala con apk directamente: si falla (por ejemplo,
+    # por un corte de internet), se espera a la red y se repite.
+    for _intento in 1 2 3; do
+        if setup-desktop "$ARG_ESCRITORIO" </dev/null >>"$LOG_FILE" 2>&1; then
+            log_ok "Escritorio '$ARG_ESCRITORIO' instalado."
+            return 0
+        fi
+        [ "$_intento" -lt 3 ] || break
+        log_warn "setup-desktop fallo; se reintenta ($_intento/3)..."
+        esperar_red || break
+    done
+    morir "No se pudo instalar el escritorio '$ARG_ESCRITORIO' (detalles en $LOG_FILE)."
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 6: Detección multiparadigma del entorno de escritorio
+# ------------------------------------------------------------------------------
+DE_XFCE="no"
+DE_PLASMA="no"
+DE_GNOME="no"
+DE_MATE="no"
+DE_LXQT="no"
+DE_SWAY="no"
+
+# Devuelve 0 si se detecto al menos un entorno de escritorio.
+has_desktop() {
+    [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]
+}
+
+detect_desktop_environment() {
+    log_info "== Detectando entorno de escritorio instalado =="
+
+    pkg_installed xfce4-session && { DE_XFCE="yes"; log_ok "XFCE detectado."; }
+
+    # Se comprueban ambos nombres: plasma-desktop-meta (metapaquete usado
+    # por setup-desktop) y plasma-desktop (paquete real que trae como
+    # dependencia). Cubre también instalaciones manuales/no estándar que
+    # no pasaron por el metapaquete.
+    if pkg_installed plasma-desktop-meta || pkg_installed plasma-desktop; then
+        DE_PLASMA="yes"; log_ok "KDE Plasma detectado."
+    fi
+
+    pkg_installed gnome-shell && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
+    pkg_installed mate-session-manager && { DE_MATE="yes"; log_ok "MATE detectado."; }
+    pkg_installed lxqt-session && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
+    pkg_installed sway && { DE_SWAY="yes"; log_ok "Sway detectado."; }
+
+    if ! has_desktop; then
+        log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 7: Detección de hardware gráfico (soporta configuraciones híbridas)
 # ------------------------------------------------------------------------------
 GPU_HAS_INTEL="no"
 GPU_HAS_AMD="no"
@@ -320,33 +777,65 @@ detect_hardware() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 4: Menu de casillas con todas las decisiones al inicio
+# BLOQUE 8: Decisiones al inicio: opciones o menú de casillas
 # ------------------------------------------------------------------------------
-# Antes, las 10 preguntas aparecian repartidas a lo largo de una ejecucion
-# larga, obligando a vigilar la terminal de principio a fin. Aqui se
-# reunen en UNA pantalla al inicio (casillas con 'dialog', que funciona
-# tanto en una consola TTY como en una terminal grafica), se confirma un
-# resumen, y el resto del script corre solo, sin volver a preguntar.
+# Todas las decisiones se toman aqui, al principio, y el resto del script
+# corre solo, sin volver a preguntar. Hay tres caminos:
+#   - Con opciones (--full, --minimo, --con...): se usan esas, sin
+#     preguntar nada (--menu muestra igual el menu, ya marcado).
+#   - Sin opciones y con terminal: menu de casillas con 'dialog' (funciona
+#     tanto en una consola TTY como en una terminal grafica) y un resumen
+#     para confirmar.
+#   - Sin opciones y sin terminal (o sin poder instalar 'dialog'): las
+#     variables OPT_* del entorno que haya; las que falten se preguntan
+#     una por una (want).
 #
-# Aunque este bloque esta al final del archivo, main() lo ejecuta al
-# principio, justo despues de detect_hardware(): la opcion de NVIDIA
-# solo tiene sentido mostrarla si hay una NVIDIA.
+# main() lo ejecuta despues de detect_hardware y detect_desktop_environment:
+# la opcion de NVIDIA solo se muestra si hay una NVIDIA, y los programas
+# graficos solo si hay escritorio.
 #
 # Los textos del menu van SIN acentos a proposito: el menu aparece antes
 # de que el script configure el idioma, y en una consola TTY recien
 # instalada los acentos pueden verse como simbolos extranos.
-#
-# Si el menu no se puede mostrar (sin terminal interactiva, o sin poder
-# instalar 'dialog'), las variables OPT_* quedan vacias y want() vuelve
-# a preguntar cada opcion por separado, como antes.
+decidir_opciones() {
+    log_info "== Seleccion de acciones =="
+
+    if [ "$HAY_OPCIONES" = "no" ] && [ "$ARG_MENU" = "no" ]; then
+        select_options_menu
+        # Un instalador que fija las OPT_* pero es anterior a las opciones
+        # mas nuevas: esas no se preguntan, quedan desmarcadas.
+        if [ -n "${OPT_CHROME:-}${OPT_LIBREOFFICE:-}${OPT_CUPS:-}" ]; then
+            for _var in OPT_BRAVE OPT_VLC OPT_FASTFETCH OPT_BTOP; do
+                eval ": \"\${$_var:=no}\""
+            done
+        fi
+        ajustar_dependencias
+        return 0
+    fi
+
+    case "$ARG_MODO" in
+        full)   opciones_base yes ;;
+        minimo) opciones_base no ;;
+        *)      menu_defaults ;;
+    esac
+    for _p in $ARG_CON; do eval "$(programa_var "$_p")=yes"; done
+    for _p in $ARG_SIN; do eval "$(programa_var "$_p")=no"; done
+    aplicar_nvidia
+    ajustar_dependencias
+    if [ "$ARG_MENU" = "yes" ] && [ -t 0 ] && [ -t 1 ]; then
+        select_options_menu
+    else
+        menu_summary
+        log_ok "Opciones elegidas:$(printf '%b' "$summary" | tr '\n' ' ')"
+    fi
+}
+
 # Convierte yes/no al formato de estado de una casilla de dialog.
 menu_state() {
     if [ "$1" = "yes" ]; then echo on; else echo off; fi
 }
 
 select_options_menu() {
-    log_info "== Seleccion de acciones =="
-
     if [ ! -t 0 ] || [ ! -t 1 ]; then
         log_warn "No hay una terminal interactiva: se preguntara cada opcion por separado durante la ejecucion."
         return 0
@@ -388,31 +877,98 @@ select_options_menu() {
     log_ok "Opciones elegidas en el menu:$(printf '%b' "$summary" | tr '\n' ' ')"
 }
 
+# Valores por defecto (casillas premarcadas). Solo se llenan las
+# variables vacias: lo que ya fijaron las opciones o el entorno se
+# respeta. Criterios:
+#  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
+#    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
+#    negra) es mucho peor que el de marcarlo (perder la aceleracion
+#    de la NVIDIA, usando la otra GPU).
+#  - Flatpak y sus aplicaciones: desmarcados. Instalar Flatpak sin
+#    ninguna aplicacion seria infraestructura para nada; marcar
+#    OnlyOffice, Chrome o Brave activa Flatpak automaticamente.
+#  - Fastfetch, Btop y VLC: desmarcados (extras, no hacen falta para el
+#    uso diario: el reproductor de siempre es mpv, ver install_daily_apps).
 menu_defaults() {
-    # Valores por defecto (casillas premarcadas). Criterios:
-    #  - NVIDIA en modo seguro: marcado. En el hardware antiguo al que
-    #    apunta este proyecto, el fallo de dejarlo desmarcado (pantalla
-    #    negra) es mucho peor que el de marcarlo (perder la aceleracion
-    #    de la NVIDIA, usando la otra GPU).
-    #  - Flatpak y sus aplicaciones: desmarcados. Instalar Flatpak sin
-    #    ninguna aplicacion seria infraestructura para nada; marcar
-    #    OnlyOffice o Chrome activa Flatpak automaticamente.
-    OPT_KEYBOARD=yes
-    OPT_NVIDIA_SAFE=yes
+    : "${OPT_KEYBOARD:=yes}"
+    : "${OPT_NVIDIA_SAFE:=yes}"
     # Portatiles Optimus: en vez de la casilla de modo seguro se muestra
     # una segunda pantalla con tres modos; por defecto, el de ahorro
     # (probado en el K53SV, ver nvidia_apply_optimus).
-    OPT_NVIDIA_MODE=""
-    [ "$OPTIMUS_LAPTOP" = "yes" ] && OPT_NVIDIA_MODE="optimus"
-    OPT_GCOMPAT=no
-    OPT_CUPS=yes
-    OPT_LIBREOFFICE=yes
-    OPT_FIREFOX=yes
-    OPT_FLATPAK=no
-    OPT_ONLYOFFICE=no
-    OPT_CHROME=no
-    OPT_BRAVE=no
-    OPT_UPDATE_SHORTCUT=yes
+    if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+        : "${OPT_NVIDIA_MODE:=optimus}"
+    else
+        OPT_NVIDIA_MODE=""
+    fi
+    : "${OPT_GCOMPAT:=no}"
+    : "${OPT_CUPS:=yes}"
+    : "${OPT_LIBREOFFICE:=yes}"
+    : "${OPT_FIREFOX:=yes}"
+    : "${OPT_VLC:=no}"
+    : "${OPT_FASTFETCH:=no}"
+    : "${OPT_BTOP:=no}"
+    : "${OPT_FLATPAK:=no}"
+    : "${OPT_ONLYOFFICE:=no}"
+    : "${OPT_CHROME:=no}"
+    : "${OPT_BRAVE:=no}"
+    : "${OPT_UPDATE_SHORTCUT:=yes}"
+}
+
+# --full (yes) y --minimo (no): todos los programas opcionales con el
+# mismo valor. Teclado y NVIDIA quedan como en el menu.
+opciones_base() {
+    for _p in $PROGRAMAS; do
+        _var="$(programa_var "$_p")"
+        eval "[ -n \"\${$_var:-}\" ] || $_var=$1"
+    done
+    menu_defaults
+}
+
+# --nvidia: seguro, optimus (solo portatiles con dos graficas) o activa.
+aplicar_nvidia() {
+    case "$ARG_NVIDIA" in
+        seguro)
+            OPT_NVIDIA_SAFE="yes"
+            [ "$OPTIMUS_LAPTOP" = "no" ] || OPT_NVIDIA_MODE="safe"
+            ;;
+        optimus)
+            OPT_NVIDIA_SAFE="yes"
+            if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+                OPT_NVIDIA_MODE="optimus"
+            elif [ "$GPU_HAS_NVIDIA" = "yes" ]; then
+                log_warn "--nvidia optimus es para portatiles con dos graficas; aqui se usa el modo seguro."
+            fi
+            ;;
+        activa)
+            OPT_NVIDIA_SAFE="no"
+            [ "$OPTIMUS_LAPTOP" = "no" ] || OPT_NVIDIA_MODE="active"
+            ;;
+    esac
+}
+
+# Reglas que valen sin importar de donde salieron las decisiones:
+#  - Las aplicaciones de Flathub necesitan Flatpak.
+#  - Sin escritorio, los programas graficos no sirven: no se instalan.
+ajustar_dependencias() {
+    if [ "${OPT_ONLYOFFICE:-}" = "yes" ] || [ "${OPT_CHROME:-}" = "yes" ] || [ "${OPT_BRAVE:-}" = "yes" ]; then
+        if [ "${OPT_FLATPAK:-}" = "no" ]; then
+            log_warn "OnlyOffice, Chrome y Brave se instalan con Flatpak: se activa Flatpak."
+        fi
+        OPT_FLATPAK="yes"
+    fi
+    if ! has_desktop; then
+        _omitidos=""
+        for _p in $PROGRAMAS_GRAFICOS; do
+            _var="$(programa_var "$_p")"
+            _val=""
+            eval "_val=\${$_var:-}"
+            [ "$_val" = "no" ] || _omitidos="$_omitidos $_p"
+            eval "$_var=no"
+        done
+        if [ -n "$_omitidos" ] && [ "$HAY_OPCIONES" = "yes" ]; then
+            log_info "Sin escritorio: se omiten los programas graficos:$_omitidos."
+        fi
+    fi
 }
 
 # Muestra la pantalla de casillas y deja las etiquetas elegidas en $sel.
@@ -428,13 +984,21 @@ menu_checklist() {
     set -- "$@" \
         GCOMPAT "gcompat: programas propietarios compilados con glibc" "$(menu_state "$OPT_GCOMPAT")" \
         CUPS "Impresoras (CUPS)" "$(menu_state "$OPT_CUPS")" \
-        LIBREOFFICE "LibreOffice en espanol (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
-        FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
-        FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
-        ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
-        CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
-        BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")" \
-        UPDATE_SHORTCUT "Boton 'Actualizar el sistema' en el menu" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
+        FASTFETCH "Fastfetch: resumen del equipo en la terminal" "$(menu_state "$OPT_FASTFETCH")" \
+        BTOP "Btop: monitor de procesador, memoria y discos" "$(menu_state "$OPT_BTOP")"
+    # Sin escritorio, los programas graficos no se ofrecen.
+    if has_desktop; then
+        set -- "$@" \
+            LIBREOFFICE "LibreOffice en el idioma del sistema (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
+            FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
+            VLC "Reproductor de video VLC" "$(menu_state "$OPT_VLC")" \
+            FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
+            ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
+            CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+            BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")"
+    fi
+    set -- "$@" \
+        UPDATE_SHORTCUT "Boton 'Actualizar el sistema' y aviso de actualizaciones" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
 
     # Tamano "0 0 0": dialog calcula alto, ancho y alto de la lista
     # segun el contenido y la pantalla disponible. Con un tamano fijo
@@ -460,24 +1024,22 @@ menu_checklist() {
     fi
 }
 
+# Etiquetas de las casillas (las que devuelve dialog, sin "OPT_").
+CASILLAS="KEYBOARD NVIDIA_SAFE GCOMPAT CUPS FASTFETCH BTOP LIBREOFFICE FIREFOX VLC FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT"
+
 # Pasa las etiquetas de $sel a las variables OPT_*.
 menu_read_selection() {
     # Todo se reinicia a "no" y se marca "yes" solo lo seleccionado.
-    # Las etiquetas se validan contra una lista fija antes del eval.
-    for k in KEYBOARD NVIDIA_SAFE GCOMPAT CUPS LIBREOFFICE FIREFOX FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT; do
+    # Las etiquetas se validan contra la lista fija antes del eval.
+    for k in $CASILLAS; do
         eval "OPT_$k=no"
     done
     for tag in $sel; do
-        case "$tag" in
-            KEYBOARD|NVIDIA_SAFE|GCOMPAT|CUPS|LIBREOFFICE|FIREFOX|FLATPAK|ONLYOFFICE|CHROME|BRAVE|UPDATE_SHORTCUT)
-                eval "OPT_$tag=yes" ;;
+        case " $CASILLAS " in
+            *" $tag "*) eval "OPT_$tag=yes" ;;
         esac
     done
-
-    # Las aplicaciones Flatpak no pueden instalarse sin Flatpak.
-    if [ "$OPT_ONLYOFFICE" = "yes" ] || [ "$OPT_CHROME" = "yes" ] || [ "$OPT_BRAVE" = "yes" ]; then
-        OPT_FLATPAK=yes
-    fi
+    ajustar_dependencias
 }
 
 # Portatil Optimus: segunda pantalla con los tres modos de la NVIDIA.
@@ -511,20 +1073,23 @@ menu_summary() {
     esac
     [ "$OPT_GCOMPAT" = "yes" ]         && summary="$summary\n  - gcompat"
     [ "$OPT_CUPS" = "yes" ]            && summary="$summary\n  - Impresoras (CUPS)"
+    [ "$OPT_FASTFETCH" = "yes" ]       && summary="$summary\n  - Fastfetch"
+    [ "$OPT_BTOP" = "yes" ]            && summary="$summary\n  - Btop"
     [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
     [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
+    [ "$OPT_VLC" = "yes" ]             && summary="$summary\n  - VLC"
     [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
     [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
     [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
     [ "$OPT_BRAVE" = "yes" ]           && summary="$summary\n  - Brave"
-    [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton de actualizacion"
+    [ "$OPT_UPDATE_SHORTCUT" = "yes" ] && summary="$summary\n  - Boton y aviso de actualizaciones"
     if [ -z "$summary" ]; then
         summary="\n  (ninguna opcional)"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 5: Distribución de teclado a "latam" (consola + sesión gráfica)
+# BLOQUE 9: Distribución de teclado a "latam" (consola + sesión gráfica)
 # ------------------------------------------------------------------------------
 setup_keyboard_layout() {
     log_info "== Distribución de teclado =="
@@ -601,57 +1166,36 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 6: Detección multiparadigma del entorno de escritorio
+# BLOQUE 10: Detección del usuario real del sistema
 # ------------------------------------------------------------------------------
-DE_XFCE="no"
-DE_PLASMA="no"
-DE_GNOME="no"
-DE_MATE="no"
-DE_LXQT="no"
-DE_SWAY="no"
-
-# Devuelve 0 si se detecto al menos un entorno de escritorio.
-has_desktop() {
-    [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]
-}
-
-detect_desktop_environment() {
-    log_info "== Detectando entorno de escritorio instalado =="
-
-    pkg_installed xfce4-session && { DE_XFCE="yes"; log_ok "XFCE detectado."; }
-
-    # Se comprueban ambos nombres: plasma-desktop-meta (metapaquete usado
-    # por setup-desktop) y plasma-desktop (paquete real que trae como
-    # dependencia). Cubre también instalaciones manuales/no estándar que
-    # no pasaron por el metapaquete.
-    if pkg_installed plasma-desktop-meta || pkg_installed plasma-desktop; then
-        DE_PLASMA="yes"; log_ok "KDE Plasma detectado."
-    fi
-
-    pkg_installed gnome-shell && { DE_GNOME="yes"; log_ok "GNOME detectado."; }
-    pkg_installed mate-session-manager && { DE_MATE="yes"; log_ok "MATE detectado."; }
-    pkg_installed lxqt-session && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
-    pkg_installed sway && { DE_SWAY="yes"; log_ok "Sway detectado."; }
-
-    if ! has_desktop; then
-        log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# BLOQUE 7: Detección del usuario real del sistema (vía doas/logname)
-# ------------------------------------------------------------------------------
+# En orden: --usuario, quien llamo a doas, quien inicio sesion (logname) y,
+# si nada de eso sirve (por ejemplo, dentro de un chroot o al arrancar),
+# el unico usuario normal del sistema, si hay solo uno.
 TARGET_USER=""
 TARGET_HOME=""
+
+# Imprime el usuario normal (UID 1000 a 59999, carpeta en /home) si hay
+# exactamente uno.
+unico_usuario() {
+    awk -F: '$3 >= 1000 && $3 < 60000 && $6 ~ /^\/home\// { print $1 }' /etc/passwd 2>/dev/null \
+        | { read -r _u1 || exit 0; read -r _u2 && exit 0; printf '%s' "$_u1"; }
+}
 
 detect_target_user() {
     log_info "== Detectando usuario real del sistema =="
 
-    TARGET_USER="${DOAS_USER:-}"
-    [ -z "$TARGET_USER" ] && TARGET_USER="$(logname 2>/dev/null || true)"
-
+    TARGET_USER="${ARG_USUARIO:-${DOAS_USER:-}}"
+    [ -n "$TARGET_USER" ] || TARGET_USER="$(logname 2>/dev/null || true)"
     if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
-        log_warn "No se pudo determinar un usuario estándar vía doas ni logname."
+        TARGET_USER="$(unico_usuario)"
+    fi
+
+    if [ -z "$TARGET_USER" ]; then
+        log_warn "No se pudo determinar el usuario del escritorio (usa --usuario NOMBRE)."
+        return 0
+    fi
+    if ! id "$TARGET_USER" >/dev/null 2>&1; then
+        log_warn "El usuario '$TARGET_USER' no existe en este sistema."
         TARGET_USER=""
         return 0
     fi
@@ -667,7 +1211,7 @@ detect_target_user() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 8: Applets de red y audio (enrutamiento dinámico según DE)
+# BLOQUE 11: Applets de red y audio (enrutamiento dinámico según DE)
 # ------------------------------------------------------------------------------
 # Servidor de audio: PulseAudio o PipeWire.
 # En Alpine, "pulseaudio" es tambien un nombre VIRTUAL: lo provee el
@@ -1029,7 +1573,7 @@ WAYBAR
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 9: Deteccion de hardware de red inalambrica (PCI + USB)
+# BLOQUE 12: Deteccion de hardware de red inalambrica (PCI + USB)
 # ------------------------------------------------------------------------------
 # Un adaptador WiFi puede estar conectado por PCI/PCIe (tarjeta interna) o
 # por USB (dongle externo). lspci NO ve dispositivos USB, asi que hace
@@ -1065,7 +1609,7 @@ detect_wifi_hardware() {
             WIFI_INFO=""
         else
             # Sin las herramientas no se sabe: se instala el firmware general
-            # (Bloque 10), como si hubiera un adaptador desconocido.
+            # (Bloque 13), como si hubiera un adaptador desconocido.
             log_warn "No se pudo revisar del todo el hardware (lspci/lsusb)."
             WIFI_INFO="desconocido"
         fi
@@ -1079,7 +1623,7 @@ $net_usb"
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 10: Firmware de adaptadores WiFi segun fabricante detectado
+# BLOQUE 13: Firmware de adaptadores WiFi segun fabricante detectado
 # ------------------------------------------------------------------------------
 # Alpine divide el firmware en decenas de subpaquetes por fabricante
 # (linux-firmware-intel, linux-firmware-realtek, linux-firmware-ath9k_htc,
@@ -1143,7 +1687,7 @@ install_wifi_firmware() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 11: Deteccion de hardware Bluetooth (PCI + USB)
+# BLOQUE 14: Deteccion de hardware Bluetooth (PCI + USB)
 # ------------------------------------------------------------------------------
 # La inmensa mayoria de adaptadores Bluetooth en laptops estan cableados
 # internamente por USB (a menudo combinados con el chip WiFi en el mismo
@@ -1186,7 +1730,7 @@ $bt_usb"
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 12: Pila Bluetooth (bluez) y firmware por fabricante
+# BLOQUE 15: Pila Bluetooth (bluez) y firmware por fabricante
 # ------------------------------------------------------------------------------
 # NOTA: a diferencia de lo que sugiere el nombre, NO existe un paquete
 # generico "linux-firmware-bluetooth" en Alpine -- el firmware de
@@ -1195,7 +1739,7 @@ $bt_usb"
 # Atheros/Qualcomm, linux-firmware-brcm cubre WiFi+Bluetooth combinado
 # de Broadcom, linux-firmware-intel cubre combos Intel). Muchos chips
 # combo WiFi+Bluetooth ya quedan cubiertos por el firmware que instalo
-# el Bloque 10; aqui solo se completa lo especifico de Bluetooth que
+# el Bloque 13; aqui solo se completa lo especifico de Bluetooth que
 # pueda faltar.
 install_bluetooth() {
     if [ -z "$BT_INFO" ]; then
@@ -1207,7 +1751,7 @@ install_bluetooth() {
     # El "puente" que enruta el perfil A2DP hacia el servidor de audio:
     # sin el, bluez permite emparejar el dispositivo pero los
     # audifonos/altavoces Bluetooth no emiten sonido. Depende del servidor
-    # elegido en el Bloque 8.
+    # elegido en el Bloque 11.
     if [ "$AUDIO_SERVER" = "pipewire" ]; then
         install_pkgs bluez bluez-openrc pipewire-spa-bluez
     else
@@ -1236,14 +1780,14 @@ install_bluetooth() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 13: Firmware y controladores de video (NVIDIA: modos ahorro Optimus, seguro y activo)
+# BLOQUE 16: Firmware y controladores de video (NVIDIA: modos ahorro Optimus, seguro y activo)
 # ------------------------------------------------------------------------------
 install_drivers() {
     log_info "== Instalando firmware y controladores =="
 
     # El script no pide el metapaquete "linux-firmware" (depende de todos
     # los subpaquetes de fabricante); solo pide los del hardware detectado.
-    # Ver la NOTA SOBRE EL FIRMWARE del Bloque 10: en una instalacion
+    # Ver la NOTA SOBRE EL FIRMWARE del Bloque 13: en una instalacion
     # normal de Alpine ese metapaquete ya viene incluido.
     install_pkgs mesa-dri-gallium mesa-gl mesa-egl
 
@@ -1528,7 +2072,7 @@ check_vaapi() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 14: Dispositivos sin controlador y capas de compatibilidad
+# BLOQUE 17: Dispositivos sin controlador y capas de compatibilidad
 # ------------------------------------------------------------------------------
 # Hasta aqui el script instalo firmware para el hardware que reconocio.
 # Este bloque cierra el ciclo preguntando algo distinto: ¿quedo algun
@@ -1605,7 +2149,7 @@ check_unclaimed_devices() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 15: Detección de CPU y microcódigo
+# BLOQUE 18: Detección de CPU y microcódigo
 # ------------------------------------------------------------------------------
 CPU_VENDOR=""
 
@@ -1701,7 +2245,7 @@ install_microcode() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 16: zram (memoria comprimida al 100% de la RAM física)
+# BLOQUE 19: zram (memoria comprimida al 100% de la RAM física)
 # ------------------------------------------------------------------------------
 setup_zram() {
     log_info "== Configurando zram =="
@@ -1734,7 +2278,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 17: EarlyOOM
+# BLOQUE 20: EarlyOOM
 # ------------------------------------------------------------------------------
 setup_earlyoom() {
     log_info "== Configurando EarlyOOM =="
@@ -1744,14 +2288,14 @@ setup_earlyoom() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 18: Gestión de energía básica (ACPI)
+# BLOQUE 21: Gestión de energía básica (ACPI)
 # ------------------------------------------------------------------------------
 # CORRECCION: antes se habilitaba acpid siempre. Desde mayo de 2025,
 # setup-desktop (alpine-conf) lo DESHABILITA a proposito en los equipos
 # de escritorio, porque podia apagar el sistema por accidente: con un
 # escritorio, elogind ya atiende el boton de encendido y la tapa, y acpid
 # respondia al mismo evento por su cuenta. Este script instala elogind
-# siempre (Bloque 21), asi que acpid solo se habilita si no hay escritorio.
+# siempre (Bloque 24), asi que acpid solo se habilita si no hay escritorio.
 setup_power() {
     log_info "== Configurando gestión de energía (ACPI) =="
     if has_desktop; then
@@ -1768,7 +2312,7 @@ setup_power() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 19: Optimizacion de discos duros mecanicos (HDD)
+# BLOQUE 22: Optimizacion de discos duros mecanicos (HDD)
 # ------------------------------------------------------------------------------
 # Equipos "revividos" suelen tener disco mecanico, no SSD. BFQ prioriza
 # que un proceso con mucha carga de E/S (una actualizacion de apk, copiar
@@ -1857,7 +2401,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 20: TRIM semanal para discos de estado solido
+# BLOQUE 23: TRIM semanal para discos de estado solido
 # ------------------------------------------------------------------------------
 # Un SSD necesita que el sistema le avise que bloques quedaron libres
 # (TRIM); sin eso, en SSD baratos el rendimiento de escritura cae con el
@@ -1899,7 +2443,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 21: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
+# BLOQUE 24: Montaje automático de USB (udisks2 + polkit + gvfs por DE)
 # ------------------------------------------------------------------------------
 # El montaje real lo hace udisks2 (dbus-activated, no requiere su propio
 # servicio OpenRC). Para que un usuario normal (no root) pueda montar sin
@@ -1954,7 +2498,7 @@ setup_usb_automount() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 22: Soporte de impresión (CUPS)
+# BLOQUE 25: Soporte de impresión (CUPS)
 # ------------------------------------------------------------------------------
 setup_printing() {
     log_info "== Soporte de impresión (CUPS) =="
@@ -1971,7 +2515,7 @@ setup_printing() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 23: Backends de compresión
+# BLOQUE 26: Backends de compresión
 # ------------------------------------------------------------------------------
 install_archive_tools() {
     log_info "== Instalando utilidades de compresión =="
@@ -1980,7 +2524,30 @@ install_archive_tools() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 24: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
+# BLOQUE 27: Herramientas de terminal opcionales (Fastfetch, Btop)
+# ------------------------------------------------------------------------------
+# Fastfetch muestra un resumen del equipo (sistema, procesador, memoria);
+# Btop es un monitor de recursos a pantalla completa. Los dos funcionan
+# tambien sin escritorio.
+install_console_tools() {
+    log_info "== Herramientas de terminal =="
+    _herramientas=""
+    if want OPT_FASTFETCH "¿Deseas instalar Fastfetch (resumen del equipo en la terminal)?"; then
+        _herramientas="fastfetch"
+    fi
+    if want OPT_BTOP "¿Deseas instalar Btop (monitor de procesador, memoria y discos)?"; then
+        _herramientas="$_herramientas btop"
+    fi
+    if [ -z "$_herramientas" ]; then
+        log_info "Se omiten Fastfetch y Btop."
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    install_pkgs $_herramientas
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 28: Idioma (español por defecto, u OPT_LANG) — sistema, XFCE y propagación global a Plasma
 # ------------------------------------------------------------------------------
 setup_locale() {
     # Idioma: espanol de Espana salvo que se indique otro con OPT_LANG
@@ -2081,7 +2648,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 25: Tipografías base (antes de LibreOffice)
+# BLOQUE 29: Tipografías base (antes de LibreOffice)
 # ------------------------------------------------------------------------------
 install_fonts() {
     log_info "== Instalando tipografías base =="
@@ -2093,7 +2660,7 @@ install_fonts() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 26: LibreOffice + paquete de idioma del sistema
+# BLOQUE 30: LibreOffice + paquete de idioma del sistema
 # ------------------------------------------------------------------------------
 install_libreoffice() {
     log_info "== LibreOffice =="
@@ -2107,7 +2674,7 @@ install_libreoffice() {
     # que corre antes (por defecto espanol).
     # Alpine los nombra por region (libreoffice-lang-pt_br) o por idioma
     # (libreoffice-lang-es); el ingles viene incluido.
-    lo_region="$(printf '%s' "${idioma:-es_ES.UTF-8}" | sed 's/[.@].*//' | tr 'A-Z' 'a-z')"
+    lo_region="$(printf '%s' "${idioma:-es_ES.UTF-8}" | sed 's/[.@].*//' | tr '[:upper:]' '[:lower:]')"
     lo_idioma=""
     for p in "libreoffice-lang-$lo_region" "libreoffice-lang-${lo_region%%_*}"; do
         case "$p" in *[!a-z_-]*) continue ;; esac
@@ -2117,25 +2684,48 @@ install_libreoffice() {
         fi
     done
     log_info "== Instalando LibreOffice =="
+    # shellcheck disable=SC2086  # vacio si no hay paquete de idioma
     install_pkgs libreoffice $lo_idioma
     log_ok "LibreOffice instalado${lo_idioma:+ ($lo_idioma)}."
 }
 
-# Instala una aplicacion de Flathub. Si falla, queda pendiente y se
-# reintenta sola en segundo plano en cada arranque con internet. Pasa con
-# Google Chrome al instalar desde Calamares: Chrome se descarga de la
-# pagina de Google durante la instalacion y ese paso no funciona dentro
-# del sistema que se esta instalando (chroot).
+# Instala una aplicacion de Flathub ($1 = id, $2 = nombre para mostrar).
+# Si la descarga falla por la red, espera a que vuelva y reintenta (hasta
+# 3 intentos). Si aun asi no se puede, o falla por otra causa, queda
+# pendiente (flatpak_pendiente). Otra causa conocida: Google Chrome se
+# descarga de la pagina de Google durante la instalacion y ese paso no
+# funciona dentro del sistema que se esta instalando (chroot).
 FLATPAK_PENDIENTES="/etc/flatpak-pendientes"
+FLATHUB_LISTO="no"
 flatpak_app() {
-    salida="$(mktemp)"
-    if $remote_add_cmd install -y --noninteractive flathub "$1" >"$salida" 2>&1; then
-        cat "$salida" >>"$LOG_FILE"; rm -f "$salida"
-        log_ok "$2 instalado."
+    if [ "$FLATHUB_LISTO" = "no" ]; then
+        flatpak_pendiente "$1" "$2"
         return 0
     fi
-    cat "$salida" >>"$LOG_FILE"; rm -f "$salida"
-    log_warn "$2 no se pudo instalar ahora; se reintentara solo en cada arranque con internet."
+    _fp_salida="$(mktemp)"
+    _fp_intento=1
+    while :; do
+        if $remote_add_cmd install -y --noninteractive flathub "$1" >"$_fp_salida" 2>&1; then
+            cat "$_fp_salida" >>"$LOG_FILE"; rm -f "$_fp_salida"
+            log_ok "$2 instalado."
+            return 0
+        fi
+        cat "$_fp_salida" >>"$LOG_FILE"
+        [ "$_fp_intento" -lt 3 ] || break
+        grep -qiE 'resolve|curl|could not connect|couldn.t connect|timeout|timed out|connection|network|error receiving data' "$_fp_salida" || break
+        esperar_red || break
+        log_warn "$2: la descarga fallo por la conexion; se reintenta ($_fp_intento/3)..."
+        _fp_intento=$((_fp_intento + 1))
+    done
+    rm -f "$_fp_salida"
+    flatpak_pendiente "$1" "$2"
+}
+
+# Deja una aplicacion de Flathub pendiente: se instala sola, en segundo
+# plano, en cada arranque con internet (hasta 20 minutos por arranque)
+# hasta lograrlo. Tambien agrega Flathub si no se pudo agregar antes.
+flatpak_pendiente() {
+    log_warn "$2 no se pudo instalar ahora; se instalara solo despues de arrancar el equipo con internet."
     grep -qx "$1" "$FLATPAK_PENDIENTES" 2>/dev/null || echo "$1" >>"$FLATPAK_PENDIENTES"
     mkdir -p /etc/local.d
     cat > /etc/local.d/flatpak-pendientes.start <<'PEND'
@@ -2150,6 +2740,8 @@ lista=/etc/flatpak-pendientes
     while [ -s "$lista" ] && [ $i -lt 20 ]; do
         sleep 60
         i=$((i + 1))
+        flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo \
+            >>/var/log/flatpak-pendientes.log 2>&1 || continue
         for app in $(cat "$lista"); do
             if flatpak install -y --noninteractive flathub "$app" >>/var/log/flatpak-pendientes.log 2>&1; then
                 grep -vx "$app" "$lista" > "$lista.tmp"; mv -f "$lista.tmp" "$lista"
@@ -2165,7 +2757,7 @@ PEND
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 27: Aplicaciones de uso diario y aplicaciones predeterminadas
+# BLOQUE 31: Aplicaciones de uso diario y aplicaciones predeterminadas
 # ------------------------------------------------------------------------------
 # Pensado para el usuario comun al que apunta el script: leer PDFs,
 # reproducir audios y videos locales, y navegar. Cada aplicacion se
@@ -2236,7 +2828,7 @@ install_daily_apps() {
 
     # --- Reproductor multimedia ---
     # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
-    # de video por hardware (VA-API) instalada en el Bloque 13. Cubre los
+    # de video por hardware (VA-API) instalada en el Bloque 16. Cubre los
     # audios de WhatsApp (.ogg/.opus) y los videos descargados habituales.
     install_pkgs mpv
     if media_app="$(find_desktop_file mpv.desktop io.mpv.Mpv.desktop)"; then
@@ -2250,11 +2842,22 @@ install_daily_apps() {
         log_warn "No se encontro el reproductor instalado; no se cambiaron las aplicaciones predeterminadas de audio y video."
     fi
 
+    # --- VLC (opcional) ---
+    # Reproductor mas completo que mpv (menus, listas, subtitulos). Si se
+    # elige, se instala ademas de mpv, que sigue como predeterminado.
+    # El paquete "vlc" de Alpine no trae ventana ni entrada en el menu:
+    # esas estan en vlc-qt.
+    if want OPT_VLC "¿Deseas instalar el reproductor VLC?"; then
+        install_pkgs vlc vlc-qt
+    else
+        log_info "Se omite VLC."
+    fi
+
     # --- Tienda de aplicaciones ---
     # Plasma trae Discover y GNOME trae GNOME Software (los instala
     # setup-desktop). En los demas: Discover en LXQt (Qt, como el
     # escritorio) y GNOME Software en XFCE, MATE y Sway (GTK). Ambas instalan y
-    # actualizan paquetes de Alpine y, con Flatpak (Bloque 28), tambien
+    # actualizan paquetes de Alpine y, con Flatpak (Bloque 32), tambien
     # aplicaciones de Flathub: su soporte de Flatpak se agrega solo
     # (install_if) cuando flatpak esta instalado.
     if [ "$DE_LXQT" = "yes" ] && [ "$DE_PLASMA" = "no" ]; then
@@ -2295,7 +2898,7 @@ print_browser_recommendations() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 28: Flatpak + Flathub (OnlyOffice, Google Chrome y Brave, opcionales)
+# BLOQUE 32: Flatpak + Flathub (OnlyOffice, Google Chrome y Brave, opcionales)
 # ------------------------------------------------------------------------------
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
@@ -2307,7 +2910,7 @@ setup_flatpak() {
 
     log_info "== Configurando Flatpak y repositorio Flathub =="
 
-    # dbus ya se instaló y habilitó en el Bloque 21 (setup_usb_automount).
+    # dbus ya se instaló y habilitó en el Bloque 24 (setup_usb_automount).
     # Portal GTK como base universal (XFCE/GNOME/MATE, y red de seguridad
     # para cualquier entorno). El propio xdg-desktop-portal elige el
     # backend correcto en tiempo real según XDG_CURRENT_DESKTOP, así que
@@ -2339,11 +2942,23 @@ setup_flatpak() {
         remote_add_cmd="flatpak"
     fi
 
-    if $remote_add_cmd remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; then
+    # Agregar Flathub descarga su descripcion: con la red inestable se
+    # reintenta. Si no se logra, las aplicaciones quedan pendientes y
+    # Flathub se agrega junto con ellas despues del primer arranque.
+    FLATHUB_LISTO="no"
+    for _intento in 1 2 3; do
+        if $remote_add_cmd remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo >>"$LOG_FILE" 2>&1; then
+            FLATHUB_LISTO="yes"
+            break
+        fi
+        if [ "$_intento" -lt 3 ] && esperar_red; then
+            sleep 5
+        fi
+    done
+    if [ "$FLATHUB_LISTO" = "yes" ]; then
         log_ok "Repositorio Flathub agregado (o ya existía)."
     else
-        log_warn "No se pudo agregar el repositorio Flathub."
-        return 0
+        log_warn "No se pudo agregar el repositorio Flathub ahora (¿sin internet?)."
     fi
 
     if want OPT_ONLYOFFICE "¿Deseas instalar OnlyOffice Desktop Editors vía Flatpak?"; then
@@ -2358,9 +2973,6 @@ setup_flatpak() {
         log_info "Se omite Google Chrome."
     fi
 
-    # Sin preguntas (OPT_* fijadas por un instalador anterior a Brave):
-    # Brave no se pregunta.
-    [ -n "${OPT_BRAVE:-}" ] || [ -z "${OPT_CHROME:-}" ] || OPT_BRAVE=no
     if want OPT_BRAVE "¿Deseas instalar el navegador Brave vía Flatpak?"; then
         flatpak_app com.brave.Browser "Brave"
     else
@@ -2369,7 +2981,7 @@ setup_flatpak() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 29: Habilitar el Gestor de Inicio de Sesión (Display Manager)
+# BLOQUE 33: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
 # La llave de X que crea la pantalla de inicio queda atada al nombre del
 # equipo. Si arranca antes que el servicio "hostname" (pasa en el primer
@@ -2381,6 +2993,7 @@ setup_flatpak() {
 # el archivo ya pida, sin tener que entender como esta escrito.
 dm_tras_hostname() {
     _conf="/etc/conf.d/$1"
+    # shellcheck disable=SC2016  # la linea se escribe tal cual
     _linea='rc_need="${rc_need:-} hostname"'
     grep -qsxF "$_linea" "$_conf" && return 0
     mkdir -p /etc/conf.d
@@ -2492,7 +3105,7 @@ setup_greetd_idioma() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 30: La pantalla de inicio usa la resolucion elegida por el usuario
+# BLOQUE 34: La pantalla de inicio usa la resolucion elegida por el usuario
 # ------------------------------------------------------------------------------
 # Cada escritorio guarda la resolucion en la configuracion del usuario, que
 # la pantalla de inicio (LightDM, SDDM, GDM) no lee: esta arranca siempre
@@ -2818,7 +3431,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 31: Acceso directo de actualizacion en el menu de aplicaciones
+# BLOQUE 35: Acceso directo de actualizacion en el menu de aplicaciones
 # ------------------------------------------------------------------------------
 # Los archivos .desktop siguen el estandar XDG Desktop Entry: un unico
 # archivo en /usr/share/applications/ aparece automaticamente en el menu
@@ -2826,7 +3439,7 @@ EOF
 # logica especifica por DE -- es justamente para eso que existe el
 # estandar.
 #
-# Autenticacion via pkexec (parte de polkit-elogind, Bloque 21). Por
+# Autenticacion via pkexec (parte de polkit-elogind, Bloque 24). Por
 # defecto, SIN necesidad de ninguna regla de polkit personalizada: si el
 # usuario objetivo esta en el grupo "wheel", pkexec pide UNICAMENTE su
 # propia contrasena (igual que doas), nunca la de root. Es el
@@ -2878,7 +3491,7 @@ shortcut_install_deps() {
     # agente de autenticacion polkit en ejecucion para dibujar la ventana
     # de contrasena. Sin el, pkexec falla con "No authentication agent
     # found" y la actualizacion nunca empieza. Plasma (polkit-kde-agent),
-    # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 21)
+    # GNOME (integrado en GNOME Shell) y LXQt (lxqt-policykit, Bloque 24)
     # ya traen el suyo; XFCE, MATE y Sway se cubren aqui. Ademas, el lanzador
     # comprueba en cada ejecucion que el agente este CORRIENDO y lo
     # inicia si hace falta: instalar el paquete no garantiza que arranque,
@@ -2898,7 +3511,11 @@ shortcut_add_wheel() {
         log_warn "No se determino un usuario estandar; el acceso directo se creara igual, pero verifica manualmente que el usuario este en el grupo 'wheel' para que pkexec pida solo su propia contrasena."
     else
         if ! id -nG "$TARGET_USER" 2>/dev/null | grep -qw wheel; then
-            adduser "$TARGET_USER" wheel && log_ok "Usuario '$TARGET_USER' agregado al grupo 'wheel' (requerido por pkexec)." || log_warn "No se pudo agregar '$TARGET_USER' al grupo 'wheel'."
+            if adduser "$TARGET_USER" wheel; then
+                log_ok "Usuario '$TARGET_USER' agregado al grupo 'wheel' (requerido por pkexec)."
+            else
+                log_warn "No se pudo agregar '$TARGET_USER' al grupo 'wheel'."
+            fi
         fi
     fi
 }
@@ -3559,7 +4176,7 @@ INNEREOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 32: Permisos de grupo para Audio/Video/Impresión
+# BLOQUE 36: Permisos de grupo para Audio/Video/Impresión
 # ------------------------------------------------------------------------------
 setup_user_groups() {
     log_info "== Configurando permisos de grupo =="
@@ -3581,19 +4198,46 @@ setup_user_groups() {
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 33: Función principal
+# BLOQUE 37: Dueño de los archivos de la carpeta personal
+# ------------------------------------------------------------------------------
+# El script corre como root y crea algunos archivos en la carpeta del
+# usuario (por ejemplo ~/.config). Si el usuario aun no ha entrado nunca
+# (sistema recien instalado), esos archivos quedarian de root y el
+# escritorio no podria guardar su configuracion (Plasma: "kioworkerrc not
+# writable"). Se devuelven al usuario solo los archivos que son de root.
+fix_home_owner() {
+    [ -n "$TARGET_USER" ] && [ -n "$TARGET_HOME" ] || return 0
+    case "$TARGET_HOME" in
+        /|/root|/home) return 0 ;;
+    esac
+    _grupo="$(id -gn "$TARGET_USER" 2>/dev/null)" || return 0
+    if find "$TARGET_HOME" -xdev -user root -exec chown -h "$TARGET_USER:$_grupo" {} \; 2>>"$LOG_FILE"; then
+        log_ok "Archivos de $TARGET_HOME devueltos a '$TARGET_USER'."
+    else
+        log_warn "No se pudieron revisar los dueños de los archivos de $TARGET_HOME."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 38: Función principal
 # ------------------------------------------------------------------------------
 main() {
+    # Primero las opciones: --ayuda o un error de uso no necesitan root
+    # ni tocan nada.
+    leer_argumentos "$@"
     log_info "===== Iniciando configuración post-instalación de escritorio en Alpine Linux ====="
 
     check_root
+    [ -z "$ARG_DESTINO" ] || ejecutar_en_destino   # no vuelve
     update_system
-    # detect_hardware se ejecuta ANTES del menu (Bloque 4) para que la
-    # opcion de NVIDIA solo aparezca si hay una NVIDIA.
-    detect_hardware
-    select_options_menu
-    setup_keyboard_layout
+    install_desktop
+    # Hardware y escritorio se detectan ANTES de las decisiones (Bloque 8):
+    # la opcion de NVIDIA solo aparece si hay una NVIDIA, y los programas
+    # graficos solo si hay escritorio.
     detect_desktop_environment
+    detect_hardware
+    decidir_opciones
+    setup_keyboard_layout
     detect_target_user
     setup_applets
     detect_wifi_hardware
@@ -3612,6 +4256,7 @@ main() {
     setup_usb_automount
     setup_printing
     install_archive_tools
+    install_console_tools
     setup_locale
     install_fonts
     install_libreoffice
@@ -3621,12 +4266,21 @@ main() {
     setup_greeter_resolution
     setup_update_shortcut
     setup_user_groups
+    fix_home_owner
 
     print_browser_recommendations
-    log_ok "===== Proceso completado exitosamente ====="
+    if [ "$FALLOS_DE_RED" -gt 0 ]; then
+        log_warn "===== Terminado, pero $FALLOS_DE_RED descarga(s) fallaron por la conexion a internet ====="
+        log_warn "Cuando la conexion este estable, vuelve a ejecutar el script con las mismas opciones: lo ya instalado no se repite."
+    else
+        log_ok "===== Proceso completado exitosamente ====="
+    fi
     log_info "Reinicia el sistema para que todos los cambios surtan efecto."
 
     trap - EXIT INT TERM
+    # Codigo 3: termino, pero faltan descargas (un instalador puede
+    # programar otro intento).
+    [ "$FALLOS_DE_RED" -eq 0 ] || exit 3
 }
 
 main "$@"
