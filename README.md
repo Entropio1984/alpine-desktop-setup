@@ -200,6 +200,8 @@ Solo con `--destino CARPETA`. Comprueba que en esa carpeta haya un Alpine instal
 
 Son **hasta 4 intentos** en total, y cada reintento sigue donde quedó, porque `apk` guarda cada paquete al terminar de instalarlo. Si la red no vuelve, el script da la conexión por caída: las siguientes descargas ya no esperan (fallarían igual), sigue con lo que no necesita internet y al final avisa cuántas descargas faltaron y pide volver a ejecutarlo (ver [Registro](#registro-log-y-reejecución)). Antes del `apk update` del principio el script espera hasta 2 minutos a que haya internet; sin el índice de paquetes no se puede seguir, así que si no lo consigue se detiene.
 
+**Avance en pantalla.** Mientras `apk`, `setup-desktop` o Flatpak trabajan, la pantalla muestra una línea por paquete, por ejemplo `(12/80) Instalando libreoffice-writer` o `(1/2) Descargando de Flathub`. Si pasan 20 segundos sin novedades (una descarga grande, un paquete que tarda en configurarse), aparece `... sigue trabajando (1 min 20 s)`, para que se vea que el script no está congelado. La salida completa sigue yendo solo al registro.
+
 `ensure_hw_tools` instala `pciutils` y `usbutils`. El BusyBox de Alpine trae un `lsusb` reducido que solo muestra códigos numéricos, sin los nombres que necesitan los bloques de detección.
 
 ### Bloque 5 — `install_desktop`
@@ -476,7 +478,7 @@ En el arranque normal (`default`): `networkmanager`, `dbus`, `elogind`, `polkit`
 
 Todo queda en `/var/log/desktop-postinstall.log` con cuatro niveles: `[INFO]` (paso en curso), `[OK]` (paso completado), `[WARN]` (algo falló, pero el script sigue) y `[ERROR]` (fallo grave que detiene el script). El registro se acumula entre ejecuciones.
 
-La salida completa de `apk` (y de otros programas como `mkinitfs` y `flatpak`) va **solo al registro**, no a la pantalla, que muestra un resumen de cada paso. Si un paquete falla, el motivo exacto está en el registro.
+La salida completa de `apk` (y de otros programas como `mkinitfs` y `flatpak`) va **solo al registro**. La pantalla muestra un resumen de cada paso y, mientras se instala, una línea por paquete y un aviso de "sigue trabajando" si algo tarda (ver Bloque 4). Si un paquete falla, el motivo exacto está en el registro.
 
 El script se puede ejecutar varias veces sin hacer daño: instalar un paquete que ya está no hace nada, habilitar un servicio dos veces no lo duplica, y los archivos de configuración se reescriben completos. Sirve para cambiar una opción del menú o después de instalar otro escritorio.
 
@@ -548,6 +550,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 
 Cambios importantes respecto a versiones anteriores del script, para quien venga de una de ellas:
 
+- **Avance visible:** durante las instalaciones la pantalla muestra cada paquete y avisa "sigue trabajando" cuando algo tarda, en vez de quedarse quieta hasta el OK final.
 - **Opciones y cortes de internet:** el script acepta opciones (`--full`, `--minimo`, `--con`, `--destino`...) para usarse sin menú; Fastfetch, Btop y VLC pasaron a ser opciones del script (antes los instalaba aparte el instalador de Lázaro Linux, y VLC quedaba sin ventana porque faltaba `vlc-qt`); `apk` y Flatpak reintentan cuando una descarga falla por la red; y los bloques del archivo quedaron en el orden en que se ejecutan (la numeración cambió).
 - **Revisión general:** el firmware de Bluetooth y de WiFi ya no se instala si no hay adaptador; greetd se reconoce como pantalla de inicio; la salida de `apk` va al registro en vez de a la pantalla; y `apk_vigilado` corta y reintenta (hasta 3 veces) las descargas que pasan 2 minutos sin avanzar, que antes podían dejar el script detenido indefinidamente (ver Bloque 4).
 - **Modo seguro de NVIDIA:** escribía `20-nouveau-safe.conf`, que pedía a Xorg usar el driver `nouveau` sin decir en qué tarjeta. Con el módulo bloqueado ese driver no funciona, y en un portátil híbrido Xorg lo aplicaba a la Intel: causa probable de la pantalla negra. Ya no se crea, y se borra si existe.

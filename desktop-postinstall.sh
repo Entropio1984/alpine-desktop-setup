@@ -38,6 +38,7 @@ trap 'trap - EXIT; limpiar; log_error "Script interrumpido."; exit 130' INT TERM
 
 limpiar() {
     apk_detener
+    [ -z "${_av_pid:-}" ] || kill "$_av_pid" 2>/dev/null || true
     rm -f "${_apk_salida:-}"
     destino_desmontar
 }
@@ -435,6 +436,100 @@ fallo_de_red() {
     grep -qiE 'unexpected end of file|DNS:|TLS: unspecified|HTTP 408|HTTP 50[0-9]|remote server returned|connection|network (is )?unreachable|host is unreachable|timed out|I/O error|integrity error|try again later|broken pipe' "$1"
 }
 
+# --- Avance en pantalla -------------------------------------------------------
+# La salida completa de apk, setup-desktop y flatpak va al registro. En
+# pantalla se muestra un resumen mientras trabajan, para que se vea que el
+# script no esta congelado:
+#   - una linea por paquete: "(12/80) Instalando libreoffice-writer";
+#   - si pasan 20 s sin novedades, "... sigue trabajando (1 min 20 s)".
+# Quien lanza el programa en segundo plano llama a avance_iniciar, luego a
+# avance_revisar cada 5 s con el archivo donde va su salida, y al terminar
+# a avance_terminar. Todo se escribe en el descriptor 3 (la pantalla).
+avance_iniciar() {
+    _av_leidas=0
+    _av_silencio=0
+    _av_total=0
+}
+
+# Traduce la salida de apk y flatpak (en la entrada) a lineas cortas en
+# espanol; lo demas se descarta. Flatpak redibuja su barra con retornos de
+# carro: se cortan en lineas y se repiten solo los cambios de paquete.
+avance_traducir() {
+    tr '\r' '\n' | awk '
+        # apk alinea el numero con espacios: "( 1/12) Installing ...".
+        { sub(/^\( +/, "(") }
+        /^\([0-9]+\/[0-9]+\) (Installing|Upgrading|Downgrading|Reinstalling) / {
+            sub(/ \(.*$/, "", $3)
+            print "        " $1 " Instalando " $3; next
+        }
+        /^\([0-9]+\/[0-9]+\) Purging / {
+            print "        " $1 " Quitando " $3; next
+        }
+        /^(Installing|Instalando) [0-9]+\/[0-9]+/ {
+            sub(/[^0-9\/].*$/, "", $2)
+            if ($2 != antes) { antes = $2; print "        (" $2 ") Descargando de Flathub" }
+        }
+    '
+}
+
+# $1 = archivo con la salida del programa que esta corriendo.
+avance_revisar() {
+    _av_total=$((_av_total + 5))
+    _av_lineas="$(wc -l <"$1" 2>/dev/null || echo 0)"
+    _av_nuevas=""
+    if [ "$_av_lineas" -gt "$_av_leidas" ]; then
+        _av_nuevas="$(sed -n "$((_av_leidas + 1)),${_av_lineas}p" "$1" | avance_traducir)"
+        _av_leidas="$_av_lineas"
+    fi
+    if [ -n "$_av_nuevas" ]; then
+        printf '%s\n' "$_av_nuevas" >&3
+        _av_silencio=0
+        return 0
+    fi
+    _av_silencio=$((_av_silencio + 5))
+    if [ $((_av_silencio % 20)) -eq 0 ]; then
+        if [ "$_av_total" -ge 60 ]; then
+            printf '        ... sigue trabajando (%s min %s s)\n' $((_av_total / 60)) $((_av_total % 60)) >&3
+        else
+            printf '        ... sigue trabajando (%s s)\n' "$_av_total" >&3
+        fi
+    fi
+    return 0
+}
+
+# Muestra las ultimas lineas que el programa escribio antes de terminar.
+avance_terminar() {
+    _av_lineas="$(wc -l <"$1" 2>/dev/null || echo 0)"
+    if [ "$_av_lineas" -gt "$_av_leidas" ]; then
+        _av_nuevas="$(sed -n "$((_av_leidas + 1)),${_av_lineas}p" "$1" | avance_traducir)"
+        [ -z "$_av_nuevas" ] || printf '%s\n' "$_av_nuevas" >&3
+    fi
+    return 0
+}
+
+# con_avance: ejecuta una orden mostrando su avance en pantalla y deja su
+# salida completa en la salida normal (quien llama la manda al registro).
+# Devuelve el codigo de salida de la orden.
+_av_pid=""
+con_avance() {
+    _av_salida="$(mktemp)"
+    "$@" >"$_av_salida" 2>&1 </dev/null &
+    _av_pid=$!
+    avance_iniciar
+    while kill -0 "$_av_pid" 2>/dev/null; do
+        sleep 5
+        kill -0 "$_av_pid" 2>/dev/null || break
+        avance_revisar "$_av_salida"
+    done
+    _av_rc=0
+    wait "$_av_pid" || _av_rc=$?
+    _av_pid=""
+    avance_terminar "$_av_salida"
+    cat "$_av_salida"
+    rm -f "$_av_salida"
+    return "$_av_rc"
+}
+
 # apk_vigilado: ejecuta apk (con los argumentos dados) sin que se quede
 # colgado para siempre y reintentando si falla por la red.
 # 1) Descarga detenida. apk (3.0) baja los paquetes por HTTPS con el
@@ -453,8 +548,9 @@ fallo_de_red() {
 # instalarlo, asi que el reintento sigue donde quedo. La salida de apk se
 # guarda aparte para revisarla y despues se copia a la salida normal (los
 # que llaman la mandan al registro). Los avisos van al descriptor 3 (ver
-# arriba), para que se vean en pantalla. Si la descarga no se pudo
-# completar por la red, devuelve 124.
+# arriba), para que se vean en pantalla, igual que el avance (ver
+# avance_revisar). Si la descarga no se pudo completar por la red,
+# devuelve 124.
 _apk_pid=""
 apk_vigilado() {
     _apk_intento=1
@@ -464,8 +560,10 @@ apk_vigilado() {
         _apk_pid=$!
         _apk_antes=""
         _apk_quieto=0
+        avance_iniciar
         while kill -0 "$_apk_pid" 2>/dev/null; do
             sleep 5
+            avance_revisar "$_apk_salida"
             _apk_ahora="$(awk '/^(rchar|wchar):/ { s += $2 } END { print s }' "/proc/$_apk_pid/io" 2>/dev/null)"
             # Sin /proc no se puede medir: entonces nunca se corta.
             if [ -z "$_apk_ahora" ] || [ "$_apk_ahora" != "$_apk_antes" ] \
@@ -484,6 +582,7 @@ apk_vigilado() {
         _apk_rc=0
         wait "$_apk_pid" || _apk_rc=$?
         _apk_pid=""
+        avance_terminar "$_apk_salida"
         cat "$_apk_salida"
 
         if [ "$_apk_quieto" -ge 120 ]; then
@@ -631,7 +730,7 @@ install_desktop() {
     # setup-desktop instala con apk directamente: si falla (por ejemplo,
     # por un corte de internet), se espera a la red y se repite.
     for _intento in 1 2 3; do
-        if setup-desktop "$ARG_ESCRITORIO" </dev/null >>"$LOG_FILE" 2>&1; then
+        if con_avance setup-desktop "$ARG_ESCRITORIO" >>"$LOG_FILE" 2>&1; then
             log_ok "Escritorio '$ARG_ESCRITORIO' instalado."
             return 0
         fi
@@ -2705,7 +2804,8 @@ flatpak_app() {
     _fp_salida="$(mktemp)"
     _fp_intento=1
     while :; do
-        if $remote_add_cmd install -y --noninteractive flathub "$1" >"$_fp_salida" 2>&1; then
+        # shellcheck disable=SC2086
+        if con_avance $remote_add_cmd install -y --noninteractive flathub "$1" >"$_fp_salida" 2>&1; then
             cat "$_fp_salida" >>"$LOG_FILE"; rm -f "$_fp_salida"
             log_ok "$2 instalado."
             return 0
