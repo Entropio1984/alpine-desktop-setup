@@ -38,7 +38,14 @@ trap 'trap - EXIT; limpiar; log_error "Script interrumpido."; exit 130' INT TERM
 
 limpiar() {
     apk_detener
-    [ -z "${_av_pid:-}" ] || kill "$_av_pid" 2>/dev/null || true
+    # Lo lanzado con con_avance: un programa en segundo plano no recibe
+    # Ctrl+C, asi que se corta aqui (con sus hijos) y lo que alcanzo a
+    # escribir pasa al registro.
+    [ -z "${_av_pid:-}" ] || terminar_arbol "$_av_pid"
+    if [ -n "${_av_salida:-}" ] && [ -f "$_av_salida" ]; then
+        cat "$_av_salida" >>"$LOG_FILE" 2>/dev/null || true
+        rm -f "$_av_salida"
+    fi
     rm -f "${_apk_salida:-}"
     destino_desmontar
 }
@@ -449,17 +456,16 @@ avance_iniciar() {
     _av_leidas=0
     _av_silencio=0
     _av_total=0
+    _av_ultima=""
 }
 
 # Traduce la salida de apk y flatpak (en la entrada) a lineas cortas en
-# espanol; lo demas se descarta. Flatpak redibuja su barra con retornos de
-# carro: se cortan en lineas y se repiten solo los cambios de paquete.
+# espanol; lo demas se descarta.
 avance_traducir() {
-    tr '\r' '\n' | awk '
+    awk '
         # apk alinea el numero con espacios: "( 1/12) Installing ...".
         { sub(/^\( +/, "(") }
         /^\([0-9]+\/[0-9]+\) (Installing|Upgrading|Downgrading|Reinstalling) / {
-            sub(/ \(.*$/, "", $3)
             print "        " $1 " Instalando " $3; next
         }
         /^\([0-9]+\/[0-9]+\) Purging / {
@@ -467,20 +473,31 @@ avance_traducir() {
         }
         /^(Installing|Instalando) [0-9]+\/[0-9]+/ {
             sub(/[^0-9\/].*$/, "", $2)
-            if ($2 != antes) { antes = $2; print "        (" $2 ") Descargando de Flathub" }
+            print "        (" $2 ") Descargando de Flathub"
         }
     '
+}
+
+# Deja en $_av_nuevas las lineas traducidas que el programa escribio en el
+# archivo $1 desde la ultima lectura. Flatpak redibuja su barra con
+# retornos de carro: se cuentan como saltos de linea, y una linea igual a
+# la anterior no se repite (la barra de un mismo paquete se redibuja
+# muchas veces).
+avance_leer() {
+    _av_nuevas=""
+    _av_lineas="$(tr '\r' '\n' <"$1" 2>/dev/null | wc -l)"
+    [ "$_av_lineas" -gt "$_av_leidas" ] || return 0
+    _av_nuevas="$(tr '\r' '\n' <"$1" | sed -n "$((_av_leidas + 1)),${_av_lineas}p" \
+        | avance_traducir | awk -v u="$_av_ultima" '$0 != u { print; u = $0 }')"
+    _av_leidas="$_av_lineas"
+    [ -z "$_av_nuevas" ] || _av_ultima="$(printf '%s\n' "$_av_nuevas" | tail -n 1)"
+    return 0
 }
 
 # $1 = archivo con la salida del programa que esta corriendo.
 avance_revisar() {
     _av_total=$((_av_total + 5))
-    _av_lineas="$(wc -l <"$1" 2>/dev/null || echo 0)"
-    _av_nuevas=""
-    if [ "$_av_lineas" -gt "$_av_leidas" ]; then
-        _av_nuevas="$(sed -n "$((_av_leidas + 1)),${_av_lineas}p" "$1" | avance_traducir)"
-        _av_leidas="$_av_lineas"
-    fi
+    avance_leer "$1"
     if [ -n "$_av_nuevas" ]; then
         printf '%s\n' "$_av_nuevas" >&3
         _av_silencio=0
@@ -499,18 +516,29 @@ avance_revisar() {
 
 # Muestra las ultimas lineas que el programa escribio antes de terminar.
 avance_terminar() {
-    _av_lineas="$(wc -l <"$1" 2>/dev/null || echo 0)"
-    if [ "$_av_lineas" -gt "$_av_leidas" ]; then
-        _av_nuevas="$(sed -n "$((_av_leidas + 1)),${_av_lineas}p" "$1" | avance_traducir)"
-        [ -z "$_av_nuevas" ] || printf '%s\n' "$_av_nuevas" >&3
-    fi
+    avance_leer "$1"
+    [ -z "$_av_nuevas" ] || printf '%s\n' "$_av_nuevas" >&3
     return 0
+}
+
+# Termina un proceso y todos sus descendientes (primero los hijos, para
+# que no queden huerfanos trabajando: setup-desktop lanza apk, por
+# ejemplo). Los numeros de los hijos se leen de /proc.
+# shellcheck disable=SC2013 # son numeros de proceso, uno por palabra
+terminar_arbol() {
+    for _ta_hijo in $(grep -ls "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3); do
+        terminar_arbol "$_ta_hijo"
+    done
+    kill "$1" 2>/dev/null || true
 }
 
 # con_avance: ejecuta una orden mostrando su avance en pantalla y deja su
 # salida completa en la salida normal (quien llama la manda al registro).
-# Devuelve el codigo de salida de la orden.
+# Devuelve el codigo de salida de la orden. Si el script se interrumpe
+# antes, limpiar (arriba) corta la orden y guarda en el registro lo que
+# alcanzo a escribir.
 _av_pid=""
+_av_salida=""
 con_avance() {
     _av_salida="$(mktemp)"
     "$@" >"$_av_salida" 2>&1 </dev/null &
@@ -527,6 +555,7 @@ con_avance() {
     avance_terminar "$_av_salida"
     cat "$_av_salida"
     rm -f "$_av_salida"
+    _av_salida=""
     return "$_av_rc"
 }
 
