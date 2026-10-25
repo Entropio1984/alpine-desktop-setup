@@ -1517,6 +1517,7 @@ setup_sway_barra() {
 
     sway_conf_sesion
     sway_instalar_atajos
+    sway_instalar_apagado
     sway_config_waybar
     log_ok "Sway: barra waybar con menu, wifi y volumen lista."
 }
@@ -1688,6 +1689,31 @@ ATAJOS
     chmod 755 /usr/local/bin/sway-atajos
 }
 
+# Boton de apagado de la barra: menu para cerrar sesion, suspender,
+# reiniciar o apagar. elogind deja hacerlo sin contrasena a quien tiene
+# la sesion activa (como el boton de apagado de los otros escritorios).
+sway_instalar_apagado() {
+    mkdir -p /usr/local/bin
+    cat > /usr/local/bin/sway-apagar <<'APAGAR'
+#!/bin/sh
+# Menu de la barra de Sway: cerrar sesion, suspender, reiniciar o apagar.
+idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+case "$idioma" in
+    es*) salir="Cerrar sesión"; susp="Suspender"; rein="Reiniciar"; apag="Apagar"; prompt="¿Qué hacer? " ;;
+    *) salir="Log out"; susp="Suspend"; rein="Restart"; apag="Shut down"; prompt="Action: " ;;
+esac
+eleccion="$(printf '%s\n' "$apag" "$rein" "$susp" "$salir" \
+    | fuzzel --dmenu --lines 4 --width 24 --prompt "$prompt")" || exit 0
+case "$eleccion" in
+    "$apag") exec loginctl poweroff ;;
+    "$rein") exec loginctl reboot ;;
+    "$susp") exec loginctl suspend ;;
+    "$salir") exec swaymsg exit ;;
+esac
+APAGAR
+    chmod 755 /usr/local/bin/sway-apagar
+}
+
 # Configuracion de waybar para el usuario y para los usuarios nuevos.
 # Solo iconos y reloj con el idioma del sistema: sirve en cualquier idioma.
 sway_config_waybar() {
@@ -1709,7 +1735,7 @@ sway_config_waybar() {
     "height": 30,
     "modules-left": ["custom/menu", "custom/atajos", "sway/workspaces", "sway/mode"],
     "modules-center": ["clock"],
-    "modules-right": ["custom/actualizaciones", "tray", "pulseaudio", "network", "backlight", "battery"],
+    "modules-right": ["custom/actualizaciones", "tray", "pulseaudio", "network", "backlight", "battery", "custom/apagado"],
     "custom/menu": {
         "format": "    ",
         "tooltip": false,
@@ -1719,6 +1745,11 @@ sway_config_waybar() {
         "format": " \uf11c ",
         "tooltip": false,
         "on-click": "sway-atajos"
+    },
+    "custom/apagado": {
+        "format": " \uf011 ",
+        "tooltip": false,
+        "on-click": "sway-apagar"
     },
     "custom/actualizaciones": {
         "exec": "n=$(cat /var/lib/alpine-update/pendientes 2>/dev/null); [ \"${n:-0}\" -gt 0 ] 2>/dev/null && echo \"$n\" || true",
