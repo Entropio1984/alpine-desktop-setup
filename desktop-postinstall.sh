@@ -1694,7 +1694,9 @@ ATAJOS
 # la sesion activa (como el boton de apagado de los otros escritorios).
 sway_instalar_apagado() {
     mkdir -p /usr/local/bin
-    cat > /usr/local/bin/sway-apagar <<'APAGAR'
+    # Se escribe aparte y se cambia de una vez: waybar nunca ve el archivo
+    # a medio escribir si el script se repite con la sesion abierta.
+    cat > /usr/local/bin/sway-apagar.nuevo <<'APAGAR'
 #!/bin/sh
 # Menu de la barra de Sway: cerrar sesion, suspender, reiniciar o apagar.
 idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
@@ -1702,6 +1704,13 @@ case "$idioma" in
     es*) salir="Cerrar sesión"; susp="Suspender"; rein="Reiniciar"; apag="Apagar"; prompt="¿Qué hacer? " ;;
     *) salir="Log out"; susp="Suspend"; rein="Restart"; apag="Shut down"; prompt="Action: " ;;
 esac
+# Sin fuzzel (por ejemplo, si no se pudo descargar) se usa swaynag, que
+# viene con Sway.
+if ! command -v fuzzel >/dev/null 2>&1; then
+    exec swaynag -t warning -m "$prompt" \
+        -B "$apag" "loginctl poweroff" -B "$rein" "loginctl reboot" \
+        -B "$susp" "loginctl suspend" -B "$salir" "swaymsg exit"
+fi
 eleccion="$(printf '%s\n' "$apag" "$rein" "$susp" "$salir" \
     | fuzzel --dmenu --lines 4 --width 24 --prompt "$prompt")" || exit 0
 case "$eleccion" in
@@ -1711,7 +1720,8 @@ case "$eleccion" in
     "$salir") exec swaymsg exit ;;
 esac
 APAGAR
-    chmod 755 /usr/local/bin/sway-apagar
+    chmod 755 /usr/local/bin/sway-apagar.nuevo
+    mv -f /usr/local/bin/sway-apagar.nuevo /usr/local/bin/sway-apagar
 }
 
 # Configuracion de waybar para el usuario y para los usuarios nuevos.
