@@ -264,6 +264,8 @@ Luego instala los indicadores de red y volumen de cada escritorio:
 | LXQt | `network-manager-applet` | `pavucontrol-qt` (el control de la bandeja ya viene en `lxqt-panel`) |
 | Sway | `network-manager-applet` (en la bandeja de `waybar`) | control de volumen de `waybar`; al hacer clic abre `pavucontrol` |
 
+En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para cada usuario sale de `/etc/xdg/xfce4/panel/default.xml`, que no lo incluye. El script lo agrega ahí, junto al área de notificación y con las teclas de volumen activadas. Solo afecta a los usuarios que todavía no entraron a XFCE; quien ya tiene su panel lo agrega con clic derecho en el panel > Panel > Agregar elementos > Plugin de audio PulseAudio.
+
 **Sway** trae de fábrica una barra que solo muestra la fecha: sin WiFi, sin volumen y sin menú de aplicaciones. El script la cambia por **`waybar`** (con iconos de `font-awesome`), que tiene:
 
 - un botón de **menú de aplicaciones** (`fuzzel`), que también se abre con **Super+D**;
@@ -423,6 +425,7 @@ Ejecuta los bloques en orden. Termina con código 0 si todo salió bien y con c�
 | `/etc/X11/xorg.conf.d/00-keyboard.conf` | 9 | Teclado `latam` en Xorg |
 | `/etc/xdg/plasma-workspace/env/teclado-latam.sh`, `/etc/profile.d/teclado-latam.sh` | 9 | `XKB_DEFAULT_LAYOUT=latam` para Wayland |
 | `/etc/xdg/kxkbrc` | 9 | Teclado `latam` por defecto en Plasma |
+| `/etc/xdg/xfce4/panel/default.xml` | 11 | Icono de volumen en el panel de XFCE (usuarios nuevos) |
 | `/usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override` | 9 | Teclado `latam` por defecto en GNOME |
 | `/etc/sway/config.d/50-lazaro-barra.conf` | 11 | Sway: barra `waybar`, audio, WiFi, agente de contraseña y atajos Super+D y Super+F1 |
 | `/usr/local/bin/sway-atajos` | 11 | Sway: lista de atajos de teclado |
@@ -550,6 +553,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 
 Cambios importantes respecto a versiones anteriores del script, para quien venga de una de ellas:
 
+- **Volumen en XFCE:** el plugin de volumen se instalaba pero no aparecía en el panel; ahora se agrega al panel de los usuarios nuevos.
 - **Avance visible:** durante las instalaciones la pantalla muestra cada paquete y avisa "sigue trabajando" cuando algo tarda, en vez de quedarse quieta hasta el OK final.
 - **Opciones y cortes de internet:** el script acepta opciones (`--full`, `--minimo`, `--con`, `--destino`...) para usarse sin menú; Fastfetch, Btop y VLC pasaron a ser opciones del script (antes los instalaba aparte el instalador de Lázaro Linux, y VLC quedaba sin ventana porque faltaba `vlc-qt`); `apk` y Flatpak reintentan cuando una descarga falla por la red; y los bloques del archivo quedaron en el orden en que se ejecutan (la numeración cambió).
 - **Revisión general:** el firmware de Bluetooth y de WiFi ya no se instala si no hay adaptador; greetd se reconoce como pantalla de inicio; la salida de `apk` va al registro en vez de a la pantalla; y `apk_vigilado` corta y reintenta (hasta 3 veces) las descargas que pasan 2 minutos sin avanzar, que antes podían dejar el script detenido indefinidamente (ver Bloque 4).
