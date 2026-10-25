@@ -1368,6 +1368,67 @@ choose_audio_server() {
     log_info "Servidor de audio: $AUDIO_SERVER"
 }
 
+# El plugin de volumen de XFCE no aparece solo: el panel que XFCE crea
+# la primera vez para cada usuario sale de /etc/xdg/xfce4/panel/default.xml,
+# y ese archivo no lo incluye. Aqui se agrega al panel de arriba, a la
+# derecha del area de notificacion (o antes del reloj), con las teclas de
+# volumen del teclado activadas. Solo afecta a los paneles nuevos: un
+# usuario que ya entro a XFCE conserva el suyo (se agrega a mano con clic
+# derecho en el panel > Panel > Agregar elementos > Plugin de audio).
+XFCE_PANEL_XML="/etc/xdg/xfce4/panel/default.xml"
+xfce_panel_volumen() {
+    if [ ! -f "$XFCE_PANEL_XML" ]; then
+        log_warn "No esta $XFCE_PANEL_XML: el icono de volumen se agrega a mano en el panel."
+        return 0
+    fi
+    if grep -q 'value="pulseaudio"' "$XFCE_PANEL_XML"; then
+        log_info "El panel de XFCE ya trae el icono de volumen."
+        return 0
+    fi
+    _xp_tmp="$(mktemp)"
+    # Numero nuevo = el mayor de los plugins + 1. Se coloca despues del
+    # area de notificacion (systray) o, si no la hay, antes del reloj.
+    if awk '
+        FNR == NR {
+            if (match($0, /name="plugin-[0-9]+"/)) {
+                n = substr($0, RSTART + 13, RLENGTH - 14) + 0
+                if (n > max) max = n
+                if ($0 ~ /value="systray"/) bandeja = n
+                if ($0 ~ /value="clock"/) reloj = n
+            }
+            next
+        }
+        FNR == 1 {
+            nuevo = max + 1
+            if (!bandeja && !reloj) exit 1
+        }
+        /<value type="int" value="[0-9]+"\/>/ && !puesto {
+            match($0, /value="[0-9]+"/)
+            id = substr($0, RSTART + 7, RLENGTH - 8) + 0
+            sangria = $0; sub(/<.*/, "", sangria)
+            linea = sangria "<value type=\"int\" value=\"" nuevo "\"/>"
+            if (!bandeja && id == reloj) { print linea; print; puesto = 1; next }
+            if (bandeja && id == bandeja) { print; print linea; puesto = 1; next }
+        }
+        /<property name="plugins" type="empty">/ {
+            print
+            sangria = $0; sub(/<.*/, "", sangria)
+            print sangria "  <property name=\"plugin-" nuevo "\" type=\"string\" value=\"pulseaudio\">"
+            print sangria "    <property name=\"enable-keyboard-shortcuts\" type=\"bool\" value=\"true\"/>"
+            print sangria "  </property>"
+            next
+        }
+        { print }
+        END { if (FNR != NR && !puesto) exit 1 }
+    ' "$XFCE_PANEL_XML" "$XFCE_PANEL_XML" >"$_xp_tmp" && grep -q 'value="pulseaudio"' "$_xp_tmp"; then
+        cat "$_xp_tmp" >"$XFCE_PANEL_XML"
+        log_ok "Icono de volumen agregado al panel de XFCE (para los usuarios que entren por primera vez)."
+    else
+        log_warn "No se pudo agregar el icono de volumen al panel de XFCE; se agrega a mano en el panel."
+    fi
+    rm -f "$_xp_tmp"
+}
+
 setup_applets() {
     log_info "== Configurando servicios base de red y audio =="
 
@@ -1392,6 +1453,7 @@ setup_applets() {
 
     if [ "$DE_XFCE" = "yes" ]; then
         install_pkgs network-manager-applet xfce4-pulseaudio-plugin
+        xfce_panel_volumen
     fi
 
     if [ "$DE_PLASMA" = "yes" ]; then
