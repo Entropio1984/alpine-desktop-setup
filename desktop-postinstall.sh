@@ -820,12 +820,14 @@ GPU_HAS_VIRTUAL="no"
 GPU_COUNT=0
 NVIDIA_COUNT=0
 NVIDIA_SLOT=""      # ranura PCI de la NVIDIA, p. ej. 0000:01:00.0
+NVIDIA_SLOTS=""     # todas las NVIDIA, si hay mas de una
 PRIMARY_SLOT=""     # GPU que el firmware uso al arrancar (boot_vga)
 PRIMARY_VENDOR=""
 IS_LAPTOP="no"
 OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
 NVIDIA_CHIP=""      # nombre del chip, p. ej. GF108 (vacio si no se supo)
 NVIDIA_GEN="desconocida" # tesla, fermi, kepler, maxwell, pascal, volta, moderna (Turing en adelante)
+NVIDIA_HAY_MODERNA="no"  # alguna NVIDIA es Turing o posterior (instalar NVK)
 
 detect_hardware() {
     log_info "== Detectando hardware gráfico =="
@@ -858,7 +860,7 @@ detect_hardware() {
         case "$vendor" in
             0x8086) GPU_HAS_INTEL="yes" ;;
             0x1002) GPU_HAS_AMD="yes" ;;
-            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot" ;;
+            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot"; NVIDIA_SLOTS="$NVIDIA_SLOTS $slot" ;;
             0x1af4|0x15ad|0x80ee|0x1b36|0x1234) GPU_HAS_VIRTUAL="yes" ;;
         esac
         if [ "$boot_vga" = "1" ]; then
@@ -935,22 +937,46 @@ nvidia_generacion_de_chip() {
     esac
 }
 
-nvidia_detectar_generacion() {
-    _chip=""
-    if [ -n "$NVIDIA_SLOT" ] && command -v lspci >/dev/null 2>&1; then
+# Chip de la NVIDIA en la ranura $1, o vacio si no se supo.
+nvidia_chip_de() {
+    _c=""
+    if command -v lspci >/dev/null 2>&1; then
         # -mm: campos entre comillas; el 3.o es el nombre del dispositivo.
-        _chip="$(lspci -mm -s "$NVIDIA_SLOT" 2>/dev/null \
-            | awk -F'"' 'NR == 1 { split($6, p, " "); print p[1] }')" || _chip=""
+        _c="$(lspci -mm -s "$1" 2>/dev/null \
+            | awk -F'"' 'NR == 1 { split($6, p, " "); print p[1] }')" || _c=""
     fi
-    case "$(nvidia_generacion_de_chip "$_chip")" in
-        desconocida)
-            _chip="$(dmesg 2>/dev/null \
-                | sed -n 's/.*nouveau .*: NVIDIA \([A-Z][A-Z0-9]*\) (.*/\1/p' | head -n 1)" || _chip=""
-            ;;
+    if [ "$(nvidia_generacion_de_chip "$_c")" = desconocida ]; then
+        # Solo la linea de nouveau de ESA ranura (puede haber varias NVIDIA).
+        _c="$(dmesg 2>/dev/null \
+            | sed -n "s/.*nouveau $1: NVIDIA \\([A-Z][A-Z0-9]*\\) (.*/\\1/p" | head -n 1)" || _c=""
+    fi
+    echo "$_c"
+}
+
+# Con varias NVIDIA manda la mas antigua (NVIDIA_GEN decide el modo
+# seguro) y NVK se instala si alguna es moderna.
+nvidia_detectar_generacion() {
+    NVIDIA_GEN=""
+    NVIDIA_CHIP=""
+    for _slot in $NVIDIA_SLOTS; do
+        _chip="$(nvidia_chip_de "$_slot")"
+        _gen="$(nvidia_generacion_de_chip "$_chip")"
+        log_info "NVIDIA en $_slot: chip ${_chip:-no identificado}, generacion $_gen."
+        [ "$_gen" != moderna ] || NVIDIA_HAY_MODERNA="yes"
+        if [ -z "$NVIDIA_GEN" ] || [ "$(nvidia_orden "$_gen")" -lt "$(nvidia_orden "$NVIDIA_GEN")" ]; then
+            NVIDIA_GEN="$_gen"
+            NVIDIA_CHIP="$_chip"
+        fi
+    done
+    : "${NVIDIA_GEN:=desconocida}"
+}
+
+# Orden de antiguedad; la desconocida cuenta como la mas antigua.
+nvidia_orden() {
+    case "$1" in
+        tesla) echo 1 ;; fermi) echo 2 ;; kepler) echo 3 ;; maxwell) echo 4 ;;
+        pascal) echo 5 ;; volta) echo 6 ;; moderna) echo 7 ;; *) echo 0 ;;
     esac
-    NVIDIA_CHIP="$_chip"
-    NVIDIA_GEN="$(nvidia_generacion_de_chip "$_chip")"
-    log_info "NVIDIA: chip ${NVIDIA_CHIP:-no identificado}, generacion $NVIDIA_GEN."
 }
 
 # Generacion en la que nouveau maneja bien el escritorio (Kepler o mas
@@ -2094,8 +2120,8 @@ install_drivers() {
         # Turing en adelante: Vulkan libre (NVK). Con el, Mesa da tambien
         # OpenGL por encima de Vulkan (Zink), el camino recomendado para
         # estas tarjetas desde Mesa 25.1.
-        if [ "$NVIDIA_GEN" = "moderna" ]; then
-            log_info "NVIDIA moderna ($NVIDIA_CHIP): instalando Vulkan libre (NVK)."
+        if [ "$NVIDIA_HAY_MODERNA" = "yes" ]; then
+            log_info "NVIDIA moderna (Turing o posterior): instalando Vulkan libre (NVK)."
             install_pkgs mesa-vulkan-nouveau vulkan-loader
         fi
 
