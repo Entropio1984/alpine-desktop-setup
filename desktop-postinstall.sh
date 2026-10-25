@@ -1421,7 +1421,10 @@ xfce_panel_volumen() {
         { print }
         END { if (FNR != NR && !puesto) exit 1 }
     ' "$XFCE_PANEL_XML" "$XFCE_PANEL_XML" >"$_xp_tmp" && grep -q 'value="pulseaudio"' "$_xp_tmp"; then
-        cat "$_xp_tmp" >"$XFCE_PANEL_XML"
+        # Se escribe al lado y se cambia de golpe (mv): si algo falla a
+        # mitad, el archivo original queda intacto.
+        cp "$_xp_tmp" "$XFCE_PANEL_XML.nuevo" && chmod 644 "$XFCE_PANEL_XML.nuevo" \
+            && mv -f "$XFCE_PANEL_XML.nuevo" "$XFCE_PANEL_XML"
         log_ok "Icono de volumen agregado al panel de XFCE (para los usuarios que entren por primera vez)."
     else
         log_warn "No se pudo agregar el icono de volumen al panel de XFCE; se agrega a mano en el panel."
@@ -1453,7 +1456,10 @@ setup_applets() {
 
     if [ "$DE_XFCE" = "yes" ]; then
         install_pkgs network-manager-applet xfce4-pulseaudio-plugin
-        xfce_panel_volumen
+        # Sin el plugin instalado, el panel mostraria un elemento roto.
+        if apk info -e xfce4-pulseaudio-plugin >/dev/null 2>&1; then
+            xfce_panel_volumen
+        fi
     fi
 
     if [ "$DE_PLASMA" = "yes" ]; then
