@@ -80,7 +80,7 @@ Sin opciones aparece el menú. Con cualquiera de estas opciones (salvo `--usuari
 | `--menu` | Muestra el menú igual, con lo anterior ya marcado |
 | `--idioma IDIOMA` | Idioma del sistema, por ejemplo `es_CO.UTF-8` (por defecto `es_ES.UTF-8`) |
 | `--teclado latam` o `--teclado no` | Teclado latinoamericano, o no tocar el teclado |
-| `--nvidia seguro`, `optimus` o `activa` | Qué hacer con una NVIDIA (ver [Bloque 16](#bloque-16--install_drivers)); `optimus` solo en portátiles con dos gráficas |
+| `--nvidia seguro`, `optimus` o `activa` | Qué hacer con una NVIDIA (ver [Bloque 16](#bloque-16--install_drivers)). `optimus` es el modo automático: en portátiles con dos gráficas apaga la NVIDIA; en los demás equipos la deja activa si es Kepler (2012) o más nueva y usa el modo seguro si es más antigua o no se identificó |
 | `--usuario NOMBRE` | El usuario del escritorio, si no se puede adivinar |
 | `--escritorio NOMBRE` | Instala antes ese escritorio con `setup-desktop`: `xfce`, `xfce-wayland`, `mate`, `lxqt`, `gnome`, `plasma` o `sway` |
 | `--destino CARPETA` | Configura el sistema instalado en esa carpeta, sin reiniciar |
@@ -105,7 +105,7 @@ Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se
 | Opción | Marcada por defecto | Qué hace |
 |---|---|---|
 | Teclado latinoamericano | Sí | Distribución `latam` en la consola, en Xorg y en sesiones Wayland |
-| NVIDIA en modo seguro | Sí | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau` |
+| NVIDIA en modo seguro | Según la tarjeta | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau`. Viene marcada en tarjetas Tesla o Fermi (o no identificadas) y desmarcada en Kepler o más nuevas |
 | gcompat | No | Permite ejecutar programas propietarios compilados para otras distribuciones (glibc) |
 | Impresoras (CUPS) | Sí | Instala el sistema de impresión |
 | Fastfetch | No | Resumen del equipo en la terminal |
@@ -123,7 +123,7 @@ Sin escritorio, el menú no muestra los programas gráficos.
 
 **Portátiles Optimus** (gráfica integrada más una NVIDIA): en lugar de la casilla de NVIDIA aparece una segunda pantalla con tres modos: *ahorro* (recomendado y marcado por defecto), *seguro* o *activa*. Ver [Bloque 16](#bloque-16--install_drivers).
 
-**Por qué esos valores por defecto:** en el hardware viejo al que apunta el proyecto, dejar `nouveau` activo puede terminar en pantalla negra, así que el modo seguro viene marcado. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
+**Por qué esos valores por defecto:** en las NVIDIA más antiguas (Tesla y Fermi), dejar `nouveau` activo puede terminar en pantalla negra, así que ahí el modo seguro viene marcado; desde Kepler `nouveau` maneja bien el escritorio y bloquearlo dejaría el equipo sin aceleración. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
 
 **Si el menú no se puede mostrar** (por ejemplo, sin una terminal interactiva), el script hace cada pregunta por separado cuando la necesita. Solo las respuestas que empiezan por `s` o `y` cuentan como "sí"; Enter vacío es "no".
 
@@ -215,7 +215,8 @@ Clasifica todas las tarjetas gráficas leyendo `/sys` (fabricante y tipo en núm
 
 - cuál es la **gráfica principal**, la que usó el equipo al encender;
 - si el equipo es **portátil**, por el tipo de chasis o por la presencia de batería;
-- si es un **portátil Optimus**: portátil, una sola NVIDIA, y la principal es Intel o AMD.
+- si es un **portátil Optimus**: portátil, una sola NVIDIA, y la principal es Intel o AMD;
+- la **generación de cada NVIDIA**, por el nombre de su chip (base de datos de `lspci`, o el registro de `nouveau` si no aparece): Tesla, Fermi, Kepler, Maxwell, Pascal, Volta o moderna (Turing, 2018, en adelante). Con varias NVIDIA manda la más antigua.
 
 También avisa si hay un adaptador de video USB DisplayLink, que Alpine no soporta.
 
@@ -286,13 +287,13 @@ Instala los controladores de cada gráfica detectada:
 - **Intel:** firmware, Vulkan y decodificación de video por hardware (`libva-intel-driver` para gráficas antiguas, `intel-media-driver` para las de 2014 en adelante).
 - **AMD:** firmware, Vulkan (`mesa-vulkan-ati`) y decodificación de video (`mesa-va-gallium`).
 - **Máquinas virtuales:** controladores de video y `spice-vdagent`.
-- **NVIDIA:** firmware y uno de tres modos.
+- **NVIDIA:** firmware y uno de tres modos. En tarjetas Turing o más nuevas también Vulkan libre (`mesa-vulkan-nouveau`, NVK), con el que Mesa da OpenGL por encima de Vulkan (Zink).
 
 | Modo | Cuándo se ofrece | Qué hace |
 |---|---|---|
 | **Ahorro** | Solo en portátiles Optimus (predeterminado) | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
 | **Seguro** | Siempre | Bloquea `nouveau`. La NVIDIA queda sin driver, pero **sigue encendida** |
-| **Activa** | Siempre | `nouveau` con aceleración 3D. Riesgo de pantalla negra en tarjetas antiguas |
+| **Activa** | Siempre (predeterminado si no es Optimus y la NVIDIA es Kepler o más nueva) | `nouveau` con aceleración 3D. Riesgo de pantalla negra en tarjetas Tesla o Fermi |
 
 Cada modo borra los archivos de los otros, así que volver a ejecutar el script y elegir otro modo cambia la configuración por completo.
 

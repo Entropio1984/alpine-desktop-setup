@@ -158,8 +158,10 @@ de abajo (salvo --usuario, --escritorio y --destino) no pregunta nada.
   --idioma IDIOMA      Idioma del sistema, p. ej. es_CO.UTF-8 (por defecto
                        es_ES.UTF-8).
   --teclado latam|no   Teclado latinoamericano, o no tocar el teclado.
-  --nvidia MODO        Graficas NVIDIA: seguro (bloquearla), optimus
-                       (portatiles con dos graficas: apagarla) o activa.
+  --nvidia MODO        Graficas NVIDIA: seguro (bloquearla), activa, u
+                       optimus (automatico: en portatiles con dos graficas
+                       la apaga; en los demas la deja activa si es de 2012
+                       en adelante, Kepler, y si no la bloquea).
   --usuario NOMBRE     Usuario del escritorio (si no se puede adivinar).
   --escritorio NOMBRE  Instala antes ese escritorio con setup-desktop:
                        xfce, xfce-wayland, mate, lxqt, gnome, plasma o sway.
@@ -818,10 +820,14 @@ GPU_HAS_VIRTUAL="no"
 GPU_COUNT=0
 NVIDIA_COUNT=0
 NVIDIA_SLOT=""      # ranura PCI de la NVIDIA, p. ej. 0000:01:00.0
+NVIDIA_SLOTS=""     # todas las NVIDIA, si hay mas de una
 PRIMARY_SLOT=""     # GPU que el firmware uso al arrancar (boot_vga)
 PRIMARY_VENDOR=""
 IS_LAPTOP="no"
 OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
+NVIDIA_CHIP=""      # nombre del chip, p. ej. GF108 (vacio si no se supo)
+NVIDIA_GEN="desconocida" # tesla, fermi, kepler, maxwell, pascal, volta, moderna (Turing en adelante)
+NVIDIA_HAY_MODERNA="no"  # alguna NVIDIA es Turing o posterior (instalar NVK)
 
 detect_hardware() {
     log_info "== Detectando hardware gráfico =="
@@ -854,7 +860,7 @@ detect_hardware() {
         case "$vendor" in
             0x8086) GPU_HAS_INTEL="yes" ;;
             0x1002) GPU_HAS_AMD="yes" ;;
-            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot" ;;
+            0x10de) GPU_HAS_NVIDIA="yes"; NVIDIA_COUNT=$((NVIDIA_COUNT + 1)); NVIDIA_SLOT="$slot"; NVIDIA_SLOTS="$NVIDIA_SLOTS $slot" ;;
             0x1af4|0x15ad|0x80ee|0x1b36|0x1234) GPU_HAS_VIRTUAL="yes" ;;
         esac
         if [ "$boot_vga" = "1" ]; then
@@ -890,6 +896,8 @@ detect_hardware() {
         esac
     fi
 
+    [ "$GPU_HAS_NVIDIA" = "no" ] || nvidia_detectar_generacion
+
     log_ok "Resumen GPU -> Intel:$GPU_HAS_INTEL AMD:$GPU_HAS_AMD NVIDIA:$GPU_HAS_NVIDIA Virtual:$GPU_HAS_VIRTUAL (adaptadores: $GPU_COUNT; portatil: $IS_LAPTOP; Optimus: $OPTIMUS_LAPTOP)"
 
     # Adaptadores de video por USB (docks para multiples monitores) no
@@ -902,6 +910,83 @@ detect_hardware() {
         log_warn "Adaptador de video USB DisplayLink detectado."
         log_info "DisplayLink requiere el modulo de kernel 'evdi', que NO esta empaquetado en Alpine (solo existe vía DKMS en otras distros). No se instala nada automaticamente; sera necesario compilarlo manualmente si se necesita soporte multi-monitor por USB."
     fi
+}
+
+# Generacion de la NVIDIA, a partir del nombre de su chip. Decide cuanto
+# se puede confiar en nouveau:
+#   - tesla, fermi: lo mas antiguo; en algunos equipos nouveau da pantalla
+#     negra o cuelgues, y NVIDIA ya no tiene driver que funcione con los
+#     kernels actuales.
+#   - kepler, maxwell, pascal, volta: nouveau maneja bien el escritorio,
+#     aunque el 3D va lento (no puede subir la velocidad de la tarjeta).
+#   - moderna (Turing, 2018, en adelante): nouveau usa el firmware GSP de
+#     NVIDIA y rinde bien; Vulkan con NVK y OpenGL por encima (Zink).
+# El nombre sale de la base de datos de lspci ("GF108M [GeForce GT
+# 540M]": el chip es la primera palabra) y, si no esta, del registro del
+# kernel, donde nouveau escribe "NVIDIA GF108 (0c1f00a1)" al cargarse.
+nvidia_generacion_de_chip() {
+    case "$1" in
+        TU*|GA*|GH*|AD*|GB*) echo moderna ;;
+        GV*) echo volta ;;
+        GP*) echo pascal ;;
+        GM*) echo maxwell ;;
+        GK*) echo kepler ;;
+        GF*) echo fermi ;;
+        NV*|G[0-9]*|GT2*|MCP*|C[0-9]*) echo tesla ;;
+        *) echo desconocida ;;
+    esac
+}
+
+# Chip de la NVIDIA en la ranura $1, o vacio si no se supo.
+nvidia_chip_de() {
+    _c=""
+    if command -v lspci >/dev/null 2>&1; then
+        # -mm: campos entre comillas; el 3.o es el nombre del dispositivo.
+        _c="$(lspci -mm -s "$1" 2>/dev/null \
+            | awk -F'"' 'NR == 1 { split($6, p, " "); print p[1] }')" || _c=""
+    fi
+    if [ "$(nvidia_generacion_de_chip "$_c")" = desconocida ]; then
+        # Solo la linea de nouveau de ESA ranura (puede haber varias NVIDIA).
+        _c="$(dmesg 2>/dev/null \
+            | sed -n "s/.*nouveau $1: NVIDIA \\([A-Z][A-Z0-9]*\\) (.*/\\1/p" | head -n 1)" || _c=""
+    fi
+    echo "$_c"
+}
+
+# Con varias NVIDIA manda la mas antigua (NVIDIA_GEN decide el modo
+# seguro) y NVK se instala si alguna es moderna.
+nvidia_detectar_generacion() {
+    NVIDIA_GEN=""
+    NVIDIA_CHIP=""
+    for _slot in $NVIDIA_SLOTS; do
+        _chip="$(nvidia_chip_de "$_slot")"
+        _gen="$(nvidia_generacion_de_chip "$_chip")"
+        log_info "NVIDIA en $_slot: chip ${_chip:-no identificado}, generacion $_gen."
+        [ "$_gen" != moderna ] || NVIDIA_HAY_MODERNA="yes"
+        if [ -z "$NVIDIA_GEN" ] || [ "$(nvidia_orden "$_gen")" -lt "$(nvidia_orden "$NVIDIA_GEN")" ]; then
+            NVIDIA_GEN="$_gen"
+            NVIDIA_CHIP="$_chip"
+        fi
+    done
+    : "${NVIDIA_GEN:=desconocida}"
+}
+
+# Orden de antiguedad; la desconocida cuenta como la mas antigua.
+nvidia_orden() {
+    case "$1" in
+        tesla) echo 1 ;; fermi) echo 2 ;; kepler) echo 3 ;; maxwell) echo 4 ;;
+        pascal) echo 5 ;; volta) echo 6 ;; moderna) echo 7 ;; *) echo 0 ;;
+    esac
+}
+
+# Generacion en la que nouveau maneja bien el escritorio (Kepler o mas
+# nueva). Con tesla, fermi o desconocida se prefiere el modo seguro
+# cuando la NVIDIA es la unica grafica.
+nvidia_confiable() {
+    case "$NVIDIA_GEN" in
+        kepler|maxwell|pascal|volta|moderna) return 0 ;;
+    esac
+    return 1
 }
 
 # ------------------------------------------------------------------------------
@@ -1019,7 +1104,14 @@ select_options_menu() {
 #    uso diario: el reproductor de siempre es mpv, ver install_daily_apps).
 menu_defaults() {
     : "${OPT_KEYBOARD:=yes}"
-    : "${OPT_NVIDIA_SAFE:=yes}"
+    # Modo seguro por defecto solo si la NVIDIA es antigua o no se supo
+    # cual es: en Kepler o mas nueva, bloquearla dejaria el equipo sin
+    # aceleracion cuando es la unica grafica.
+    if nvidia_confiable; then
+        : "${OPT_NVIDIA_SAFE:=no}"
+    else
+        : "${OPT_NVIDIA_SAFE:=yes}"
+    fi
     # Portatiles Optimus: en vez de la casilla de modo seguro se muestra
     # una segunda pantalla con tres modos; por defecto, el de ahorro
     # (probado en el K53SV, ver nvidia_apply_optimus).
@@ -1052,7 +1144,10 @@ opciones_base() {
     menu_defaults
 }
 
-# --nvidia: seguro, optimus (solo portatiles con dos graficas) o activa.
+# --nvidia: seguro, optimus o activa. "optimus" (lo que pasa el instalador
+# de Lazaro) es el modo automatico: apaga la NVIDIA en los portatiles con
+# dos graficas y, en los demas equipos, la deja activa si es Kepler o mas
+# nueva y la bloquea (modo seguro) si es mas antigua o desconocida.
 aplicar_nvidia() {
     case "$ARG_NVIDIA" in
         seguro)
@@ -1064,7 +1159,12 @@ aplicar_nvidia() {
             if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
                 OPT_NVIDIA_MODE="optimus"
             elif [ "$GPU_HAS_NVIDIA" = "yes" ]; then
-                log_warn "--nvidia optimus es para portatiles con dos graficas; aqui se usa el modo seguro."
+                if nvidia_confiable; then
+                    OPT_NVIDIA_SAFE="no"
+                    log_info "--nvidia optimus: no es un portatil con dos graficas y la NVIDIA ($NVIDIA_GEN) funciona bien con nouveau: queda activa."
+                else
+                    log_warn "--nvidia optimus: no es un portatil con dos graficas y la NVIDIA es antigua o desconocida ($NVIDIA_GEN): se usa el modo seguro."
+                fi
             fi
             ;;
         activa)
@@ -2017,6 +2117,13 @@ install_drivers() {
     if [ "$GPU_HAS_NVIDIA" = "yes" ]; then
         log_info "Instalando soporte NVIDIA (driver abierto Nouveau, vía Gallium)..."
         install_pkgs linux-firmware-nvidia
+        # Turing en adelante: Vulkan libre (NVK). Con el, Mesa da tambien
+        # OpenGL por encima de Vulkan (Zink), el camino recomendado para
+        # estas tarjetas desde Mesa 25.1.
+        if [ "$NVIDIA_HAY_MODERNA" = "yes" ]; then
+            log_info "NVIDIA moderna (Turing o posterior): instalando Vulkan libre (NVK)."
+            install_pkgs mesa-vulkan-nouveau vulkan-loader
+        fi
 
         nvidia_mode=""
         if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
@@ -2038,7 +2145,11 @@ install_drivers() {
             else
                 log_warn "Se detectó NVIDIA como única tarjeta gráfica (sin gráfica integrada de respaldo)."
             fi
-            log_warn "En tarjetas NVIDIA antiguas (Tesla/Fermi/Kepler), Nouveau puede causar pantalla negra o cuelgues."
+            if nvidia_confiable; then
+                log_info "NVIDIA $NVIDIA_GEN ($NVIDIA_CHIP): Nouveau la maneja bien; se recomienda dejarla activa."
+            else
+                log_warn "NVIDIA $NVIDIA_GEN${NVIDIA_CHIP:+ ($NVIDIA_CHIP)}: en tarjetas antiguas (Tesla/Fermi) Nouveau puede causar pantalla negra o cuelgues."
+            fi
             log_info "Opción 's': bloquea el módulo nouveau y usa la GPU restante (o la imagen básica del firmware). Modo seguro."
             log_info "Opción 'n': deja Nouveau activo con aceleración 3D normal en la NVIDIA."
             if want OPT_NVIDIA_SAFE "¿Bloquear la NVIDIA y usar solo la GPU restante (modo seguro)?"; then
