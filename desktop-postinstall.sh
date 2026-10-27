@@ -666,6 +666,12 @@ install_pkg() {
     log_info "Instalando: $pkg"
     _pkg_rc=0
     apk_add "$pkg" >>"$LOG_FILE" 2>&1 || _pkg_rc=$?
+    # Instalado aunque apk diga error: fallo solo un paso final.
+    if [ "$_pkg_rc" -ne 0 ] && [ "$_pkg_rc" -ne 124 ] && pkg_installed "$pkg"; then
+        log_ok "'$pkg' instalado."
+        reparar_pasos_finales
+        return 0
+    fi
     case "$_pkg_rc" in
         0)   log_ok "'$pkg' instalado." ;;
         124) log_warn "No se pudo descargar '$pkg' por problemas de conexion." ;;
@@ -697,10 +703,51 @@ install_pkgs() {
         # resto del script.
         log_warn "No se pudo descargar el lote por problemas de conexion: $*"
     else
-        log_warn "La instalacion en lote fallo (probablemente algun paquete no existe en tu rama). Reintentando uno por uno..."
+        # apk tambien termina con error cuando los paquetes SI quedaron
+        # instalados pero fallo su paso final (un "trigger", por ejemplo
+        # fc-cache de fontconfig). Entonces no hay nada que reintentar:
+        # solo reparar ese paso.
+        _lote_faltan=""
         for p in "$@"; do
-            install_pkg "$p"
+            pkg_installed "$p" || _lote_faltan="$_lote_faltan $p"
         done
+        if [ -z "$_lote_faltan" ]; then
+            for p in "$@"; do
+                log_ok "'$p' instalado (lote)."
+            done
+            reparar_pasos_finales
+        else
+            log_warn "La instalacion en lote fallo (probablemente algun paquete no existe en tu rama). Reintentando uno por uno:$_lote_faltan"
+            for p in $_lote_faltan; do
+                install_pkg "$p"
+            done
+        fi
+    fi
+}
+
+# Si a algun paquete instalado le fallo su paso final (apk muestra
+# "N errors" en cada orden desde entonces), "apk fix" lo vuelve a correr.
+# La revision solo lee la base de datos local, pero se le pone un limite
+# de tiempo para que nunca deje esperando al script. Si la revision misma
+# falla, se intenta la reparacion igual (sin paquetes rotos no hace nada).
+reparar_pasos_finales() {
+    _sim_rc=0
+    _sim="$(timeout 120 apk fix --simulate 2>&1)" || _sim_rc=$?
+    _rotos="$(printf '%s\n' "$_sim" | sed -n 's/^([ 0-9]*\/[0-9]*) Reinstalling \([^ ]*\).*/\1/p' | tr '\n' ' ')"
+    if [ "$_sim_rc" -ne 0 ] && [ -z "$_rotos" ]; then
+        printf '%s\n' "$_sim" >>"$LOG_FILE"
+        log_warn "No se pudo revisar si quedaron paquetes a medio instalar (codigo $_sim_rc). Se intenta 'apk fix' por si acaso..."
+    elif [ -z "$_rotos" ]; then
+        return 0
+    else
+        log_warn "A estos paquetes les fallo su paso final de instalacion: ${_rotos% }. Se repara con 'apk fix'..."
+    fi
+    _fix_rc=0
+    apk_vigilado fix >>"$LOG_FILE" 2>&1 || _fix_rc=$?
+    if [ "$_fix_rc" -eq 0 ]; then
+        log_ok "Paquetes reparados."
+    else
+        log_warn "No se pudieron reparar ahora. Despues de reiniciar ejecuta: doas apk fix"
     fi
 }
 
@@ -4616,6 +4663,7 @@ main() {
     setup_update_shortcut
     setup_user_groups
     fix_home_owner
+    reparar_pasos_finales
 
     print_browser_recommendations
     if [ "$FALLOS_DE_RED" -gt 0 ]; then
