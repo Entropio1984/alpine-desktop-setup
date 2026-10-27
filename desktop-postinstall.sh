@@ -727,10 +727,21 @@ install_pkgs() {
 
 # Si a algun paquete instalado le fallo su paso final (apk muestra
 # "N errors" en cada orden desde entonces), "apk fix" lo vuelve a correr.
+# La revision solo lee la base de datos local, pero se le pone un limite
+# de tiempo para que nunca deje esperando al script. Si la revision misma
+# falla, se intenta la reparacion igual (sin paquetes rotos no hace nada).
 reparar_pasos_finales() {
-    _rotos="$(apk fix --simulate 2>/dev/null | sed -n 's/^([ 0-9]*\/[0-9]*) Reinstalling \([^ ]*\).*/\1/p' | tr '\n' ' ')"
-    [ -n "$_rotos" ] || return 0
-    log_warn "A estos paquetes les fallo su paso final de instalacion: $_rotos. Se repara con 'apk fix'..."
+    _sim_rc=0
+    _sim="$(timeout 120 apk fix --simulate 2>&1)" || _sim_rc=$?
+    _rotos="$(printf '%s\n' "$_sim" | sed -n 's/^([ 0-9]*\/[0-9]*) Reinstalling \([^ ]*\).*/\1/p' | tr '\n' ' ')"
+    if [ "$_sim_rc" -ne 0 ] && [ -z "$_rotos" ]; then
+        printf '%s\n' "$_sim" >>"$LOG_FILE"
+        log_warn "No se pudo revisar si quedaron paquetes a medio instalar (codigo $_sim_rc). Se intenta 'apk fix' por si acaso..."
+    elif [ -z "$_rotos" ]; then
+        return 0
+    else
+        log_warn "A estos paquetes les fallo su paso final de instalacion: ${_rotos% }. Se repara con 'apk fix'..."
+    fi
     _fix_rc=0
     apk_vigilado fix >>"$LOG_FILE" 2>&1 || _fix_rc=$?
     if [ "$_fix_rc" -eq 0 ]; then
