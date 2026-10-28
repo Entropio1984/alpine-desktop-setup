@@ -2322,6 +2322,9 @@ EOF
     # no cambia nada cuando si hay pantalla del kernel. Los escritorios
     # Wayland (GNOME, Sway, XFCE Wayland) necesitan DRM y no funcionan asi.
     install_pkgs xf86-video-vesa
+    if ! pkg_installed xf86-video-vesa; then
+        log_warn "No se pudo instalar xf86-video-vesa: si la NVIDIA es la unica grafica y el equipo arranca en modo BIOS, la pantalla de inicio puede no abrir. Instalalo luego con: doas apk add xf86-video-vesa"
+    fi
     mkdir -p "$(dirname "$NV_LIGHTDM_SAFE")"
     cat > "$NV_LIGHTDM_SAFE" <<'EOF'
 # Generado por desktop-postinstall.sh (NVIDIA en modo seguro): no esperar a
@@ -2331,7 +2334,7 @@ logind-check-graphical=false
 EOF
     log_ok "Modo seguro aplicado: $NV_BLACKLIST"
     log_info "La NVIDIA quedara sin driver. Ojo: sin driver tampoco se apaga y sigue consumiendo energia."
-    log_info "Para revertir: borra ese archivo, ejecuta 'mkinitfs <version-del-kernel>' y reinicia."
+    log_info "Para revertir: borra ese archivo y $NV_LIGHTDM_SAFE, ejecuta 'mkinitfs <version-del-kernel>' y reinicia."
 }
 
 # Modo ahorro (portatiles Optimus): nouveau se carga para poder APAGAR la

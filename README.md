@@ -432,6 +432,7 @@ Ejecuta los bloques en orden. Termina con código 0 si todo salió bien y con c�
 | `/usr/local/bin/sway-atajos` | 11 | Sway: lista de atajos de teclado |
 | `~/.config/waybar/config.jsonc`, `/etc/skel/.config/waybar/config.jsonc` | 11 | Sway: botones y módulos de la barra (solo si no existía) |
 | `/etc/modprobe.d/blacklist-nouveau.conf` | 16 | Bloqueo de `nouveau` (modo seguro) |
+| `/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf` | 16 | LightDM abre aunque no haya pantalla del kernel (modo seguro) |
 | `/etc/local.d/nvidia-optimus.start` | 16 | Modo ahorro: audio HDMI y salidas fantasma de la NVIDIA |
 | `/etc/xdg/plasma-workspace/env/gpu-integrada.sh`, `/etc/profile.d/gpu-integrada.sh` | 16 | Modo ahorro: escritorio y video en la gráfica integrada |
 | `/etc/X11/xorg.conf.d/20-gpu-integrada.conf` | 16 | Modo ahorro: Xorg no abre la NVIDIA |
@@ -535,7 +536,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 
 | Para quitar... | Hacer esto |
 |---|---|
-| Modo seguro de NVIDIA | Borrar `/etc/modprobe.d/blacklist-nouveau.conf`, ejecutar `mkinitfs $(uname -r)` y reiniciar |
+| Modo seguro de NVIDIA | Borrar `/etc/modprobe.d/blacklist-nouveau.conf` y `/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf`, ejecutar `mkinitfs $(uname -r)` y reiniciar |
 | Modo de ahorro de NVIDIA | Borrar `/etc/local.d/nvidia-optimus.start`, los dos `gpu-integrada.sh` y `/etc/X11/xorg.conf.d/20-gpu-integrada.conf`; reiniciar |
 | Teclado latam en Wayland | Borrar los dos `teclado-latam.sh`, `/etc/xdg/kxkbrc` y el esquema de GNOME; ejecutar `glib-compile-schemas /usr/share/glib-2.0/schemas` |
 | Idioma | Borrar `/etc/profile.d/idioma-sistema.sh` (o `lang-es.sh` en versiones anteriores), las líneas `LANG`/`LC_*` de `/etc/environment` y, con Plasma, los dos `plasma-localerc` |
