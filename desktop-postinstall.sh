@@ -2278,10 +2278,11 @@ NV_XORG_IGPU="/etc/X11/xorg.conf.d/20-gpu-integrada.conf"
 NV_LOCAL="/etc/local.d/nvidia-optimus.start"
 NV_ENV_PLASMA="/etc/xdg/plasma-workspace/env/gpu-integrada.sh"
 NV_ENV_PROFILE="/etc/profile.d/gpu-integrada.sh"
+NV_LIGHTDM_SAFE="/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf"
 INITRAMFS_DIRTY="no"
 
 nvidia_clean_modes() {
-    for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE"; do
+    for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE" "$NV_LIGHTDM_SAFE"; do
         if [ -e "$f" ]; then
             if [ "$f" = "$NV_BLACKLIST" ]; then
                 INITRAMFS_DIRTY="yes"
@@ -2310,6 +2311,24 @@ blacklist nouveau
 options nouveau modeset=0
 EOF
     INITRAMFS_DIRTY="yes"
+    # Si la NVIDIA es la UNICA grafica y el equipo arranca en modo BIOS,
+    # sin nouveau el kernel no tiene ningun dispositivo de pantalla (ni DRM
+    # ni framebuffer). Dos consecuencias, vistas en un Compaq Presario CQ50
+    # (GeForce 8200M G):
+    #   - Xorg no tiene con que dibujar salvo el controlador VESA.
+    #   - elogind marca el puesto seat0 como "no grafico" y LightDM espera
+    #     para siempre sin abrir la pantalla de inicio.
+    # VESA solo se usa si no hay otro controlador, y la opcion de LightDM
+    # no cambia nada cuando si hay pantalla del kernel. Los escritorios
+    # Wayland (GNOME, Sway, XFCE Wayland) necesitan DRM y no funcionan asi.
+    install_pkgs xf86-video-vesa
+    mkdir -p "$(dirname "$NV_LIGHTDM_SAFE")"
+    cat > "$NV_LIGHTDM_SAFE" <<'EOF'
+# Generado por desktop-postinstall.sh (NVIDIA en modo seguro): no esperar a
+# que elogind vea un dispositivo de pantalla del kernel para abrir LightDM.
+[LightDM]
+logind-check-graphical=false
+EOF
     log_ok "Modo seguro aplicado: $NV_BLACKLIST"
     log_info "La NVIDIA quedara sin driver. Ojo: sin driver tampoco se apaga y sigue consumiendo energia."
     log_info "Para revertir: borra ese archivo, ejecuta 'mkinitfs <version-del-kernel>' y reinicia."
