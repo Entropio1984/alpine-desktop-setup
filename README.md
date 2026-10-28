@@ -105,7 +105,7 @@ Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se
 | Opción | Marcada por defecto | Qué hace |
 |---|---|---|
 | Teclado latinoamericano | Sí | Distribución `latam` en la consola, en Xorg y en sesiones Wayland |
-| NVIDIA en modo seguro | Según la tarjeta | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau`. Viene marcada en tarjetas Fermi (o no identificadas) y desmarcada en Tesla y en Kepler o más nuevas |
+| NVIDIA en modo seguro | Según la tarjeta | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau`. Viene marcada en tarjetas no identificadas y desmarcada en las demás (de Tesla en adelante) |
 | gcompat | No | Permite ejecutar programas propietarios compilados para otras distribuciones (glibc) |
 | Impresoras (CUPS) | Sí | Instala el sistema de impresión |
 | Fastfetch | No | Resumen del equipo en la terminal |
@@ -123,7 +123,7 @@ Sin escritorio, el menú no muestra los programas gráficos.
 
 **Portátiles Optimus** (gráfica integrada más una NVIDIA): en lugar de la casilla de NVIDIA aparece una segunda pantalla con tres modos: *ahorro* (recomendado y marcado por defecto), *seguro* o *activa*. Ver [Bloque 16](#bloque-16--install_drivers).
 
-**Por qué esos valores por defecto:** en las NVIDIA Fermi (GeForce 400 y 500), dejar `nouveau` activo puede terminar en pantalla negra, así que ahí el modo seguro viene marcado; en las Tesla (GeForce 8, 9 y 200) y desde Kepler `nouveau` maneja bien el escritorio y bloquearlo dejaría el equipo sin aceleración. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
+**Por qué esos valores por defecto:** con una NVIDIA que no se reconoce, dejar `nouveau` activo podría terminar en pantalla negra, así que ahí el modo seguro viene marcado; en todas las generaciones reconocidas, desde Tesla (GeForce 8, 9 y 200), `nouveau` maneja el escritorio y bloquearlo dejaría el equipo sin aceleración. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
 
 **Si el menú no se puede mostrar** (por ejemplo, sin una terminal interactiva), el script hace cada pregunta por separado cuando la necesita. Solo las respuestas que empiezan por `s` o `y` cuentan como "sí"; Enter vacío es "no".
 
@@ -293,7 +293,7 @@ Instala los controladores de cada gráfica detectada:
 |---|---|---|
 | **Ahorro** | Solo en portátiles Optimus (predeterminado) | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
 | **Seguro** | Siempre | Bloquea `nouveau`. La NVIDIA queda sin driver, pero **sigue encendida** |
-| **Activa** | Siempre (predeterminado si no es Optimus y la NVIDIA es Tesla, o Kepler o más nueva) | `nouveau` con aceleración 3D. Riesgo de pantalla negra en tarjetas Fermi |
+| **Activa** | Siempre (predeterminado si no es Optimus y la NVIDIA es de una generación reconocida) | `nouveau` con aceleración 3D. En algunas Fermi (GeForce 400 y 500) puede congelarse o fallar al reanudar |
 
 Cada modo borra los archivos de los otros, así que volver a ejecutar el script y elegir otro modo cambia la configuración por completo.
 
