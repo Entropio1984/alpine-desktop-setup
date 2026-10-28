@@ -441,8 +441,13 @@ esperar_red() {
 # Devuelve 0 si la salida de apk (archivo $1) muestra un fallo de red: los
 # mensajes de apk-tools para DNS, TLS, HTTP 5xx, descargas cortadas y los
 # errores de conexion del sistema.
+# "database format error" y "masked in: --no-network": la descarga del
+# indice de paquetes se corto (llego incompleto) y apk sigue con el indice
+# viejo o sin indice, asi que los paquetes que faltan parecen no existir.
+# Visto en un ASUS K53SV con wifi inestable: pciutils y xrandr fallaron
+# sin reintentar.
 fallo_de_red() {
-    grep -qiE 'unexpected end of file|DNS:|TLS: unspecified|HTTP 408|HTTP 50[0-9]|remote server returned|connection|network (is )?unreachable|host is unreachable|timed out|I/O error|integrity error|try again later|broken pipe' "$1"
+    grep -qiE 'database format error|masked in: --no-network|unexpected end of file|DNS:|TLS: unspecified|HTTP 408|HTTP 50[0-9]|remote server returned|connection|network (is )?unreachable|host is unreachable|timed out|I/O error|integrity error|try again later|broken pipe' "$1"
 }
 
 # --- Avance en pantalla -------------------------------------------------------
