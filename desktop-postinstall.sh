@@ -102,9 +102,9 @@ want() {
 # anteriores. Si se dan las dos, mandan las opciones.
 
 # Programas opcionales que se pueden marcar con --con y --sin.
-PROGRAMAS="impresoras libreoffice firefox vlc fastfetch btop flatpak onlyoffice chrome brave gcompat actualizaciones"
+PROGRAMAS="impresoras libreoffice firefox vlc youtube fastfetch btop flatpak onlyoffice chrome brave gcompat actualizaciones"
 # Los que solo sirven con escritorio: sin escritorio no se instalan.
-PROGRAMAS_GRAFICOS="libreoffice firefox vlc flatpak onlyoffice chrome brave"
+PROGRAMAS_GRAFICOS="libreoffice firefox vlc youtube flatpak onlyoffice chrome brave"
 
 # Nombre de la variable OPT_* de cada programa.
 programa_var() {
@@ -113,6 +113,7 @@ programa_var() {
         libreoffice)      echo OPT_LIBREOFFICE ;;
         firefox)          echo OPT_FIREFOX ;;
         vlc)              echo OPT_VLC ;;
+        youtube)          echo OPT_YOUTUBE ;;
         fastfetch)        echo OPT_FASTFETCH ;;
         btop)             echo OPT_BTOP ;;
         flatpak|flathub)  echo OPT_FLATPAK ;;
@@ -170,7 +171,8 @@ de abajo (salvo --usuario, --escritorio y --destino) no pregunta nada.
   --ayuda              Muestra esta ayuda.
 
 Programas para --con y --sin:
-  impresoras, libreoffice, firefox, vlc, fastfetch, btop,
+  impresoras, libreoffice, firefox, vlc, youtube (buscar y ver videos
+  de YouTube sin navegador: pipe-viewer + mpv), fastfetch, btop,
   flatpak (tienda Flathub), onlyoffice, chrome, brave (estos tres por
   Flatpak; marcarlos activa Flatpak), gcompat, actualizaciones (boton
   "Actualizar el sistema" y aviso de actualizaciones).
@@ -1070,7 +1072,7 @@ decidir_opciones() {
         # Un instalador que fija las OPT_* pero es anterior a las opciones
         # mas nuevas: esas no se preguntan, quedan desmarcadas.
         if [ -n "${OPT_CHROME:-}${OPT_LIBREOFFICE:-}${OPT_CUPS:-}" ]; then
-            for _var in OPT_BRAVE OPT_VLC OPT_FASTFETCH OPT_BTOP; do
+            for _var in OPT_BRAVE OPT_VLC OPT_YOUTUBE OPT_FASTFETCH OPT_BTOP; do
                 eval ": \"\${$_var:=no}\""
             done
         fi
@@ -1177,6 +1179,7 @@ menu_defaults() {
     : "${OPT_LIBREOFFICE:=yes}"
     : "${OPT_FIREFOX:=yes}"
     : "${OPT_VLC:=no}"
+    : "${OPT_YOUTUBE:=no}"
     : "${OPT_FASTFETCH:=no}"
     : "${OPT_BTOP:=no}"
     : "${OPT_FLATPAK:=no}"
@@ -1272,6 +1275,7 @@ menu_checklist() {
             LIBREOFFICE "LibreOffice en el idioma del sistema (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
             FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
             VLC "Reproductor de video VLC" "$(menu_state "$OPT_VLC")" \
+            YOUTUBE "YouTube ligero: buscar y ver videos sin navegador" "$(menu_state "$OPT_YOUTUBE")" \
             FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
             ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
             CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
@@ -1305,7 +1309,7 @@ menu_checklist() {
 }
 
 # Etiquetas de las casillas (las que devuelve dialog, sin "OPT_").
-CASILLAS="KEYBOARD NVIDIA_SAFE GCOMPAT CUPS FASTFETCH BTOP LIBREOFFICE FIREFOX VLC FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT"
+CASILLAS="KEYBOARD NVIDIA_SAFE GCOMPAT CUPS FASTFETCH BTOP LIBREOFFICE FIREFOX VLC YOUTUBE FLATPAK ONLYOFFICE CHROME BRAVE UPDATE_SHORTCUT"
 
 # Pasa las etiquetas de $sel a las variables OPT_*.
 menu_read_selection() {
@@ -1358,6 +1362,7 @@ menu_summary() {
     [ "$OPT_LIBREOFFICE" = "yes" ]     && summary="$summary\n  - LibreOffice"
     [ "$OPT_FIREFOX" = "yes" ]         && summary="$summary\n  - Firefox"
     [ "$OPT_VLC" = "yes" ]             && summary="$summary\n  - VLC"
+    [ "$OPT_YOUTUBE" = "yes" ]         && summary="$summary\n  - YouTube ligero"
     [ "$OPT_FLATPAK" = "yes" ]         && summary="$summary\n  - Flatpak/Flathub"
     [ "$OPT_ONLYOFFICE" = "yes" ]      && summary="$summary\n  - OnlyOffice"
     [ "$OPT_CHROME" = "yes" ]          && summary="$summary\n  - Google Chrome"
@@ -3224,6 +3229,113 @@ set_default_app() {
     done
 }
 
+# YouTube ligero: se busca con gtk-pipe-viewer y se ve en mpv, sin
+# navegador. En equipos de un nucleo y 2 GB es mucho mas liviano que
+# YouTube en Firefox. Limita a 480p, H.264 (avc1) y 30 cuadros: lo que un
+# procesador viejo decodifica sin trabarse (VP9, AV1 y 60 fps no).
+# yt-dlp necesita un motor de JavaScript para los desafios de YouTube. Se
+# pide QuickJS a proposito (menos de 1 MB): sin pedirlo, apk elige Deno
+# (unos 40 MB). El paquete yt-dlp de Alpine ya trae el componente
+# yt-dlp-ejs, pero solo activa deno y node: /etc/yt-dlp.conf activa
+# QuickJS para todos (mpv y pipe-viewer llaman al mismo yt-dlp).
+# Las configuraciones se escriben solo si no existen: un cambio del
+# usuario (por ejemplo bajar a 360p) se respeta.
+configurar_youtube() {
+    install_pkgs pipe-viewer pipe-viewer-gtk mpv yt-dlp yt-dlp-ejs-rt-quickjs
+    if ! command -v gtk-pipe-viewer >/dev/null 2>&1; then
+        log_warn "No se pudo instalar pipe-viewer; se omite YouTube ligero."
+        return 0
+    fi
+
+    if [ ! -e /etc/yt-dlp.conf ]; then
+        cat > /etc/yt-dlp.conf <<'YTDLP'
+# yt-dlp para todo el sistema (lo usan mpv y pipe-viewer).
+# Motor de JavaScript para los desafios de YouTube: QuickJS, el mas
+# liviano. Si deja de funcionar, se puede probar con "deno" instalando
+# el paquete deno (unos 40 MB).
+--js-runtimes quickjs
+YTDLP
+    fi
+
+    mkdir -p /etc/mpv
+    if [ ! -e /etc/mpv/mpv.conf ]; then
+        cat > /etc/mpv/mpv.conf <<'MPV'
+# mpv para todo el sistema, pensado para equipos de un nucleo y 2 GB.
+# Cada usuario puede cambiarlo en ~/.config/mpv/mpv.conf.
+
+# Videos de internet (YouTube y otros) cuando mpv los abre directamente:
+# hasta 480p, H.264 (avc1) y 30 cuadros, con audio AAC. Si no hay esa
+# combinacion, lo mejor que haya hasta 480p.
+# Para 360p: cambiar los tres 480 por 360.
+ytdl-format=bestvideo[height<=?480][vcodec^=avc1][fps<=30]+bestaudio[acodec^=mp4a]/best[height<=?480][vcodec^=avc1]/best[height<=?480]/best
+
+# Decodificar con la grafica si puede; si no, con el procesador, sin errores.
+hwdec=auto-safe
+
+# Memoria para el video ya descargado: suficiente para unos minutos de
+# 480p sin pedir demasiada RAM.
+cache=yes
+demuxer-max-bytes=50MiB
+demuxer-max-back-bytes=10MiB
+MPV
+    fi
+
+    for base in /etc/skel "$TARGET_HOME"; do
+        [ -n "$base" ] || continue
+        mkdir -p "$base/.config/pipe-viewer"
+        # pipe-viewer completa las demas opciones con sus valores por
+        # defecto (todas las de aqui existen en pipe-viewer 0.5.3).
+        for pv in gtk-pipe-viewer pipe-viewer; do
+            [ -e "$base/.config/pipe-viewer/$pv.conf" ] && continue
+            cat > "$base/.config/pipe-viewer/$pv.conf" <<'PIPEVIEWER'
+#!/usr/bin/perl
+# Lazaro Linux: solo las opciones que cambian; las demas las agrega
+# pipe-viewer con su valor por defecto.
+use utf8;
+our $CONFIG = {
+  # mpv (por defecto: el primero que encuentra)
+  video_player_selected => "mpv",
+  # 480p (por defecto: "best"). Para 360p: "360".
+  resolution            => "480",
+  # MP4/H.264 y audio M4A (por defecto: 0, 0)
+  prefer_mp4            => 1,
+  prefer_m4a            => 1,
+  # Sin AV1 ni 60 cuadros (por defecto: 0, 1)
+  ignore_av1            => 1,
+  hfr                   => 0,
+  # Subtitulos en espanol primero (por defecto: ["en", "es"])
+  srt_languages         => ["es", "en"],
+  # Miles con punto (por defecto: ",")
+  thousand_separator    => ".",
+};
+PIPEVIEWER
+        done
+    done
+
+    # El menu muestra "YouTube" con un icono generico de video, en lugar
+    # de "GTK Pipe Viewer".
+    cat > /usr/share/applications/lazaro-youtube.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=YouTube
+GenericName=Videos de YouTube
+Comment=Search and watch YouTube videos without a web browser
+Comment[es]=Buscar y ver videos de YouTube sin navegador
+Exec=gtk-pipe-viewer
+Icon=applications-multimedia
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Video;Player;Network;
+Keywords=youtube;video;videos;musica;pipe-viewer;
+DESKTOP
+    mkdir -p /usr/local/share/applications
+    if [ -f /usr/share/applications/gtk-pipe-viewer.desktop ]; then
+        sed '/^\[Desktop Entry\]/a NoDisplay=true' /usr/share/applications/gtk-pipe-viewer.desktop \
+            > /usr/local/share/applications/gtk-pipe-viewer.desktop
+    fi
+    log_ok "YouTube ligero listo: menu > YouTube (480p, H.264, QuickJS)."
+}
+
 install_daily_apps() {
     log_info "== Aplicaciones de uso diario =="
 
@@ -3274,6 +3386,13 @@ install_daily_apps() {
         install_pkgs vlc vlc-qt
     else
         log_info "Se omite VLC."
+    fi
+
+    # --- YouTube ligero (opcional) ---
+    if want OPT_YOUTUBE "¿Deseas instalar YouTube ligero (buscar y ver videos sin navegador)?"; then
+        configurar_youtube
+    else
+        log_info "Se omite YouTube ligero."
     fi
 
     # --- Tienda de aplicaciones ---
