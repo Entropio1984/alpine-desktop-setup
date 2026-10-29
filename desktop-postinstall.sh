@@ -3242,12 +3242,19 @@ set_default_app() {
 # usuario (por ejemplo bajar a 360p) se respeta.
 configurar_youtube() {
     install_pkgs pipe-viewer pipe-viewer-gtk mpv yt-dlp yt-dlp-ejs-rt-quickjs
-    if ! command -v gtk-pipe-viewer >/dev/null 2>&1; then
-        log_warn "No se pudo instalar pipe-viewer; se omite YouTube ligero."
-        return 0
-    fi
+    for _yt in gtk-pipe-viewer mpv yt-dlp qjs; do
+        if ! command -v "$_yt" >/dev/null 2>&1; then
+            log_warn "No se pudo instalar $_yt; se omite YouTube ligero."
+            return 0
+        fi
+    done
 
-    if [ ! -e /etc/yt-dlp.conf ]; then
+    if [ -e /etc/yt-dlp.conf ]; then
+        # Si ya existia sin motor de JavaScript elegido, se agrega QuickJS
+        # sin tocar lo demas.
+        grep -q -e '--js-runtimes' /etc/yt-dlp.conf \
+            || printf '%s\n' '--js-runtimes quickjs' >> /etc/yt-dlp.conf
+    else
         cat > /etc/yt-dlp.conf <<'YTDLP'
 # yt-dlp para todo el sistema (lo usan mpv y pipe-viewer).
 # Motor de JavaScript para los desafios de YouTube: QuickJS, el mas
@@ -3265,9 +3272,10 @@ YTDLP
 
 # Videos de internet (YouTube y otros) cuando mpv los abre directamente:
 # hasta 480p, H.264 (avc1) y 30 cuadros, con audio AAC. Si no hay esa
-# combinacion, lo mejor que haya hasta 480p.
-# Para 360p: cambiar los tres 480 por 360.
-ytdl-format=bestvideo[height<=?480][vcodec^=avc1][fps<=30]+bestaudio[acodec^=mp4a]/best[height<=?480][vcodec^=avc1]/best[height<=?480]/best
+# combinacion, lo mas parecido hasta 480p; si no hay nada hasta 480p, la
+# calidad mas baja que haya (nunca la mas alta).
+# Para 360p: cambiar cada 480 por 360.
+ytdl-format=bestvideo[height<=?480][vcodec^=avc1][fps<=30]+bestaudio[acodec^=mp4a]/best[height<=?480][vcodec^=avc1][fps<=?30]/best[height<=?480][vcodec^=avc1]/best[height<=?480]/worst
 
 # Decodificar con la grafica si puede; si no, con el procesador, sin errores.
 hwdec=auto-safe

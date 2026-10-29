@@ -419,7 +419,7 @@ Para ver qué falla: `yt-dlp -v "https://www.youtube.com/watch?v=..."`. Si el pr
 **Si el equipo no da abasto con 480p:** bajar a 360p.
 
 - En la ventana de YouTube: en los ajustes, elegir la resolución 360 (pipe-viewer la guarda al cerrar la ventana).
-- O a mano: en `~/.config/pipe-viewer/gtk-pipe-viewer.conf` cambiar `resolution => "480"` por `resolution => "360"`, y en `/etc/mpv/mpv.conf` (o en una copia en `~/.config/mpv/mpv.conf`) cambiar los tres `480` por `360`.
+- O a mano: en `~/.config/pipe-viewer/gtk-pipe-viewer.conf` cambiar `resolution => "480"` por `resolution => "360"`, y en `/etc/mpv/mpv.conf` (o en una copia en `~/.config/mpv/mpv.conf`) cambiar cada `480` por `360`.
 
 Firefox ofrece cambiar su interfaz al idioma del sistema en el primer arranque. Al final, el script recomienda dos extensiones, sin instalarlas: **uBlock Origin** (bloquea publicidad y reduce la carga del procesador) y **enhanced-h264ify** (ver Bloque 16).
 
@@ -597,7 +597,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Barra de Sway | Borrar `/etc/sway/config.d/50-lazaro-barra.conf` (vuelve la barra original) y, si se quiere, `~/.config/waybar/config.jsonc` y `/usr/local/bin/sway-atajos` |
 | Pantalla de inicio greetd (Sway) | `rc-update del greetd` y `apk del greetd-gtkgreet`; se vuelve a entrar por la consola escribiendo `sway` |
 | Resolución de la pantalla de inicio | Borrar `/usr/local/libexec/pantalla-inicio/`, `/etc/xdg/autostart/pantalla-inicio.desktop` y los dos `50-pantalla-inicio.conf` (con eso SDDM vuelve también a su servidor de siempre); con GDM, además, `rc-update del pantalla-inicio-gdm` y borrar `/etc/init.d/pantalla-inicio-gdm` |
-| YouTube ligero | `apk del pipe-viewer pipe-viewer-gtk yt-dlp yt-dlp-ejs-rt-quickjs`, y borrar `/etc/yt-dlp.conf`, `/usr/share/applications/lazaro-youtube.desktop`, `/usr/local/share/applications/gtk-pipe-viewer.desktop` y `~/.config/pipe-viewer/`. `/etc/mpv/mpv.conf` puede quedarse (sirve para mpv en general) |
+| YouTube ligero | `apk del pipe-viewer pipe-viewer-gtk yt-dlp yt-dlp-ejs-rt-quickjs`, y borrar `/usr/share/applications/lazaro-youtube.desktop` y `/usr/local/share/applications/gtk-pipe-viewer.desktop`. Si no tenías configuración propia antes, borrar también `/etc/yt-dlp.conf`, `~/.config/pipe-viewer/` y `/etc/skel/.config/pipe-viewer/` (el script no toca archivos que ya existían). `/etc/mpv/mpv.conf` puede quedarse (sirve para mpv en general) |
 | Reintentos de Flathub | Borrar `/etc/flatpak-pendientes` y `/etc/local.d/flatpak-pendientes.start` |
 
 ## Historial de correcciones
