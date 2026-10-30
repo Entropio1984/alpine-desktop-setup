@@ -86,7 +86,7 @@ Sin opciones aparece el menú. Con cualquiera de estas opciones (salvo `--usuari
 | `--destino CARPETA` | Configura el sistema instalado en esa carpeta, sin reiniciar |
 | `--ayuda` | Muestra la ayuda |
 
-Programas para `--con` y `--sin`: `impresoras`, `libreoffice`, `firefox`, `vlc`, `fastfetch`, `btop`, `flatpak` (tienda Flathub), `onlyoffice`, `chrome`, `brave` (estos tres por Flatpak; marcarlos activa Flatpak), `gcompat` y `actualizaciones` (botón "Actualizar el sistema", aviso de actualizaciones en la barra y, en Sway, su icono en waybar).
+Programas para `--con` y `--sin`: `impresoras`, `libreoffice`, `firefox`, `vlc`, `youtube` (YouTube ligero: pipe-viewer + mpv), `fastfetch`, `btop`, `flatpak` (tienda Flathub), `onlyoffice`, `chrome`, `brave` (estos tres por Flatpak; marcarlos activa Flatpak), `gcompat` y `actualizaciones` (botón "Actualizar el sistema", aviso de actualizaciones en la barra y, en Sway, su icono en waybar).
 
 Sin `--full` ni `--minimo`, se parte de las casillas premarcadas del menú. Sin escritorio, los programas gráficos se omiten aunque se pidan. Ejemplos:
 
@@ -113,6 +113,7 @@ Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se
 | LibreOffice | Sí | Suite de oficina en el idioma del sistema (paquete pesado) |
 | Firefox | Sí | Navegador, registrado como predeterminado |
 | VLC | No | Reproductor de video completo (además de `mpv`) |
+| YouTube ligero | No | Buscar y ver videos de YouTube sin navegador (pipe-viewer + mpv, hasta 480p). Ver [YouTube ligero](#youtube-ligero) |
 | Flatpak/Flathub | No | Tienda de aplicaciones Flatpak |
 | OnlyOffice | No | Por Flatpak; marcarla activa Flatpak |
 | Google Chrome | No | Por Flatpak (paquete comunitario, no oficial de Google); marcarla activa Flatpak |
@@ -366,12 +367,59 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 | PDF | Evince (Okular en Plasma) |
 | Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 16 |
 | Reproductor completo | VLC (opcional; `vlc` y `vlc-qt`, que trae la ventana y la entrada del menú). `mpv` sigue siendo el predeterminado |
+| YouTube | YouTube ligero (opcional): `gtk-pipe-viewer` para buscar y `mpv` para ver. Ver [YouTube ligero](#youtube-ligero) |
 | Navegador | Firefox (opcional en el menú) |
 | Tienda de aplicaciones | Discover en LXQt; GNOME Software (con `gnome-software-plugin-apk2` y `apk-polkit-rs`) en XFCE, MATE y Sway. Plasma y GNOME ya traen la suya |
 
 La tienda instala y actualiza paquetes de Alpine y, si se activó Flatpak, también aplicaciones de Flathub.
 
 Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
+
+#### YouTube ligero
+
+Para equipos de un núcleo y 2 GB, donde YouTube en el navegador se traba. En el menú aparece **YouTube** (icono genérico de video): se busca en esa ventana (`gtk-pipe-viewer`) y el video se abre en `mpv`.
+
+| Archivo | Qué deja |
+|---|---|
+| Paquetes | `pipe-viewer`, `pipe-viewer-gtk`, `mpv`, `yt-dlp` y `yt-dlp-ejs-rt-quickjs` |
+| `/etc/yt-dlp.conf` | `--js-runtimes quickjs`: el motor de JavaScript que yt-dlp usa para los desafíos de YouTube. Lo leen mpv y pipe-viewer |
+| `/etc/mpv/mpv.conf` | Hasta 480p, H.264 (`avc1`), 30 cuadros y audio AAC cuando mpv abre un enlace; `hwdec=auto-safe`; caché de 50 MB; salida de video `gpu-next` con respaldo por procesador (`wlshm`, `x11`) para equipos sin 3D |
+| `~/.config/pipe-viewer/gtk-pipe-viewer.conf` y `pipe-viewer.conf` (también en `/etc/skel`) | Solo las opciones que cambian; pipe-viewer agrega las demás con su valor por defecto |
+| `/usr/share/applications/lazaro-youtube.desktop` | La entrada "YouTube" del menú. La original, "GTK Pipe Viewer", se oculta con una copia en `/usr/local/share/applications` |
+
+Opciones de pipe-viewer que se cambian (todas existen en la versión 0.5.3):
+
+| Opción | Valor original | Valor en Lázaro |
+|---|---|---|
+| `video_player_selected` | `undef` (el primero que encuentra) | `"mpv"` |
+| `resolution` | `"best"` | `"480"` |
+| `prefer_mp4` | `0` | `1` |
+| `prefer_m4a` | `0` | `1` |
+| `ignore_av1` | `0` | `1` |
+| `hfr` (60 cuadros) | `1` | `0` |
+| `srt_languages` | `["en", "es"]` | `["es", "en"]` |
+| `thousand_separator` | `","` | `"."` |
+
+**Por qué QuickJS:** el paquete `yt-dlp` de Alpine ya trae el componente `yt-dlp-ejs` (no hace falta `--remote-components`), pero sin indicar nada `apk` instala Deno (unos 40 MB). Con `yt-dlp-ejs-rt-quickjs` queda QuickJS (menos de 1 MB). Alpine solo activa deno y node por defecto, por eso hace falta `/etc/yt-dlp.conf`. Todo YouTube ligero suma unos 18 MB.
+
+**Cuando YouTube cambia y los videos dejan de abrir:** casi siempre basta con actualizar yt-dlp:
+
+```sh
+doas apk upgrade yt-dlp yt-dlp-ejs pipe-viewer
+```
+
+Si la versión de Alpine estable todavía no trae el arreglo, se puede tomar solo yt-dlp de la rama edge (es Python puro, no arrastra el resto del sistema):
+
+```sh
+doas apk upgrade --repository https://dl-cdn.alpinelinux.org/alpine/edge/community yt-dlp yt-dlp-ejs yt-dlp-ejs-rt-quickjs
+```
+
+Para ver qué falla: `yt-dlp -v "https://www.youtube.com/watch?v=..."`. Si el problema es el motor de JavaScript, se puede probar Deno: `doas apk add deno` y cambiar `quickjs` por `deno` en `/etc/yt-dlp.conf`.
+
+**Calidad según el equipo:** con un solo núcleo, el script deja 360p desde el principio (en una prueba, 480p a pantalla completa usó 56 % de un núcleo moderno); con dos o más, 480p. Si aun así el video se traba, bajar a 360p:
+
+- En la ventana de YouTube: en los ajustes, elegir la resolución 360 (pipe-viewer la guarda al cerrar la ventana).
+- O a mano: en `~/.config/pipe-viewer/gtk-pipe-viewer.conf` cambiar `resolution => "480"` por `resolution => "360"`, y en `/etc/mpv/mpv.conf` (o en una copia en `~/.config/mpv/mpv.conf`) cambiar cada `480` por `360`.
 
 Firefox ofrece cambiar su interfaz al idioma del sistema en el primer arranque. Al final, el script recomienda dos extensiones, sin instalarlas: **uBlock Origin** (bloquea publicidad y reduce la carga del procesador) y **enhanced-h264ify** (ver Bloque 16).
 
@@ -549,6 +597,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Barra de Sway | Borrar `/etc/sway/config.d/50-lazaro-barra.conf` (vuelve la barra original) y, si se quiere, `~/.config/waybar/config.jsonc` y `/usr/local/bin/sway-atajos` |
 | Pantalla de inicio greetd (Sway) | `rc-update del greetd` y `apk del greetd-gtkgreet`; se vuelve a entrar por la consola escribiendo `sway` |
 | Resolución de la pantalla de inicio | Borrar `/usr/local/libexec/pantalla-inicio/`, `/etc/xdg/autostart/pantalla-inicio.desktop` y los dos `50-pantalla-inicio.conf` (con eso SDDM vuelve también a su servidor de siempre); con GDM, además, `rc-update del pantalla-inicio-gdm` y borrar `/etc/init.d/pantalla-inicio-gdm` |
+| YouTube ligero | `apk del pipe-viewer pipe-viewer-gtk yt-dlp yt-dlp-ejs-rt-quickjs`, y borrar `/usr/share/applications/lazaro-youtube.desktop` y `/usr/local/share/applications/gtk-pipe-viewer.desktop`. Si no tenías configuración propia antes, borrar también `/etc/yt-dlp.conf`, `~/.config/pipe-viewer/` y `/etc/skel/.config/pipe-viewer/` (el script no toca archivos que ya existían). `/etc/mpv/mpv.conf` puede quedarse (sirve para mpv en general) |
 | Reintentos de Flathub | Borrar `/etc/flatpak-pendientes` y `/etc/local.d/flatpak-pendientes.start` |
 
 ## Historial de correcciones
