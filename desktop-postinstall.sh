@@ -3240,8 +3240,12 @@ set_default_app() {
 # QuickJS para todos (mpv y pipe-viewer llaman al mismo yt-dlp).
 # Las configuraciones se escriben solo si no existen: un cambio del
 # usuario (por ejemplo bajar a 360p) se respeta.
+# Calidad: 480p; con un solo nucleo, 360p (en una prueba, 480p a pantalla
+# completa uso 56 % de un nucleo moderno: uno viejo no alcanza).
 configurar_youtube() {
     install_pkgs pipe-viewer pipe-viewer-gtk mpv yt-dlp yt-dlp-ejs-rt-quickjs
+    _yt_alto=480
+    [ "$(nproc 2>/dev/null || echo 2)" -gt 1 ] || _yt_alto=360
     for _yt in gtk-pipe-viewer mpv yt-dlp qjs; do
         if ! command -v "$_yt" >/dev/null 2>&1; then
             log_warn "No se pudo instalar $_yt; se omite YouTube ligero."
@@ -3294,6 +3298,8 @@ cache=yes
 demuxer-max-bytes=50MiB
 demuxer-max-back-bytes=10MiB
 MPV
+        # Los comentarios siguen hablando de 480; solo cambia la opcion.
+        [ "$_yt_alto" = 480 ] || sed -i "/^ytdl-format=/s/480/$_yt_alto/g" /etc/mpv/mpv.conf
     fi
 
     for base in /etc/skel "$TARGET_HOME"; do
@@ -3325,6 +3331,9 @@ our $CONFIG = {
   thousand_separator    => ".",
 };
 PIPEVIEWER
+            [ "$_yt_alto" = 480 ] \
+                || sed -i "s/^  resolution            => \"480\",/  resolution            => \"$_yt_alto\",/" \
+                    "$base/.config/pipe-viewer/$pv.conf"
         done
     done
 
@@ -3349,7 +3358,7 @@ DESKTOP
         sed '/^\[Desktop Entry\]/a NoDisplay=true' /usr/share/applications/gtk-pipe-viewer.desktop \
             > /usr/local/share/applications/gtk-pipe-viewer.desktop
     fi
-    log_ok "YouTube ligero listo: menu > YouTube (480p, H.264, QuickJS)."
+    log_ok "YouTube ligero listo: menu > YouTube (${_yt_alto}p, H.264, QuickJS)."
 }
 
 install_daily_apps() {

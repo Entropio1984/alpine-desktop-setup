@@ -416,7 +416,7 @@ doas apk upgrade --repository https://dl-cdn.alpinelinux.org/alpine/edge/communi
 
 Para ver qué falla: `yt-dlp -v "https://www.youtube.com/watch?v=..."`. Si el problema es el motor de JavaScript, se puede probar Deno: `doas apk add deno` y cambiar `quickjs` por `deno` en `/etc/yt-dlp.conf`.
 
-**Si el equipo no da abasto con 480p:** bajar a 360p.
+**Calidad según el equipo:** con un solo núcleo, el script deja 360p desde el principio (en una prueba, 480p a pantalla completa usó 56 % de un núcleo moderno); con dos o más, 480p. Si aun así el video se traba, bajar a 360p:
 
 - En la ventana de YouTube: en los ajustes, elegir la resolución 360 (pipe-viewer la guarda al cerrar la ventana).
 - O a mano: en `~/.config/pipe-viewer/gtk-pipe-viewer.conf` cambiar `resolution => "480"` por `resolution => "360"`, y en `/etc/mpv/mpv.conf` (o en una copia en `~/.config/mpv/mpv.conf`) cambiar cada `480` por `360`.
