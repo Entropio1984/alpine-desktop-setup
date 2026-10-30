@@ -383,7 +383,7 @@ Para equipos de un núcleo y 2 GB, donde YouTube en el navegador se traba. En el
 |---|---|
 | Paquetes | `pipe-viewer`, `pipe-viewer-gtk`, `mpv`, `yt-dlp` y `yt-dlp-ejs-rt-quickjs` |
 | `/etc/yt-dlp.conf` | `--js-runtimes quickjs`: el motor de JavaScript que yt-dlp usa para los desafíos de YouTube. Lo leen mpv y pipe-viewer |
-| `/etc/mpv/mpv.conf` | Hasta 480p, H.264 (`avc1`), 30 cuadros y audio AAC cuando mpv abre un enlace; `hwdec=auto-safe`; caché de 50 MB |
+| `/etc/mpv/mpv.conf` | Hasta 480p, H.264 (`avc1`), 30 cuadros y audio AAC cuando mpv abre un enlace; `hwdec=auto-safe`; caché de 50 MB; salida de video `gpu-next` con respaldo por procesador (`wlshm`, `x11`) para equipos sin 3D |
 | `~/.config/pipe-viewer/gtk-pipe-viewer.conf` y `pipe-viewer.conf` (también en `/etc/skel`) | Solo las opciones que cambian; pipe-viewer agrega las demás con su valor por defecto |
 | `/usr/share/applications/lazaro-youtube.desktop` | La entrada "YouTube" del menú. La original, "GTK Pipe Viewer", se oculta con una copia en `/usr/local/share/applications` |
 

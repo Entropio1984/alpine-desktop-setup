@@ -3280,6 +3280,14 @@ ytdl-format=bestvideo[height<=?480][vcodec^=avc1][fps<=30]+bestaudio[acodec^=mp4
 # Decodificar con la grafica si puede; si no, con el procesador, sin errores.
 hwdec=auto-safe
 
+# Salida de video: con aceleracion grafica dibuja con la GPU (gpu-next). Sin
+# ella (maquinas virtuales sin 3D, graficas viejas en modo seguro) dibuja con
+# el procesador: wlshm en Wayland, x11 en X11. La lista corta de contextos
+# evita que mpv 0.41 se cierre al probarlos todos sin 3D
+# ("Assertion failed: !vo->x11").
+vo=gpu-next,wlshm,x11
+gpu-context=wayland,x11egl
+
 # Memoria para el video ya descargado: suficiente para unos minutos de
 # 480p sin pedir demasiada RAM.
 cache=yes
