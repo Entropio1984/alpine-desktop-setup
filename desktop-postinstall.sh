@@ -2308,8 +2308,15 @@ nvidia_clean_modes() {
         fi
     done
     if [ -f "$NV_GRUB_DEFAULT" ] && grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT"; then
-        # La marca y la linea que le sigue (GRUB_GFXPAYLOAD_LINUX).
-        sed -i "\\|^$NV_GRUB_MARCA\$|{N;d}" "$NV_GRUB_DEFAULT"
+        # Se borra la marca y, solo si es la que puso este script, la linea
+        # GRUB_GFXPAYLOAD_LINUX=auto que le sigue; cualquier otra se deja.
+        _g_tmp="$NV_GRUB_DEFAULT.tmp.$$"
+        awk -v m="$NV_GRUB_MARCA" '
+            $0 == m { marca = 1; next }
+            marca && $0 == "GRUB_GFXPAYLOAD_LINUX=auto" { marca = 0; next }
+            { marca = 0; print }
+        ' "$NV_GRUB_DEFAULT" > "$_g_tmp" && cat "$_g_tmp" > "$NV_GRUB_DEFAULT"
+        rm -f "$_g_tmp"
         GRUB_DIRTY="yes"
         log_info "Eliminado (configuracion NVIDIA anterior): modo grafico de GRUB en $NV_GRUB_DEFAULT"
     fi
@@ -2330,10 +2337,16 @@ nvidia_grub_pantalla() {
         return 0
     }
     grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT" && return 0
-    if grep -q '^GRUB_GFXPAYLOAD_LINUX=' "$NV_GRUB_DEFAULT"; then
+    if grep -Eq '^[[:space:]]*(export[[:space:]]+)?GRUB_GFXPAYLOAD_LINUX=' "$NV_GRUB_DEFAULT"; then
         log_info "GRUB ya tiene GRUB_GFXPAYLOAD_LINUX propio en $NV_GRUB_DEFAULT: no se cambia."
+        if grep -Eq '^[[:space:]]*(export[[:space:]]+)?GRUB_GFXPAYLOAD_LINUX=["'"'"']?text' "$NV_GRUB_DEFAULT"; then
+            log_warn "Con GRUB_GFXPAYLOAD_LINUX=text y sin driver de video, la pantalla de inicio SDDM (LXQt, Plasma) puede no abrir en modo BIOS. Cambialo a auto si pasa."
+        fi
         return 0
     fi
+    # Si el archivo no termina en salto de linea, la marca quedaria pegada
+    # a la ultima linea y luego no se podria quitar.
+    [ -z "$(tail -c 1 "$NV_GRUB_DEFAULT")" ] || echo >> "$NV_GRUB_DEFAULT"
     printf '%s\nGRUB_GFXPAYLOAD_LINUX=auto\n' "$NV_GRUB_MARCA" >> "$NV_GRUB_DEFAULT"
     GRUB_DIRTY="yes"
     log_info "GRUB arrancara Linux en modo grafico (pantalla simple del kernel para el modo seguro)."
@@ -2341,7 +2354,12 @@ nvidia_grub_pantalla() {
 
 regen_grub() {
     GRUB_DIRTY="no"
-    [ -f /boot/grub/grub.cfg ] || return 0
+    # /boot/grub existe aunque grub.cfg falte; sin esa carpeta el equipo
+    # no arranca con GRUB (o /boot no esta montado) y no hay que escribir.
+    [ -d /boot/grub ] || {
+        log_warn "No se encontro /boot/grub: no se actualizo GRUB (si /boot es una particion aparte, montala y ejecuta grub-mkconfig -o /boot/grub/grub.cfg)."
+        return 0
+    }
     if ! command -v grub-mkconfig >/dev/null 2>&1; then
         log_warn "grub-mkconfig no disponible; no se actualizo /boot/grub/grub.cfg."
         return 0
