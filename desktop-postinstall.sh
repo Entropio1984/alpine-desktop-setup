@@ -2268,6 +2268,9 @@ install_drivers() {
         if [ "$INITRAMFS_DIRTY" = "yes" ]; then
             regen_initramfs
         fi
+        if [ "$GRUB_DIRTY" = "yes" ]; then
+            regen_grub
+        fi
     fi
 
     if [ "$GPU_HAS_INTEL" = "no" ] && [ "$GPU_HAS_AMD" = "no" ] && [ "$GPU_HAS_NVIDIA" = "no" ] && [ "$GPU_HAS_VIRTUAL" = "no" ]; then
@@ -2289,7 +2292,10 @@ NV_LOCAL="/etc/local.d/nvidia-optimus.start"
 NV_ENV_PLASMA="/etc/xdg/plasma-workspace/env/gpu-integrada.sh"
 NV_ENV_PROFILE="/etc/profile.d/gpu-integrada.sh"
 NV_LIGHTDM_SAFE="/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf"
+NV_GRUB_DEFAULT="/etc/default/grub"
+NV_GRUB_MARCA="# desktop-postinstall.sh: pantalla para el modo seguro NVIDIA"
 INITRAMFS_DIRTY="no"
+GRUB_DIRTY="no"
 
 nvidia_clean_modes() {
     for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE" "$NV_LIGHTDM_SAFE"; do
@@ -2301,6 +2307,68 @@ nvidia_clean_modes() {
             log_info "Eliminado (configuracion NVIDIA anterior): $f"
         fi
     done
+    if [ -f "$NV_GRUB_DEFAULT" ] && grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT"; then
+        # Se borra la marca y, solo si es la que puso este script, la linea
+        # GRUB_GFXPAYLOAD_LINUX=auto que le sigue; cualquier otra se deja.
+        _g_tmp="$NV_GRUB_DEFAULT.tmp.$$"
+        awk -v m="$NV_GRUB_MARCA" '
+            $0 == m { marca = 1; next }
+            marca && $0 == "GRUB_GFXPAYLOAD_LINUX=auto" { marca = 0; next }
+            { marca = 0; print }
+        ' "$NV_GRUB_DEFAULT" > "$_g_tmp" && cat "$_g_tmp" > "$NV_GRUB_DEFAULT"
+        rm -f "$_g_tmp"
+        GRUB_DIRTY="yes"
+        log_info "Eliminado (configuracion NVIDIA anterior): modo grafico de GRUB en $NV_GRUB_DEFAULT"
+    fi
+}
+
+# Sin controlador de video en el kernel (NVIDIA sin driver, arranque BIOS),
+# elogind marca el puesto seat0 como "no grafico" y SDDM (LXQt, Plasma)
+# espera para siempre: no tiene una opcion como logind-check-graphical de
+# LightDM. Visto en un Compaq Presario CQ50. Si GRUB arranca Linux ya en
+# un modo grafico VESA (gfxpayload), el kernel crea su pantalla simple
+# (simpledrm, /dev/dri/card0 y /dev/fb0): elogind la ve, SDDM abre y Xorg
+# dibuja con ella. En UEFI no cambia nada (la pantalla del firmware ya
+# existe). Probado en QEMU sin el controlador bochs: sin esto SDDM no
+# abre; con esto entra a LXQt.
+nvidia_grub_pantalla() {
+    [ -f "$NV_GRUB_DEFAULT" ] || {
+        log_warn "No se encontro $NV_GRUB_DEFAULT (el equipo no arranca con GRUB): en modo BIOS sin driver de video la pantalla de inicio SDDM puede no abrir."
+        return 0
+    }
+    grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT" && return 0
+    if grep -Eq '^[[:space:]]*(export[[:space:]]+)?GRUB_GFXPAYLOAD_LINUX=' "$NV_GRUB_DEFAULT"; then
+        log_info "GRUB ya tiene GRUB_GFXPAYLOAD_LINUX propio en $NV_GRUB_DEFAULT: no se cambia."
+        if grep -Eq '^[[:space:]]*(export[[:space:]]+)?GRUB_GFXPAYLOAD_LINUX=["'"'"']?text' "$NV_GRUB_DEFAULT"; then
+            log_warn "Con GRUB_GFXPAYLOAD_LINUX=text y sin driver de video, la pantalla de inicio SDDM (LXQt, Plasma) puede no abrir en modo BIOS. Cambialo a auto si pasa."
+        fi
+        return 0
+    fi
+    # Si el archivo no termina en salto de linea, la marca quedaria pegada
+    # a la ultima linea y luego no se podria quitar.
+    [ -z "$(tail -c 1 "$NV_GRUB_DEFAULT")" ] || echo >> "$NV_GRUB_DEFAULT"
+    printf '%s\nGRUB_GFXPAYLOAD_LINUX=auto\n' "$NV_GRUB_MARCA" >> "$NV_GRUB_DEFAULT"
+    GRUB_DIRTY="yes"
+    log_info "GRUB arrancara Linux en modo grafico (pantalla simple del kernel para el modo seguro)."
+}
+
+regen_grub() {
+    GRUB_DIRTY="no"
+    # /boot/grub existe aunque grub.cfg falte; sin esa carpeta el equipo
+    # no arranca con GRUB (o /boot no esta montado) y no hay que escribir.
+    [ -d /boot/grub ] || {
+        log_warn "No se encontro /boot/grub: no se actualizo GRUB (si /boot es una particion aparte, montala y ejecuta grub-mkconfig -o /boot/grub/grub.cfg)."
+        return 0
+    }
+    if ! command -v grub-mkconfig >/dev/null 2>&1; then
+        log_warn "grub-mkconfig no disponible; no se actualizo /boot/grub/grub.cfg."
+        return 0
+    fi
+    if grub-mkconfig -o /boot/grub/grub.cfg >>"$LOG_FILE" 2>&1; then
+        log_ok "Configuracion de GRUB actualizada."
+    else
+        log_warn "No se pudo actualizar GRUB. Ejecuta manualmente: grub-mkconfig -o /boot/grub/grub.cfg"
+    fi
 }
 
 # Modo seguro: bloquea el modulo nouveau en el kernel.
@@ -2321,6 +2389,7 @@ blacklist nouveau
 options nouveau modeset=0
 EOF
     INITRAMFS_DIRTY="yes"
+    nvidia_grub_pantalla
     # Si la NVIDIA es la UNICA grafica y el equipo arranca en modo BIOS,
     # sin nouveau el kernel no tiene ningun dispositivo de pantalla (ni DRM
     # ni framebuffer). Dos consecuencias, vistas en un Compaq Presario CQ50
@@ -2344,7 +2413,7 @@ logind-check-graphical=false
 EOF
     log_ok "Modo seguro aplicado: $NV_BLACKLIST"
     log_info "La NVIDIA quedara sin driver. Ojo: sin driver tampoco se apaga y sigue consumiendo energia."
-    log_info "Para revertir: borra ese archivo y $NV_LIGHTDM_SAFE, ejecuta 'mkinitfs <version-del-kernel>' y reinicia."
+    log_info "Para revertir: vuelve a ejecutar este script eligiendo otro modo para la NVIDIA (borra estos ajustes y los de GRUB)."
 }
 
 # Modo ahorro (portatiles Optimus): nouveau se carga para poder APAGAR la
