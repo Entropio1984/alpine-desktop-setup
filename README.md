@@ -294,7 +294,7 @@ Instala los controladores de cada gráfica detectada:
 |---|---|---|
 | **Ahorro** | Solo en portátiles Optimus (predeterminado) | Carga `nouveau` para que pueda **apagar** la NVIDIA, y deja el escritorio y el video en la gráfica integrada |
 | **Seguro** | Siempre | Bloquea `nouveau`. La NVIDIA queda sin driver, pero **sigue encendida** |
-| **Activa** | Siempre (predeterminado si no es Optimus y la NVIDIA es de una generación reconocida) | `nouveau` con aceleración 3D. En algunas Fermi (GeForce 400 y 500) puede congelarse o fallar al reanudar |
+| **Activa** | Siempre (predeterminado si no es Optimus y la NVIDIA es de una generación reconocida, de Tesla en adelante) | `nouveau` con aceleración 3D. En algunas Fermi (GeForce 400 y 500) puede congelarse o fallar al reanudar |
 
 Cada modo borra los archivos de los otros, así que volver a ejecutar el script y elegir otro modo cambia la configuración por completo.
 
