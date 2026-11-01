@@ -2330,7 +2330,7 @@ nvidia_clean_modes() {
         _g_tmp="$NV_GRUB_DEFAULT.tmp.$$"
         awk -v m="$NV_GRUB_MARCA" '
             $0 == m { marca = 1; next }
-            marca && ($0 == "GRUB_GFXPAYLOAD_LINUX=auto" || $0 ~ /^GRUB_GFXPAYLOAD_LINUX="[0-9]+x[0-9]+x32,[0-9]+x[0-9]+,auto"$/) { marca = 0; next }
+            marca && ($0 == "GRUB_GFXPAYLOAD_LINUX=auto" || $0 ~ /^GRUB_GFXPAYLOAD_LINUX="[0-9]+x[0-9]+x32,auto"$/) { marca = 0; next }
             { marca = 0; print }
         ' "$NV_GRUB_DEFAULT" > "$_g_tmp" && cat "$_g_tmp" > "$NV_GRUB_DEFAULT"
         rm -f "$_g_tmp"
@@ -2394,7 +2394,7 @@ MARCA="# desktop-postinstall.sh: pantalla para el modo seguro NVIDIA"
 case "${1:-}" in
     auto) LINEA="GRUB_GFXPAYLOAD_LINUX=auto" ;;
     [0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9]x[0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9][0-9])
-        LINEA="GRUB_GFXPAYLOAD_LINUX=\"$1x32,$1,auto\"" ;;
+        LINEA="GRUB_GFXPAYLOAD_LINUX=\"$1x32,auto\"" ;;
     *) echo "Resolucion no valida: ${1:-}" >&2; exit 2 ;;
 esac
 grep -qxF "$MARCA" "$G" || { echo "Falta la marca del modo seguro en $G" >&2; exit 3; }
