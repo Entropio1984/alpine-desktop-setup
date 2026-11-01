@@ -2330,7 +2330,7 @@ nvidia_clean_modes() {
         _g_tmp="$NV_GRUB_DEFAULT.tmp.$$"
         awk -v m="$NV_GRUB_MARCA" '
             $0 == m { marca = 1; next }
-            marca && ($0 == "GRUB_GFXPAYLOAD_LINUX=auto" || $0 ~ /^GRUB_GFXPAYLOAD_LINUX="[0-9]+x[0-9]+x32,auto"$/) { marca = 0; next }
+            marca && ($0 == "GRUB_GFXPAYLOAD_LINUX=auto" || $0 ~ /^GRUB_GFXPAYLOAD_LINUX="([0-9]+x[0-9]+x32,)+auto"$/) { marca = 0; next }
             { marca = 0; print }
         ' "$NV_GRUB_DEFAULT" > "$_g_tmp" && cat "$_g_tmp" > "$NV_GRUB_DEFAULT"
         rm -f "$_g_tmp"
@@ -2394,7 +2394,17 @@ MARCA="# desktop-postinstall.sh: pantalla para el modo seguro NVIDIA"
 case "${1:-}" in
     auto) LINEA="GRUB_GFXPAYLOAD_LINUX=auto" ;;
     [0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9]x[0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9][0-9])
-        LINEA="GRUB_GFXPAYLOAD_LINUX=\"$1x32,auto\"" ;;
+        # La elegida y, por si la tarjeta no la tiene, las comunes que no
+        # son mas grandes (el monitor tambien las acepta), siempre con 32
+        # bits de color; al final la automatica. Muchas tarjetas solo traen
+        # los modos VESA clasicos (una GT 740: hasta 1280x1024, ninguno 16:9).
+        w="${1%x*}"; h="${1#*x}"
+        lista="$1x32"
+        for m in 1920x1080 1680x1050 1600x900 1440x900 1366x768 1280x1024 1280x800 1280x720 1024x768 800x600; do
+            [ "$m" = "$1" ] && continue
+            [ "${m%x*}" -le "$w" ] && [ "${m#*x}" -le "$h" ] && lista="$lista,${m}x32"
+        done
+        LINEA="GRUB_GFXPAYLOAD_LINUX=\"$lista,auto\"" ;;
     *) echo "Resolucion no valida: ${1:-}" >&2; exit 2 ;;
 esac
 grep -qxF "$MARCA" "$G" || { echo "Falta la marca del modo seguro en $G" >&2; exit 3; }
@@ -2416,7 +2426,7 @@ INNEREOF
 actual="$(sed -n 's/^GRUB_GFXPAYLOAD_LINUX="\{0,1\}\([0-9]*x[0-9]*\)x32.*/\1/p' /etc/default/grub 2>/dev/null | tail -n1)"
 [ -n "$actual" ] || actual="Automatica"
 eleccion="$(zenity --list --title="Resolucion de pantalla" --width=460 --height=480 \
-    --text="La tarjeta NVIDIA funciona sin controlador (modo seguro), asi que la resolucion solo cambia al reiniciar.\n\nAhora: $actual\n\nElige la de tu monitor (aparece en su caja o manual). Si la tarjeta no la ofrece, al reiniciar se usa la automatica." \
+    --text="La tarjeta NVIDIA funciona sin controlador (modo seguro), asi que la resolucion solo cambia al reiniciar.\n\nAhora: $actual\n\nElige la de tu monitor (aparece en su caja o manual). Si la tarjeta no la ofrece, al reiniciar se usa la mas parecida que tenga. Sin controlador muchas tarjetas no tienen resoluciones panoramicas: si la imagen se ve estirada, busca en el menu del monitor la opcion de tamano de imagen (4:3, Original o Auto)." \
     --column="Resolucion" Automatica 1920x1080 1680x1050 1600x900 1440x900 1366x768 1280x1024 1280x800 1280x720 1024x768 800x600 2>/dev/null)" || exit 0
 [ -n "$eleccion" ] || exit 0
 [ "$eleccion" = Automatica ] && eleccion=auto
