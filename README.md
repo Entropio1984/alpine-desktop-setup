@@ -105,7 +105,7 @@ Se navega con las flechas, se marca o desmarca con la **barra espaciadora** y se
 | Opción | Marcada por defecto | Qué hace |
 |---|---|---|
 | Teclado latinoamericano | Sí | Distribución `latam` en la consola, en Xorg y en sesiones Wayland |
-| NVIDIA en modo seguro | Según la tarjeta | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau`. Viene marcada en tarjetas no identificadas y desmarcada en las demás (de Tesla en adelante) |
+| NVIDIA en modo seguro | Según la tarjeta | Solo aparece si hay una NVIDIA y el equipo **no** es un portátil Optimus. Bloquea el driver `nouveau`. Viene marcada en tarjetas no identificadas o anteriores a las GeForce 8 (GeForce FX, 6 y 7) y desmarcada en las demás (de Tesla en adelante) |
 | gcompat | No | Permite ejecutar programas propietarios compilados para otras distribuciones (glibc) |
 | Impresoras (CUPS) | Sí | Instala el sistema de impresión |
 | Fastfetch | No | Resumen del equipo en la terminal |
@@ -124,7 +124,7 @@ Sin escritorio, el menú no muestra los programas gráficos.
 
 **Portátiles Optimus** (gráfica integrada más una NVIDIA): en lugar de la casilla de NVIDIA aparece una segunda pantalla con tres modos: *ahorro* (recomendado y marcado por defecto), *seguro* o *activa*. Ver [Bloque 16](#bloque-16--install_drivers).
 
-**Por qué esos valores por defecto:** con una NVIDIA que no se reconoce, dejar `nouveau` activo podría terminar en pantalla negra, así que ahí el modo seguro viene marcado; en todas las generaciones reconocidas, desde Tesla (GeForce 8, 9 y 200), `nouveau` maneja el escritorio y bloquearlo dejaría el equipo sin aceleración. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
+**Por qué esos valores por defecto:** con una NVIDIA que no se reconoce, o anterior a las GeForce 8 (no probada), dejar `nouveau` activo podría terminar en pantalla negra, así que ahí el modo seguro viene marcado; en todas las generaciones reconocidas, desde Tesla (GeForce 8, 9 y 200), `nouveau` maneja el escritorio y bloquearlo dejaría el equipo sin aceleración. Flatpak viene desmarcado porque instalarlo sin ninguna aplicación no sirve de nada; por eso se activa solo al marcar OnlyOffice, Chrome o Brave.
 
 **Si el menú no se puede mostrar** (por ejemplo, sin una terminal interactiva), el script hace cada pregunta por separado cuando la necesita. Solo las respuestas que empiezan por `s` o `y` cuentan como "sí"; Enter vacío es "no".
 
@@ -217,7 +217,7 @@ Clasifica todas las tarjetas gráficas leyendo `/sys` (fabricante y tipo en núm
 - cuál es la **gráfica principal**, la que usó el equipo al encender;
 - si el equipo es **portátil**, por el tipo de chasis o por la presencia de batería;
 - si es un **portátil Optimus**: portátil, una sola NVIDIA, y la principal es Intel o AMD;
-- la **generación de cada NVIDIA**, por el nombre de su chip (base de datos de `lspci`, o el registro de `nouveau` si no aparece): Tesla, Fermi, Kepler, Maxwell, Pascal, Volta o moderna (Turing, 2018, en adelante). Con varias NVIDIA manda la más antigua.
+- la **generación de cada NVIDIA**, por el nombre de su chip (base de datos de `lspci`, o el registro de `nouveau` si no aparece): anterior (GeForce FX, 6 y 7), Tesla, Fermi, Kepler, Maxwell, Pascal, Volta o moderna (Turing, 2018, en adelante). Con varias NVIDIA manda la más antigua.
 
 También avisa si hay un adaptador de video USB DisplayLink, que Alpine no soporta.
 

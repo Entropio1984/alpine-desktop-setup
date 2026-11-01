@@ -880,7 +880,7 @@ PRIMARY_VENDOR=""
 IS_LAPTOP="no"
 OPTIMUS_LAPTOP="no" # portatil con grafica integrada + una NVIDIA
 NVIDIA_CHIP=""      # nombre del chip, p. ej. GF108 (vacio si no se supo)
-NVIDIA_GEN="desconocida" # tesla, fermi, kepler, maxwell, pascal, volta, moderna (Turing en adelante)
+NVIDIA_GEN="desconocida" # anterior (GeForce FX, 6 y 7), tesla, fermi, kepler, maxwell, pascal, volta, moderna (Turing en adelante)
 NVIDIA_HAY_MODERNA="no"  # alguna NVIDIA es Turing o posterior (instalar NVK)
 
 detect_hardware() {
@@ -987,7 +987,12 @@ nvidia_generacion_de_chip() {
         GM*) echo maxwell ;;
         GK*) echo kepler ;;
         GF*) echo fermi ;;
-        NV*|G[0-9]*|GT2*|MCP*|C[0-9]*) echo tesla ;;
+        # Anteriores a Tesla (GeForce FX, 6 y 7, 2003-2006, y sus graficas
+        # integradas): nouveau no se probo en ellas, quedan como antes en modo
+        # seguro. Van antes que Tesla porque sus nombres tambien empiezan con
+        # NV, G o C.
+        NV*|G7[0-9]*|C5[0-9]*|C6[0-9]*|C73*) echo anterior ;;
+        G[0-9]*|GT2*|MCP*|C[0-9]*) echo tesla ;;
         *) echo desconocida ;;
     esac
 }
@@ -1035,7 +1040,7 @@ nvidia_orden() {
 }
 
 # Generacion en la que nouveau maneja el escritorio: cualquiera que se
-# haya reconocido. Con una desconocida se prefiere el modo seguro
+# haya reconocido desde Tesla. Con una desconocida o anterior se prefiere el modo seguro
 # cuando la NVIDIA es la unica grafica.
 nvidia_confiable() {
     case "$NVIDIA_GEN" in
@@ -1219,7 +1224,7 @@ aplicar_nvidia() {
                     OPT_NVIDIA_SAFE="no"
                     log_info "--nvidia optimus: no es un portatil con dos graficas y la NVIDIA ($NVIDIA_GEN) funciona bien con nouveau: queda activa."
                 else
-                    log_warn "--nvidia optimus: no es un portatil con dos graficas y la NVIDIA es desconocida ($NVIDIA_GEN): se usa el modo seguro."
+                    log_warn "--nvidia optimus: no es un portatil con dos graficas y la NVIDIA es desconocida o anterior a las GeForce 8 ($NVIDIA_GEN): se usa el modo seguro."
                 fi
             fi
             ;;
@@ -2247,7 +2252,7 @@ install_drivers() {
             if nvidia_confiable; then
                 log_info "NVIDIA $NVIDIA_GEN ($NVIDIA_CHIP): Nouveau la maneja bien; se recomienda dejarla activa."
             else
-                log_warn "NVIDIA $NVIDIA_GEN${NVIDIA_CHIP:+ ($NVIDIA_CHIP)}: en tarjetas no identificadas Nouveau puede causar pantalla negra o cuelgues."
+                log_warn "NVIDIA $NVIDIA_GEN${NVIDIA_CHIP:+ ($NVIDIA_CHIP)}: en tarjetas no identificadas o anteriores a las GeForce 8 Nouveau puede causar pantalla negra o cuelgues."
             fi
             log_info "Opción 's': bloquea el módulo nouveau y usa la GPU restante (o la imagen básica del firmware). Modo seguro."
             log_info "Opción 'n': deja Nouveau activo con aceleración 3D normal en la NVIDIA."
