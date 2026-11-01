@@ -1219,7 +1219,12 @@ aplicar_nvidia() {
             ;;
         optimus)
             OPT_NVIDIA_SAFE="yes"
-            if [ "$OPTIMUS_LAPTOP" = "yes" ]; then
+            if [ "$OPTIMUS_LAPTOP" = "yes" ] && [ "$NVIDIA_GEN" = "anterior" ]; then
+                # Hibridas anteriores a las GeForce 8 (raras, como la GeForce
+                # Go 7400 de algunos Sony VAIO): nouveau no se probo ahi.
+                OPT_NVIDIA_MODE="safe"
+                log_warn "--nvidia optimus: portatil con dos graficas y NVIDIA anterior a las GeForce 8 ($NVIDIA_CHIP): se usa el modo seguro."
+            elif [ "$OPTIMUS_LAPTOP" = "yes" ]; then
                 OPT_NVIDIA_MODE="optimus"
             elif [ "$GPU_HAS_NVIDIA" = "yes" ]; then
                 if nvidia_confiable; then
