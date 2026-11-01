@@ -994,7 +994,7 @@ nvidia_generacion_de_chip() {
         # NV50 en adelante (NV84, NVAA...) es Tesla. nouveau llama MCP61, MCP67,
         # MCP68 y MCP73 a las integradas antiguas.
         NV[0-4]*|G7[0-9]*|C5[0-9]*|C6[0-9]*|C73*|MCP5[0-9]*|MCP6[0-9]*|MCP73*) echo anterior ;;
-        G[0-9]*|GT2*|MCP*|C[0-9]*) echo tesla ;;
+        NV*|G[0-9]*|GT2*|MCP*|C[0-9]*) echo tesla ;;
         *) echo desconocida ;;
     esac
 }
