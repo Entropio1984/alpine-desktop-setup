@@ -2307,11 +2307,14 @@ NV_ENV_PROFILE="/etc/profile.d/gpu-integrada.sh"
 NV_LIGHTDM_SAFE="/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf"
 NV_GRUB_DEFAULT="/etc/default/grub"
 NV_GRUB_MARCA="# desktop-postinstall.sh: pantalla para el modo seguro NVIDIA"
+NV_RES_ROOT="/usr/local/sbin/resolucion-modo-seguro-root"
+NV_RES_LAUNCHER="/usr/local/bin/resolucion-modo-seguro"
+NV_RES_DESKTOP="/usr/share/applications/resolucion-modo-seguro.desktop"
 INITRAMFS_DIRTY="no"
 GRUB_DIRTY="no"
 
 nvidia_clean_modes() {
-    for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE" "$NV_LIGHTDM_SAFE"; do
+    for f in "$NV_BLACKLIST" "$NV_XORG_SAFE" "$NV_XORG_IGPU" "$NV_LOCAL" "$NV_ENV_PLASMA" "$NV_ENV_PROFILE" "$NV_LIGHTDM_SAFE" "$NV_RES_ROOT" "$NV_RES_LAUNCHER" "$NV_RES_DESKTOP"; do
         if [ -e "$f" ]; then
             if [ "$f" = "$NV_BLACKLIST" ]; then
                 INITRAMFS_DIRTY="yes"
@@ -2321,12 +2324,13 @@ nvidia_clean_modes() {
         fi
     done
     if [ -f "$NV_GRUB_DEFAULT" ] && grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT"; then
-        # Se borra la marca y, solo si es la que puso este script, la linea
-        # GRUB_GFXPAYLOAD_LINUX=auto que le sigue; cualquier otra se deja.
+        # Se borra la marca y, solo si es la que puso este script (auto, o
+        # la resolucion elegida con resolucion-modo-seguro), la linea
+        # GRUB_GFXPAYLOAD_LINUX que le sigue; cualquier otra se deja.
         _g_tmp="$NV_GRUB_DEFAULT.tmp.$$"
         awk -v m="$NV_GRUB_MARCA" '
             $0 == m { marca = 1; next }
-            marca && $0 == "GRUB_GFXPAYLOAD_LINUX=auto" { marca = 0; next }
+            marca && ($0 == "GRUB_GFXPAYLOAD_LINUX=auto" || $0 ~ /^GRUB_GFXPAYLOAD_LINUX="([0-9]+x[0-9]+x32,)+auto"$/) { marca = 0; next }
             { marca = 0; print }
         ' "$NV_GRUB_DEFAULT" > "$_g_tmp" && cat "$_g_tmp" > "$NV_GRUB_DEFAULT"
         rm -f "$_g_tmp"
@@ -2363,6 +2367,109 @@ nvidia_grub_pantalla() {
     printf '%s\nGRUB_GFXPAYLOAD_LINUX=auto\n' "$NV_GRUB_MARCA" >> "$NV_GRUB_DEFAULT"
     GRUB_DIRTY="yes"
     log_info "GRUB arrancara Linux en modo grafico (pantalla simple del kernel para el modo seguro)."
+}
+
+# Resolucion del modo seguro. Sin controlador, la imagen es la que GRUB deja
+# puesta al arrancar (gfxpayload): con "auto" GRUB pregunta al monitor su
+# resolucion por la BIOS de la tarjeta, y si no la obtiene usa 640x480. Visto
+# en una GeForce GT 740 (Kepler, nouveau traba el equipo) con un monitor
+# 1920x1080 por mini HDMI: 640x480 y sin poder cambiarla desde el escritorio.
+# Con un controlador de pantalla basico tampoco se puede cambiar en marcha:
+# xf86-video-vesa no arranca junto a la pantalla simple del kernel (probado
+# en QEMU), y esa pantalla hace falta para SDDM. Por eso un acceso en el
+# menu deja elegir la resolucion, que se aplica al reiniciar. Si la tarjeta
+# no la ofrece, GRUB vuelve sola a "auto".
+nvidia_resolucion_herramienta() {
+    [ -f "$NV_GRUB_DEFAULT" ] && grep -qxF "$NV_GRUB_MARCA" "$NV_GRUB_DEFAULT" || return 0
+    install_pkgs zenity
+    mkdir -p "$(dirname "$NV_RES_ROOT")" "$(dirname "$NV_RES_LAUNCHER")" "$(dirname "$NV_RES_DESKTOP")"
+
+    cat > "$NV_RES_ROOT" <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh (NVIDIA en modo seguro). Corre como
+# root via pkexec. Uso: resolucion-modo-seguro-root auto|ANCHOxALTO
+set -eu
+G=/etc/default/grub
+MARCA="# desktop-postinstall.sh: pantalla para el modo seguro NVIDIA"
+case "${1:-}" in
+    auto) LINEA="GRUB_GFXPAYLOAD_LINUX=auto" ;;
+    [0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9]x[0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9][0-9])
+        # La elegida y, por si la tarjeta no la tiene, las comunes que no
+        # son mas grandes (el monitor tambien las acepta), siempre con 32
+        # bits de color; al final la automatica. Muchas tarjetas solo traen
+        # los modos VESA clasicos (una GT 740: hasta 1280x1024, ninguno 16:9).
+        w="${1%x*}"; h="${1#*x}"
+        lista="$1x32"
+        for m in 1920x1080 1680x1050 1600x900 1440x900 1366x768 1280x1024 1280x800 1280x720 1024x768 800x600; do
+            [ "$m" = "$1" ] && continue
+            [ "${m%x*}" -le "$w" ] && [ "${m#*x}" -le "$h" ] && lista="$lista,${m}x32"
+        done
+        LINEA="GRUB_GFXPAYLOAD_LINUX=\"$lista,auto\"" ;;
+    *) echo "Resolucion no valida: ${1:-}" >&2; exit 2 ;;
+esac
+grep -qxF "$MARCA" "$G" || { echo "Falta la marca del modo seguro en $G" >&2; exit 3; }
+T="$G.tmp.$$"
+awk -v m="$MARCA" -v l="$LINEA" '
+    $0 == m { print; print l; marca = 1; next }
+    marca && $0 ~ /^GRUB_GFXPAYLOAD_LINUX=/ { marca = 0; next }
+    { marca = 0; print }
+' "$G" > "$T" && cat "$T" > "$G"
+rm -f "$T"
+grub-mkconfig -o /boot/grub/grub.cfg
+INNEREOF
+    chmod 755 "$NV_RES_ROOT"
+
+    cat > "$NV_RES_LAUNCHER" <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh (NVIDIA en modo seguro): elegir la
+# resolucion de pantalla, que se aplica al reiniciar.
+actual="$(sed -n 's/^GRUB_GFXPAYLOAD_LINUX="\{0,1\}\([0-9]*x[0-9]*\)x32.*/\1/p' /etc/default/grub 2>/dev/null | tail -n1)"
+[ -n "$actual" ] || actual="Automatica"
+eleccion="$(zenity --list --title="Resolucion de pantalla" --width=460 --height=480 \
+    --text="La tarjeta NVIDIA funciona sin controlador (modo seguro), asi que la resolucion solo cambia al reiniciar.\n\nAhora: $actual\n\nElige la de tu monitor (aparece en su caja o manual). Si la tarjeta no la ofrece, al reiniciar se usa la mas parecida que tenga. Sin controlador muchas tarjetas no tienen resoluciones panoramicas: si la imagen se ve estirada, busca en el menu del monitor la opcion de tamano de imagen (4:3, Original o Auto)." \
+    --column="Resolucion" Automatica 1920x1080 1680x1050 1600x900 1440x900 1366x768 1280x1024 1280x800 1280x720 1024x768 800x600 2>/dev/null)" || exit 0
+[ -n "$eleccion" ] || exit 0
+[ "$eleccion" = Automatica ] && eleccion=auto
+
+# pkexec sin terminal necesita un agente grafico para pedir la contrasena.
+agente=no
+for c in /proc/[0-9]*/comm; do
+    [ -O "$c" ] || continue
+    read -r n < "$c" 2>/dev/null || continue
+    case "$n" in polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*) agente=si; break ;; esac
+done
+if [ "$agente" = no ]; then
+    for a in /usr/libexec/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 \
+        /usr/libexec/polkit-mate-authentication-agent-1 /usr/lib/mate-polkit/polkit-mate-authentication-agent-1; do
+        if [ -x "$a" ]; then "$a" >/dev/null 2>&1 & sleep 1; break; fi
+    done
+fi
+
+if pkexec /usr/local/sbin/resolucion-modo-seguro-root "$eleccion" >/tmp/resolucion-modo-seguro.log 2>&1; then
+    if zenity --question --title="Resolucion de pantalla" --width=460 --ok-label="Reiniciar ahora" --cancel-label="Despues" \
+        --text="Listo. La resolucion nueva se vera al reiniciar.\n\nSi al reiniciar la pantalla queda negra (el monitor no la acepta): espera el menu negro del arranque, presiona la tecla e, cambia el texto despues de 'set gfxpayload=' por auto, presiona F10, y vuelve a elegir aqui otra resolucion." 2>/dev/null; then
+        loginctl reboot 2>/dev/null || reboot
+    fi
+else
+    zenity --error --title="Resolucion de pantalla" --width=420 \
+        --text="No se pudo cambiar la resolucion. Detalle en /tmp/resolucion-modo-seguro.log" 2>/dev/null
+fi
+INNEREOF
+    chmod 755 "$NV_RES_LAUNCHER"
+
+    cat > "$NV_RES_DESKTOP" <<'INNEREOF'
+[Desktop Entry]
+Type=Application
+Name=Resolucion de pantalla (modo seguro)
+Name[es]=Resolución de pantalla (modo seguro)
+Comment=Elegir la resolucion de pantalla con la tarjeta NVIDIA sin controlador
+Comment[es]=Elegir la resolución de pantalla con la tarjeta NVIDIA sin controlador
+Exec=/usr/local/bin/resolucion-modo-seguro
+Icon=video-display
+Terminal=false
+Categories=Settings;HardwareSettings;
+INNEREOF
+    log_info "Acceso en el menu: 'Resolucion de pantalla (modo seguro)' para elegir la resolucion (se aplica al reiniciar)."
 }
 
 regen_grub() {
@@ -2424,6 +2531,7 @@ EOF
 [LightDM]
 logind-check-graphical=false
 EOF
+    nvidia_resolucion_herramienta
     log_ok "Modo seguro aplicado: $NV_BLACKLIST"
     log_info "La NVIDIA quedara sin driver. Ojo: sin driver tampoco se apaga y sigue consumiendo energia."
     log_info "Para revertir: vuelve a ejecutar este script eligiendo otro modo para la NVIDIA (borra estos ajustes y los de GRUB)."
