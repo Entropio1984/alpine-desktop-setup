@@ -457,15 +457,75 @@ fallo_de_red() {
 # pantalla se muestra un resumen mientras trabajan, para que se vea que el
 # script no esta congelado:
 #   - una linea por paquete: "(12/80) Instalando libreoffice-writer";
-#   - si pasan 20 s sin novedades, "... sigue trabajando (1 min 20 s)".
+#   - si pasan 20 s sin novedades, "... sigue trabajando (1 min 20 s)",
+#     con que se esta haciendo, que programa corre ahora, cuanto se
+#     descargo de internet en esos 20 s y el ultimo mensaje del programa.
+#     Asi se distingue un paso largo que avanza (descargas de Flathub con
+#     wifi lento, mkinitfs) de uno que espera a una red que no responde.
 # Quien lanza el programa en segundo plano llama a avance_iniciar, luego a
 # avance_revisar cada 5 s con el archivo donde va su salida, y al terminar
 # a avance_terminar. Todo se escribe en el descriptor 3 (la pantalla).
-avance_iniciar() {
+avance_iniciar() { # [QUE] = que se esta haciendo, para el aviso
     _av_leidas=0
     _av_silencio=0
     _av_total=0
     _av_ultima=""
+    _av_que="${1:-}"
+    _av_red="$(red_bytes)"
+    _av_sin_red=0
+}
+
+# Bytes recibidos hasta ahora por todas las interfaces de red salvo lo
+# (/proc/net/dev; vacio si no se puede leer).
+red_bytes() {
+    awk 'NR > 2 { sub(/^[ \t]+/, ""); split($0, a, ":"); if (a[1] != "lo") { split(a[2], f, " "); s += f[1] } }
+        END { if (NR > 2) printf "%.0f\n", s }' /proc/net/dev 2>/dev/null || true
+}
+
+# Nombre del programa que esta trabajando ahora: el descendiente mas
+# profundo del proceso $1 (por ejemplo apk, mkinitfs o flatpak). Si un
+# proceso tiene varios hijos se sigue el mas nuevo (dbus-run-session
+# lanza primero dbus-daemon y despues flatpak).
+proceso_actual() {
+    _pa_pid="$1"
+    _pa_vueltas=0
+    while [ "$_pa_vueltas" -lt 10 ]; do
+        _pa_hijo="$(grep -ls "^PPid:[[:space:]]*$_pa_pid\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3 | sort -n | tail -n 1)"
+        [ -n "$_pa_hijo" ] || break
+        _pa_pid="$_pa_hijo"
+        _pa_vueltas=$((_pa_vueltas + 1))
+    done
+    cat "/proc/$_pa_pid/comm" 2>/dev/null || true
+}
+
+# Arma el detalle del aviso "sigue trabajando". $1 = archivo con la
+# salida del programa, $2 = su numero de proceso.
+avance_detalle() {
+    _ad=""
+    [ -z "$_av_que" ] || _ad=" | $_av_que"
+    if [ -n "${2:-}" ]; then
+        _ad_prog="$(proceso_actual "$2")"
+        [ -z "$_ad_prog" ] || _ad="$_ad | ahora: $_ad_prog"
+    fi
+    _ad_red="$(red_bytes)"
+    if [ -n "$_ad_red" ] && [ -n "$_av_red" ]; then
+        _ad_kb=$(( (_ad_red - _av_red) / 1024 ))
+        _av_red="$_ad_red"
+        if [ "$_ad_kb" -ge 100 ]; then
+            _av_sin_red=0
+            _ad="$_ad | internet: $(awk -v k="$_ad_kb" 'BEGIN { printf "%.1f", k / 1024 }') MB en 20 s"
+        else
+            _av_sin_red=$((_av_sin_red + 20))
+            if [ "$_av_sin_red" -ge 60 ]; then
+                _ad="$_ad | internet: sin descargar nada desde hace $((_av_sin_red / 60)) min"
+            else
+                _ad="$_ad | internet: casi nada en 20 s"
+            fi
+        fi
+    fi
+    _ad_msg="$(tr '\r' '\n' <"$1" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n 1 | tr -s ' \t' ' ' | sed 's/^ //' | cut -c1-90)"
+    [ -z "$_ad_msg" ] || _ad="$_ad | ultimo mensaje: $_ad_msg"
+    printf '%s' "$_ad"
 }
 
 # Traduce la salida de apk y flatpak (en la entrada) a lineas cortas en
@@ -503,7 +563,8 @@ avance_leer() {
     return 0
 }
 
-# $1 = archivo con la salida del programa que esta corriendo.
+# $1 = archivo con la salida del programa que esta corriendo, $2 = su
+# numero de proceso (opcional, para decir que programa trabaja ahora).
 avance_revisar() {
     _av_total=$((_av_total + 5))
     avance_leer "$1"
@@ -515,9 +576,9 @@ avance_revisar() {
     _av_silencio=$((_av_silencio + 5))
     if [ $((_av_silencio % 20)) -eq 0 ]; then
         if [ "$_av_total" -ge 60 ]; then
-            printf '        ... sigue trabajando (%s min %s s)\n' $((_av_total / 60)) $((_av_total % 60)) >&3
+            printf '        ... sigue trabajando (%s min %s s)%s\n' $((_av_total / 60)) $((_av_total % 60)) "$(avance_detalle "$1" "${2:-}")" >&3
         else
-            printf '        ... sigue trabajando (%s s)\n' "$_av_total" >&3
+            printf '        ... sigue trabajando (%s s)%s\n' "$_av_total" "$(avance_detalle "$1" "${2:-}")" >&3
         fi
     fi
     return 0
@@ -548,15 +609,18 @@ terminar_arbol() {
 # alcanzo a escribir.
 _av_pid=""
 _av_salida=""
+# AVANCE_QUE (opcional, se borra al usarlo): que se esta haciendo, para
+# los avisos; si no se da, el nombre de la orden y su primer argumento.
 con_avance() {
     _av_salida="$(mktemp)"
     "$@" >"$_av_salida" 2>&1 </dev/null &
     _av_pid=$!
-    avance_iniciar
+    avance_iniciar "${AVANCE_QUE:-$1 ${2:-}}"
+    AVANCE_QUE=""
     while kill -0 "$_av_pid" 2>/dev/null; do
         sleep 5
         kill -0 "$_av_pid" 2>/dev/null || break
-        avance_revisar "$_av_salida"
+        avance_revisar "$_av_salida" "$_av_pid"
     done
     _av_rc=0
     wait "$_av_pid" || _av_rc=$?
@@ -598,10 +662,10 @@ apk_vigilado() {
         _apk_pid=$!
         _apk_antes=""
         _apk_quieto=0
-        avance_iniciar
+        avance_iniciar "$(printf 'apk %s' "$*" | cut -c1-60)"
         while kill -0 "$_apk_pid" 2>/dev/null; do
             sleep 5
-            avance_revisar "$_apk_salida"
+            avance_revisar "$_apk_salida" "$_apk_pid"
             _apk_ahora="$(awk '/^(rchar|wchar):/ { s += $2 } END { print s }' "/proc/$_apk_pid/io" 2>/dev/null)"
             # Sin /proc no se puede medir: entonces nunca se corta.
             if [ -z "$_apk_ahora" ] || [ "$_apk_ahora" != "$_apk_antes" ] \
@@ -3323,6 +3387,7 @@ flatpak_app() {
     _fp_intento=1
     while :; do
         # shellcheck disable=SC2086
+        AVANCE_QUE="Flathub: $2"
         if con_avance $remote_add_cmd install -y --noninteractive flathub "$1" >"$_fp_salida" 2>&1; then
             cat "$_fp_salida" >>"$LOG_FILE"; rm -f "$_fp_salida"
             log_ok "$2 instalado."
