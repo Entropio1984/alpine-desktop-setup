@@ -498,8 +498,9 @@ proceso_actual() {
     cat "/proc/$_pa_pid/comm" 2>/dev/null || true
 }
 
-# Arma el detalle del aviso "sigue trabajando". $1 = archivo con la
-# salida del programa, $2 = su numero de proceso.
+# Arma en $_ad el detalle del aviso "sigue trabajando". $1 = archivo con
+# la salida del programa, $2 = su numero de proceso. Se llama sin $(...):
+# guarda en $_av_red y $_av_sin_red lo medido para el siguiente aviso.
 avance_detalle() {
     _ad=""
     [ -z "$_av_que" ] || _ad=" | $_av_que"
@@ -511,9 +512,13 @@ avance_detalle() {
     if [ -n "$_ad_red" ] && [ -n "$_av_red" ]; then
         _ad_kb=$(( (_ad_red - _av_red) / 1024 ))
         _av_red="$_ad_red"
-        if [ "$_ad_kb" -ge 100 ]; then
+        if [ "$_ad_kb" -ge 1024 ]; then
             _av_sin_red=0
             _ad="$_ad | internet: $(awk -v k="$_ad_kb" 'BEGIN { printf "%.1f", k / 1024 }') MB en 20 s"
+        elif [ "$_ad_kb" -ge 10 ]; then
+            # Conexion lenta, pero llegan datos.
+            _av_sin_red=0
+            _ad="$_ad | internet: lento, $_ad_kb KB en 20 s"
         else
             _av_sin_red=$((_av_sin_red + 20))
             if [ "$_av_sin_red" -ge 60 ]; then
@@ -523,9 +528,11 @@ avance_detalle() {
             fi
         fi
     fi
-    _ad_msg="$(tr '\r' '\n' <"$1" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n 1 | tr -s ' \t' ' ' | sed 's/^ //' | cut -c1-90)"
+    # Sin caracteres de control (colores, movimientos del cursor).
+    _ad_msg="$(tr '\r' '\n' <"$1" 2>/dev/null | tr -d '\000-\010\013-\037\177' \
+        | grep -v '^[[:space:]]*$' | tail -n 1 | tr -s ' \t' ' ' | sed 's/^ //' | cut -c1-90)"
     [ -z "$_ad_msg" ] || _ad="$_ad | ultimo mensaje: $_ad_msg"
-    printf '%s' "$_ad"
+    return 0
 }
 
 # Traduce la salida de apk y flatpak (en la entrada) a lineas cortas en
@@ -571,14 +578,18 @@ avance_revisar() {
     if [ -n "$_av_nuevas" ]; then
         printf '%s\n' "$_av_nuevas" >&3
         _av_silencio=0
+        # El siguiente aviso mide solo lo descargado durante el silencio.
+        _av_red="$(red_bytes)"
+        _av_sin_red=0
         return 0
     fi
     _av_silencio=$((_av_silencio + 5))
     if [ $((_av_silencio % 20)) -eq 0 ]; then
+        avance_detalle "$1" "${2:-}"
         if [ "$_av_total" -ge 60 ]; then
-            printf '        ... sigue trabajando (%s min %s s)%s\n' $((_av_total / 60)) $((_av_total % 60)) "$(avance_detalle "$1" "${2:-}")" >&3
+            printf '        ... sigue trabajando (%s min %s s)%s\n' $((_av_total / 60)) $((_av_total % 60)) "$_ad" >&3
         else
-            printf '        ... sigue trabajando (%s s)%s\n' "$_av_total" "$(avance_detalle "$1" "${2:-}")" >&3
+            printf '        ... sigue trabajando (%s s)%s\n' "$_av_total" "$_ad" >&3
         fi
     fi
     return 0
