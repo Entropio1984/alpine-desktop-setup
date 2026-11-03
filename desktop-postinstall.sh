@@ -373,7 +373,9 @@ ejecutar_en_destino() {
     # en el nuevo (alli se busca con --usuario o se adivina).
     eval "set -- $ARGS_INTERNOS"
     _rc=0
-    env PATH=/usr/sbin:/usr/bin:/sbin:/bin DOAS_USER= \
+    # POSTINSTALL_EN_DESTINO: avisa al script de dentro que corre en un
+    # sistema recien instalado, aun sin arrancar (ver flatpak_app).
+    env PATH=/usr/sbin:/usr/bin:/sbin:/bin DOAS_USER= POSTINSTALL_EN_DESTINO=1 \
         chroot "$DESTINO_RAIZ" /bin/sh /root/.desktop-postinstall.sh "$@" || _rc=$?
 
     rm -f "$DESTINO_RAIZ/root/.desktop-postinstall.sh"
@@ -3389,7 +3391,20 @@ install_libreoffice() {
 # funciona dentro del sistema que se esta instalando (chroot).
 FLATPAK_PENDIENTES="/etc/flatpak-pendientes"
 FLATHUB_LISTO="no"
+# Con --destino (desde un instalador, por ejemplo Calamares) las
+# aplicaciones no se descargan durante la instalacion: quedan pendientes
+# para el primer arranque. Son cientos de MB (OnlyOffice ~420 MB, mas el
+# runtime) y con un wifi lento o inestable flatpak puede pasar mas de una
+# hora sin escribir nada; el instalador corta el paso por tiempo y la
+# instalacion entera falla (visto en un ASUS K53SV: OnlyOffice fallo por
+# la red y el reintento llevaba mas de 30 min callado cuando Calamares
+# corto a los 90 min). Dentro del sistema montado flatpak tampoco tiene
+# todo lo que espera (faltaba /proc/sys/kernel/random/boot_id).
 flatpak_app() {
+    if [ "${POSTINSTALL_EN_DESTINO:-}" = 1 ]; then
+        flatpak_pendiente "$1" "$2" primer-arranque
+        return 0
+    fi
     if [ "$FLATHUB_LISTO" = "no" ]; then
         flatpak_pendiente "$1" "$2"
         return 0
@@ -3418,8 +3433,13 @@ flatpak_app() {
 # Deja una aplicacion de Flathub pendiente: se instala sola, en segundo
 # plano, en cada arranque con internet (hasta 20 minutos por arranque)
 # hasta lograrlo. Tambien agrega Flathub si no se pudo agregar antes.
+# $3 = "primer-arranque" si se deja para despues a proposito (no fallo).
 flatpak_pendiente() {
-    log_warn "$2 no se pudo instalar ahora; se instalara solo despues de arrancar el equipo con internet."
+    if [ "${3:-}" = primer-arranque ]; then
+        log_info "$2 se descargara solo despues del primer arranque, con internet (Flathub)."
+    else
+        log_warn "$2 no se pudo instalar ahora; se instalara solo despues de arrancar el equipo con internet."
+    fi
     grep -qx "$1" "$FLATPAK_PENDIENTES" 2>/dev/null || echo "$1" >>"$FLATPAK_PENDIENTES"
     mkdir -p /etc/local.d
     cat > /etc/local.d/flatpak-pendientes.start <<'PEND'
