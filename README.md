@@ -26,7 +26,8 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 12. [Solución de problemas](#solución-de-problemas)
 13. [Cómo revertir cambios](#cómo-revertir-cambios)
 14. [Historial de correcciones](#historial-de-correcciones)
-15. [Licencia](#licencia)
+15. [Pruebas automáticas](#pruebas-automáticas)
+16. [Licencia](#licencia)
 
 ---
 
@@ -620,6 +621,23 @@ Cambios importantes respecto a versiones anteriores del script, para quien venga
 - **Microcódigo AMD:** una versión decía que `amd-ucode` no existía; sí existe y se instala.
 - **SSD:** no había TRIM periódico; ahora se programa uno semanal si hay un SSD.
 - **Botón de actualización:** varios diseños anteriores de la ventana se quedaban congelados o no se cerraban; el actual usa `tail --pid`. El registro no se guardaba porque el usuario no podía escribir en `/var/log`; ahora el archivo pertenece al grupo `wheel`.
+
+---
+
+## Pruebas automáticas
+
+Cada PR (propuesta de cambio) pasa por dos revisiones en GitHub antes de
+poder fusionarse en `main`, que es la versión que descarga la ISO de
+Lázaro Linux en cada compilación:
+
+1. **Revisión rápida** (unos minutos): `shellcheck` y el shell de Alpine
+   (BusyBox) buscan errores de escritura en el código.
+2. **Instalación de prueba** (alrededor de una hora y media): se compila
+   la ISO Ligera de Lázaro con el script del PR y se instala sola en
+   máquinas virtuales (QEMU), BIOS y UEFI, con XFCE sin internet y con
+   XFCE, KDE Plasma, Sway y LXQt con internet.
+
+El detalle está en `.github/workflows/pruebas.yml`.
 
 ---
 
