@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # ==============================================================================
 # Script de configuración post-instalación para entorno de escritorio en Alpine
 # Compatible con: ash (BusyBox) - shell por defecto de Alpine Linux

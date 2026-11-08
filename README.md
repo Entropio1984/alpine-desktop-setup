@@ -26,6 +26,7 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 12. [Solución de problemas](#solución-de-problemas)
 13. [Cómo revertir cambios](#cómo-revertir-cambios)
 14. [Historial de correcciones](#historial-de-correcciones)
+15. [Licencia](#licencia)
 
 ---
 
@@ -619,3 +620,13 @@ Cambios importantes respecto a versiones anteriores del script, para quien venga
 - **Microcódigo AMD:** una versión decía que `amd-ucode` no existía; sí existe y se instala.
 - **SSD:** no había TRIM periódico; ahora se programa uno semanal si hay un SSD.
 - **Botón de actualización:** varios diseños anteriores de la ventana se quedaban congelados o no se cerraban; el actual usa `tail --pid`. El registro no se guardaba porque el usuario no podía escribir en `/var/log`; ahora el archivo pertenece al grupo `wheel`.
+
+---
+
+## Licencia
+
+`desktop-postinstall.sh` es software libre: puedes usarlo, estudiarlo,
+compartirlo y modificarlo según los términos de la
+[Licencia Pública General de GNU, versión 3 o posterior](LICENSE)
+(GPL-3.0-or-later). Si redistribuyes una versión modificada, debes
+compartir también su código con la misma licencia.
