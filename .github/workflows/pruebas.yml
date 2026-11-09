@@ -1,0 +1,171 @@
+# Pruebas automáticas de desktop-postinstall.sh.
+#
+# La ISO de Lázaro Linux descarga el script de main en cada compilación
+# (sin fijar una versión, decisión de Julián). Para que un error no llegue
+# a main, cada PR pasa por:
+#   1. Revisión rápida (unos minutos): errores de escritura del código con
+#      shellcheck y con el shell de Alpine (BusyBox).
+#   2. La ISO Ligera de Lázaro (main de lazaro-linux) compilada con el
+#      script de este PR e instalada en máquinas virtuales (QEMU), con y
+#      sin internet, BIOS y UEFI. Son las mismas pruebas que usa la ISO.
+name: Pruebas del script
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pruebas-script-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  revisar:
+    name: Revisión rápida
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shellcheck
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck --version | head -n 2
+          shellcheck -s sh -S warning desktop-postinstall.sh
+
+      - name: Sintaxis con el shell de Alpine (BusyBox)
+        run: docker run --rm -v "$PWD:/src:ro" -w /src alpine:3.24 sh -n desktop-postinstall.sh
+
+  iso:
+    # Igual que en lazaro-linux: los PR que vienen de forks no compilan la
+    # ISO (decisión de Julián, por seguridad).
+    if: github.event_name != 'push' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    name: ISO Ligera con este script
+    needs: revisar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    outputs:
+      # Commit de lazaro-linux con que se compiló: las pruebas usan el
+      # mismo, aunque main avance mientras tanto.
+      lazaro: ${{ steps.version.outputs.lazaro }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: script
+
+      - uses: actions/checkout@v5
+        with:
+          repository: Entropio1984/lazaro-linux
+          ref: main
+          path: lazaro
+
+      - name: Versión de Alpine
+        id: version
+        run: |
+          . lazaro/config.env
+          echo "branch=$ALPINE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "lazaro=$(git -C lazaro rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Caché de Calamares compilado
+        uses: actions/cache@v5
+        with:
+          path: lazaro/cache
+          key: calamares-script-${{ steps.version.outputs.branch }}-${{ hashFiles('lazaro/paquetes/**', 'lazaro/config.env', 'lazaro/build.sh') }}
+
+      - name: Compilar la ISO
+        env:
+          LAZARO_SCRIPT: ${{ github.workspace }}/script/desktop-postinstall.sh
+          LAZARO_SCRIPT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          LAZARO_CANAL: prueba
+        run: cd lazaro && ./build.sh
+
+      - name: Permisos de la caché
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" lazaro/cache lazaro/salida || true
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: iso
+          path: lazaro/salida/*.iso*
+          retention-days: 3
+          compression-level: 0
+
+  pruebas:
+    name: Prueba ${{ matrix.prueba }}
+    needs: iso
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        prueba:
+          - instalar bios xfce sin-red
+          - instalar uefi xfce con-red
+          - instalar uefi plasma con-red
+          - instalar bios sway con-red
+          - instalar uefi lxqt con-red
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: Entropio1984/lazaro-linux
+          ref: ${{ needs.iso.outputs.lazaro }}
+
+      - name: Activar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instalar QEMU
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils ovmf xorriso socat imagemagick
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: iso
+          path: iso
+
+      - name: Probar
+        run: |
+          set -- ${{ matrix.prueba }}
+          orden="$1"; shift
+          ./pruebas/qemu.sh "$orden" iso/*.iso "$@"
+
+      - name: Nombre de los resultados
+        if: always()
+        id: nombre
+        run: echo "valor=$(echo '${{ matrix.prueba }}' | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: resultados-${{ steps.nombre.outputs.valor }}
+          path: |
+            pruebas/resultados/*.log
+            pruebas/resultados/*.png
+            pruebas/resultados/*.ppm
+          retention-days: 14
+
+  # Un solo resultado para la regla que protege main: verde solo si todo
+  # lo demás pasó (la ISO se salta en los cambios de main y en forks).
+  todo-en-verde:
+    name: Todo en verde
+    if: always()
+    needs: [revisar, iso, pruebas]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Revisar los resultados
+        run: |
+          echo '${{ toJSON(needs) }}'
+          case '${{ join(needs.*.result, ' ') }}' in
+            *failure* | *cancelled*)
+              echo "::error::Alguna revisión o prueba falló."
+              exit 1
+              ;;
+          esac
