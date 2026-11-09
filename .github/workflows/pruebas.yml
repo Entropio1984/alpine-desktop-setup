@@ -145,3 +145,22 @@ jobs:
             pruebas/resultados/*.png
             pruebas/resultados/*.ppm
           retention-days: 14
+
+  # Un solo resultado para la regla que protege main: verde solo si todo
+  # lo demás pasó (la ISO se salta en los cambios de main y en forks).
+  todo-en-verde:
+    name: Todo en verde
+    if: always()
+    needs: [revisar, iso, pruebas]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Revisar los resultados
+        run: |
+          echo '${{ toJSON(needs) }}'
+          case '${{ join(needs.*.result, ' ') }}' in
+            *failure* | *cancelled*)
+              echo "::error::Alguna revisión o prueba falló."
+              exit 1
+              ;;
+          esac
