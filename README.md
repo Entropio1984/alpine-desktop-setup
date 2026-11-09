@@ -626,9 +626,10 @@ Cambios importantes respecto a versiones anteriores del script, para quien venga
 
 ## Pruebas automáticas
 
-Cada PR (propuesta de cambio) pasa por dos revisiones en GitHub antes de
-poder fusionarse en `main`, que es la versión que descarga la ISO de
-Lázaro Linux en cada compilación:
+Cada PR (propuesta de cambio) pasa por dos revisiones en GitHub, que
+deben quedar en verde antes de fusionarlo en `main`, la versión que
+descarga la ISO de Lázaro Linux en cada compilación (la regla que protege
+`main` exige el resultado "Todo en verde"):
 
 1. **Revisión rápida** (unos minutos): `shellcheck` y el shell de Alpine
    (BusyBox) buscan errores de escritura en el código.
@@ -636,6 +637,10 @@ Lázaro Linux en cada compilación:
    la ISO Ligera de Lázaro con el script del PR y se instala sola en
    máquinas virtuales (QEMU), BIOS y UEFI, con XFCE sin internet y con
    XFCE, KDE Plasma, Sway y LXQt con internet.
+
+Los PR que vienen de forks (copias del proyecto en otras cuentas) solo
+pasan la revisión rápida: por seguridad no compilan la ISO, igual que en
+lazaro-linux. Esos se prueban a mano antes de fusionar.
 
 El detalle está en `.github/workflows/pruebas.yml`.
 

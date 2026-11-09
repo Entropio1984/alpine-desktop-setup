@@ -48,6 +48,10 @@ jobs:
     needs: revisar
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+    outputs:
+      # Commit de lazaro-linux con que se compiló: las pruebas usan el
+      # mismo, aunque main avance mientras tanto.
+      lazaro: ${{ steps.version.outputs.lazaro }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -64,6 +68,7 @@ jobs:
         run: |
           . lazaro/config.env
           echo "branch=$ALPINE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "lazaro=$(git -C lazaro rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Caché de Calamares compilado
         uses: actions/cache@v5
@@ -107,7 +112,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: Entropio1984/lazaro-linux
-          ref: main
+          ref: ${{ needs.iso.outputs.lazaro }}
 
       - name: Activar KVM
         run: |
