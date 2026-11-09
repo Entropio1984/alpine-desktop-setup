@@ -3673,6 +3673,26 @@ install_daily_apps() {
         log_warn "No se encontro el visor de PDF instalado; no se cambio la aplicacion predeterminada para PDF."
     fi
 
+    # --- Accesorios de XFCE ---
+    # El metapaquete xfce4 de Alpine no trae visor de fotos, editor de
+    # texto, capturas de pantalla, calculadora ni descompresor: sin ellos,
+    # una foto, un .txt o un .zip no tienen con que abrirse (MATE, GNOME y
+    # Plasma ya traen los suyos). Son los de XFCE, livianos (unos 10 MB).
+    if [ "$DE_XFCE" = "yes" ]; then
+        # En una sola línea: la edición Completa de Lázaro lee esta lista
+        # con grep para llevar los paquetes en el USB.
+        install_pkgs ristretto mousepad xfce4-screenshooter galculator xarchiver thunar-archive-plugin
+        if img_app="$(find_desktop_file org.xfce.ristretto.desktop ristretto.desktop)"; then
+            set_default_app "$img_app" \
+                image/jpeg image/png image/gif image/webp image/bmp image/tiff
+            log_ok "Visor de fotos predeterminado: $img_app"
+        fi
+        if txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop)"; then
+            set_default_app "$txt_app" text/plain
+            log_ok "Editor de texto predeterminado: $txt_app"
+        fi
+    fi
+
     # --- Reproductor multimedia ---
     # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
     # de video por hardware (VA-API) instalada en el Bloque 16. Cubre los

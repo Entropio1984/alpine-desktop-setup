@@ -367,6 +367,7 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 | Uso | Aplicación |
 |---|---|
 | PDF | Evince (Okular en Plasma) |
+| Fotos, texto, capturas, calculadora y archivos comprimidos (solo XFCE, que no los trae) | Ristretto (predeterminado para imágenes), Mousepad (predeterminado para texto), Capturas de pantalla, Galculator y Xarchiver con su menú en Thunar |
 | Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 16 |
 | Reproductor completo | VLC (opcional; `vlc` y `vlc-qt`, que trae la ventana y la entrada del menú). `mpv` sigue siendo el predeterminado |
 | YouTube | YouTube ligero (opcional): `gtk-pipe-viewer` para buscar y `mpv` para ver. Ver [YouTube ligero](#youtube-ligero) |
