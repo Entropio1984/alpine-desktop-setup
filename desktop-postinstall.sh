@@ -1781,6 +1781,9 @@ sway_conf_sesion() {
             echo "exec pulseaudio --start"
         fi
         echo "exec nm-applet --indicator"
+        # Carpetas personales en el idioma del sistema (Sway no lee
+        # /etc/xdg/autostart, donde xdg-user-dirs deja su inicio).
+        echo "exec sh -c 'command -v xdg-user-dirs-update >/dev/null && exec xdg-user-dirs-update'"
         # Ventana de contrasena para acciones de administrador (wifi
         # protegido, actualizaciones); Sway no trae una propia.
         echo "exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
@@ -3297,6 +3300,24 @@ EOF
     log_ok "Capa 2/3: variables de idioma agregadas a /etc/environment (leído por PAM en la mayoría de gestores de sesión gráficos)."
 
     install_pkg "lang"
+
+    # Carpetas personales en el idioma elegido (Escritorio, Descargas,
+    # Documentos, Imágenes...). Sin xdg-user-dirs cada programa crea la
+    # suya en inglés (Desktop, Downloads) y faltan las demás. El paquete
+    # trae un inicio automático que las crea a cada usuario nuevo al
+    # entrar; al usuario de este equipo se las crea ahora, antes de que
+    # el escritorio abra por primera vez.
+    install_pkg xdg-user-dirs
+    if command -v xdg-user-dirs-update >/dev/null 2>&1 \
+        && [ -n "$TARGET_USER" ] && [ -n "$TARGET_HOME" ]; then
+        if su -s /bin/sh "$TARGET_USER" -c \
+            "cd && LANG='$idioma' LC_ALL='$idioma' LANGUAGE='$traducciones' xdg-user-dirs-update" \
+            >>"$LOG_FILE" 2>&1; then
+            log_ok "Carpetas personales de '$TARGET_USER' creadas en su idioma."
+        else
+            log_warn "No se pudieron crear las carpetas personales de '$TARGET_USER' (se crearán al entrar)."
+        fi
+    fi
 
     if [ "$DE_PLASMA" = "yes" ]; then
         log_info "Reforzando traducciones específicas de Plasma..."
