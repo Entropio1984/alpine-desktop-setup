@@ -3298,6 +3298,24 @@ EOF
 
     install_pkg "lang"
 
+    # Carpetas personales en el idioma elegido (Escritorio, Descargas,
+    # Documentos, Imágenes...). Sin xdg-user-dirs cada programa crea la
+    # suya en inglés (Desktop, Downloads) y faltan las demás. El paquete
+    # trae un inicio automático que las crea a cada usuario nuevo al
+    # entrar; al usuario de este equipo se las crea ahora, antes de que
+    # el escritorio abra por primera vez.
+    install_pkg xdg-user-dirs
+    if command -v xdg-user-dirs-update >/dev/null 2>&1 \
+        && [ -n "$TARGET_USER" ] && [ -n "$TARGET_HOME" ]; then
+        if su -s /bin/sh "$TARGET_USER" -c \
+            "cd && LANG='$idioma' LC_ALL='$idioma' LANGUAGE='$traducciones' xdg-user-dirs-update" \
+            >>"$LOG_FILE" 2>&1; then
+            log_ok "Carpetas personales de '$TARGET_USER' en su idioma ($(sed -n 's/^XDG_DESKTOP_DIR="\$HOME\/\(.*\)"/\1/p' "$TARGET_HOME/.config/user-dirs.dirs" 2>/dev/null), ...)."
+        else
+            log_warn "No se pudieron crear las carpetas personales de '$TARGET_USER' (se crearán al entrar)."
+        fi
+    fi
+
     if [ "$DE_PLASMA" = "yes" ]; then
         log_info "Reforzando traducciones específicas de Plasma..."
         install_pkgs plasma-desktop-lang kdeplasma-addons-lang
