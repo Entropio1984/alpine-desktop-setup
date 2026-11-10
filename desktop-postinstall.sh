@@ -4680,6 +4680,16 @@ shortcut_write_launcher() {
 # el avance en vivo, ya en la sesion grafica del usuario -- ningun
 # proceso grafico cruza el limite de privilegios, solo texto plano a
 # traves de una tuberia.
+
+# En Lazaro Linux hay una ventana propia (lazaro-actualizador, con el
+# aspecto de su Bienvenida) que usa el mismo alpine-update-root.sh. Si
+# esta instalada, este boton y el aviso de actualizaciones la abren. Ella
+# misma vuelve aqui (con ALPINE_UPDATE_CLASICO=1) si no puede abrir.
+# Fuera de Lazaro ese programa no existe y todo sigue como siempre.
+if [ -z "${ALPINE_UPDATE_CLASICO:-}" ] && [ -x /usr/local/sbin/lazaro-actualizador ]; then
+    ALPINE_UPDATE_CLASICO=1 exec /usr/local/sbin/lazaro-actualizador
+fi
+
 LOG="/var/log/alpine-update.log"
 MARKER="/tmp/.alpine-update-authenticated"
 
