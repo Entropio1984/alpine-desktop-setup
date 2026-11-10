@@ -1781,6 +1781,9 @@ sway_conf_sesion() {
             echo "exec pulseaudio --start"
         fi
         echo "exec nm-applet --indicator"
+        # Carpetas personales en el idioma del sistema (Sway no lee
+        # /etc/xdg/autostart, donde xdg-user-dirs deja su inicio).
+        echo "exec sh -c 'command -v xdg-user-dirs-update >/dev/null && exec xdg-user-dirs-update'"
         # Ventana de contrasena para acciones de administrador (wifi
         # protegido, actualizaciones); Sway no trae una propia.
         echo "exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
@@ -3310,7 +3313,7 @@ EOF
         if su -s /bin/sh "$TARGET_USER" -c \
             "cd && LANG='$idioma' LC_ALL='$idioma' LANGUAGE='$traducciones' xdg-user-dirs-update" \
             >>"$LOG_FILE" 2>&1; then
-            log_ok "Carpetas personales de '$TARGET_USER' en su idioma ($(sed -n 's/^XDG_DESKTOP_DIR="\$HOME\/\(.*\)"/\1/p' "$TARGET_HOME/.config/user-dirs.dirs" 2>/dev/null), ...)."
+            log_ok "Carpetas personales de '$TARGET_USER' creadas en su idioma."
         else
             log_warn "No se pudieron crear las carpetas personales de '$TARGET_USER' (se crearán al entrar)."
         fi
