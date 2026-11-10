@@ -3911,16 +3911,21 @@ setup_software_store() {
         if [ -x /etc/init.d/apk-polkit-server ]; then
             enable_service apk-polkit-server default \
                 "No se pudo activar 'apk-polkit-server': la tienda no podra instalar programas de Alpine."
+            # En un sistema ya encendido se arranca ya, para no esperar a
+            # reiniciar. No dentro de --destino: un servicio arrancado ahi
+            # quedaria corriendo y no dejaria desmontar el disco.
+            if [ "${POSTINSTALL_EN_DESTINO:-}" != 1 ] && [ -e /run/openrc/softlevel ]; then
+                rc-service apk-polkit-server start >>"$LOG_FILE" 2>&1 \
+                    || log_warn "'apk-polkit-server' arrancara en el proximo reinicio."
+            fi
         else
             log_warn "No se encontro el servicio apk-polkit-server: la tienda no podra instalar programas de Alpine."
         fi
     fi
 
+    # Si no se pudo instalar ahora (sin internet), la tarea de abajo lo
+    # instala cuando haya conexion.
     pkg_installed alpine-appstream-downloader || install_pkgs alpine-appstream-downloader
-    if ! command -v alpine-appstream-downloader >/dev/null 2>&1; then
-        log_warn "Falta alpine-appstream-downloader: la tienda solo mostrara los programas ya instalados."
-        return 0
-    fi
 
     mkdir -p /etc/periodic/hourly
     cat > /etc/periodic/hourly/alpine-tienda-catalogo <<'INNEREOF'
@@ -3930,18 +3935,32 @@ setup_software_store() {
 # /var/lib/swcatalog). Corre cada hora, pero solo descarga si pasaron
 # 24 horas desde la ultima vez que funciono; sin internet, lo intenta
 # la hora siguiente.
+# Si falta el programa que la descarga (se instalo sin internet), se
+# instala primero. Los errores quedan en /var/log/alpine-tienda-catalogo.log.
 marca=/var/lib/swcatalog/.ultima-descarga
 [ -n "$(find "$marca" -mmin -1430 2>/dev/null)" ] && exit 0
-command -v alpine-appstream-downloader >/dev/null 2>&1 || exit 0
-timeout 600 alpine-appstream-downloader >/dev/null 2>&1 || exit 0
-mkdir -p /var/lib/swcatalog
-touch "$marca"
+# Si "Actualizar el sistema" esta trabajando, no estorbar.
+[ -d /run/alpine-update.lock ] && exit 0
+log=/var/log/alpine-tienda-catalogo.log
+{
+    date
+    command -v alpine-appstream-downloader >/dev/null 2>&1 \
+        || timeout 600 apk add -q alpine-appstream-downloader || exit 1
+    timeout 600 alpine-appstream-downloader || exit 1
+    mkdir -p /var/lib/swcatalog
+    touch "$marca"
+    echo "Catalogo descargado."
+} >"$log" 2>&1
 INNEREOF
     chmod 755 /etc/periodic/hourly/alpine-tienda-catalogo
     enable_service crond default "No se pudo habilitar 'crond': el catalogo de la tienda no se renovara solo."
 
+    # Se descarga ahora aunque haya una descarga reciente (el script se
+    # puede volver a ejecutar): solo cuenta como hecha si esta funciono.
+    rm -f /var/lib/swcatalog/.ultima-descarga
     _cat_rc=0
-    timeout 600 /etc/periodic/hourly/alpine-tienda-catalogo || _cat_rc=$?
+    timeout 900 /etc/periodic/hourly/alpine-tienda-catalogo || _cat_rc=$?
+    cat /var/log/alpine-tienda-catalogo.log >>"$LOG_FILE" 2>/dev/null || true
     if [ "$_cat_rc" -eq 0 ] && [ -e /var/lib/swcatalog/.ultima-descarga ]; then
         log_ok "Catalogo de la tienda descargado."
     else
