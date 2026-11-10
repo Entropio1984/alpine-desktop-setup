@@ -376,6 +376,8 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 
 La tienda instala y actualiza paquetes de Alpine y, si se activó Flatpak, también aplicaciones de Flathub.
 
+Para que la tienda muestre programas para instalar (y no solo los instalados), el script activa el servicio `apk-polkit-server` (lo necesita GNOME Software) y descarga la lista de programas de Alpine (catálogo AppStream, con `alpine-appstream-downloader`). Esa lista se renueva sola una vez al día (`/etc/periodic/hourly/alpine-tienda-catalogo`); si se instaló sin internet, se descarga en cuanto haya conexión, a más tardar en una hora.
+
 Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
 
 #### YouTube ligero
