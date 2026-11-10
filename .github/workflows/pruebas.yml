@@ -76,6 +76,17 @@ jobs:
           path: lazaro/cache
           key: calamares-script-${{ steps.version.outputs.branch }}-${{ hashFiles('lazaro/paquetes/**', 'lazaro/config.env', 'lazaro/build.sh') }}
 
+      # Desde lazaro-linux #53 la ISO lleva el Manual de Lázaro (PDF) y sus
+      # pruebas lo exigen en el sistema instalado: se compila igual que en
+      # el flujo de la ISO.
+      - name: Compilar el manual
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends latexmk \
+            texlive-latex-extra texlive-lang-spanish texlive-fonts-recommended \
+            tex-gyre lmodern texlive-bibtex-extra biber ghostscript
+          cd lazaro && ./manual/compilar.sh
+
       - name: Compilar la ISO
         env:
           LAZARO_SCRIPT: ${{ github.workspace }}/script/desktop-postinstall.sh
