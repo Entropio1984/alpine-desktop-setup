@@ -451,7 +451,7 @@ Si hay varios usuarios, gana la última sesión. La resolución nueva se aplica 
 ### Bloque 35 — `setup_update_shortcut`
 Crea el botón "Actualizar el sistema" (ver [la sección del botón](#el-botón-actualizar-el-sistema)). Funciona con dos scripts:
 
-- `alpine-update-launcher.sh` corre como el usuario: pregunta por el cambio de versión, pide la contraseña con `pkexec` y muestra el avance con `zenity`.
+- `alpine-update-launcher.sh` corre como el usuario: pregunta por el cambio de versión, pide la contraseña con `pkexec` y muestra el avance con `zenity`. En Lázaro Linux, si está instalado `lazaro-actualizador`, abre en su lugar esa ventana (con el aspecto de la Bienvenida de Lázaro), que usa el mismo `alpine-update-root.sh`; la de `zenity` queda como respaldo.
 - `alpine-update-root.sh` corre como administrador y solo hace el trabajo (`apk`, `flatpak`), sin ventanas.
 
 Detalles de funcionamiento:

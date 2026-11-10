@@ -4686,8 +4686,12 @@ shortcut_write_launcher() {
 # esta instalada, este boton y el aviso de actualizaciones la abren. Ella
 # misma vuelve aqui (con ALPINE_UPDATE_CLASICO=1) si no puede abrir.
 # Fuera de Lazaro ese programa no existe y todo sigue como siempre.
+# Sin 'exec': si el programa esta pero no puede arrancar (126 o 127, por
+# ejemplo porque falta Python), se sigue aqui con la ventana clasica.
 if [ -z "${ALPINE_UPDATE_CLASICO:-}" ] && [ -x /usr/local/sbin/lazaro-actualizador ]; then
-    ALPINE_UPDATE_CLASICO=1 exec /usr/local/sbin/lazaro-actualizador
+    lz_rc=0
+    ALPINE_UPDATE_CLASICO=1 /usr/local/sbin/lazaro-actualizador || lz_rc=$?
+    case "$lz_rc" in 126|127) ;; *) exit "$lz_rc" ;; esac
 fi
 
 LOG="/var/log/alpine-update.log"
