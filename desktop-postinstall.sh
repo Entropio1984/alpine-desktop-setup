@@ -3882,6 +3882,93 @@ setup_flatpak() {
 }
 
 # ------------------------------------------------------------------------------
+# BLOQUE 32b: Catalogo de la tienda de aplicaciones (GNOME Software y Discover)
+# ------------------------------------------------------------------------------
+# Sin esto, GNOME Software solo muestra los programas ya instalados y
+# ninguno para instalar (comprobado en Alpine 3.24, noviembre de 2026):
+#  - Su complemento de Alpine (gnome-software-plugin-apk2) habla con el
+#    servicio apk-polkit-server por D-Bus, pero ese servicio no arranca
+#    solo (no trae activacion por D-Bus) y Alpine no lo activa: sin el, el
+#    complemento no carga ("The name dev.Cogitri.apkPolkit2 was not
+#    provided by any .service files").
+#  - La lista de programas que se pueden instalar (el catalogo AppStream de
+#    Alpine, unos 800 programas con iconos) no viene en ningun paquete: la
+#    descarga alpine-appstream-downloader en /var/lib/swcatalog. En teoria
+#    lo llama apk-polkit-server al refrescar los repositorios, pero si el
+#    indice de apk no cambio desde el ultimo 'apk update' (por ejemplo,
+#    porque ya lo actualizo el aviso de actualizaciones) termina con el
+#    error "file is unchanged" y no descarga nada.
+# Por eso se activa el servicio, se descarga el catalogo al instalar (si
+# hay internet) y una tarea de crond lo renueva una vez al dia; sin
+# internet lo intenta cada hora hasta conseguirlo. Discover tambien lee
+# ese catalogo (el suyo propio apunta a Alpine edge).
+setup_software_store() {
+    pkg_installed gnome-software || pkg_installed discover || return 0
+    log_info "== Catalogo de la tienda de aplicaciones =="
+
+    if pkg_installed gnome-software; then
+        pkg_installed apk-polkit-rs-openrc || install_pkgs apk-polkit-rs-openrc
+        if [ -x /etc/init.d/apk-polkit-server ]; then
+            enable_service apk-polkit-server default \
+                "No se pudo activar 'apk-polkit-server': la tienda no podra instalar programas de Alpine."
+            # En un sistema ya encendido se arranca ya, para no esperar a
+            # reiniciar. No dentro de --destino: un servicio arrancado ahi
+            # quedaria corriendo y no dejaria desmontar el disco.
+            if [ "${POSTINSTALL_EN_DESTINO:-}" != 1 ] && [ -e /run/openrc/softlevel ]; then
+                rc-service apk-polkit-server start >>"$LOG_FILE" 2>&1 \
+                    || log_warn "'apk-polkit-server' arrancara en el proximo reinicio."
+            fi
+        else
+            log_warn "No se encontro el servicio apk-polkit-server: la tienda no podra instalar programas de Alpine."
+        fi
+    fi
+
+    # Si no se pudo instalar ahora (sin internet), la tarea de abajo lo
+    # instala cuando haya conexion.
+    pkg_installed alpine-appstream-downloader || install_pkgs alpine-appstream-downloader
+
+    mkdir -p /etc/periodic/hourly
+    cat > /etc/periodic/hourly/alpine-tienda-catalogo <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: descarga la lista de programas de
+# Alpine que muestra la tienda de aplicaciones (catalogo AppStream, en
+# /var/lib/swcatalog). Corre cada hora, pero solo descarga si pasaron
+# 24 horas desde la ultima vez que funciono; sin internet, lo intenta
+# la hora siguiente.
+# Si falta el programa que la descarga (se instalo sin internet), se
+# instala primero. Los errores quedan en /var/log/alpine-tienda-catalogo.log.
+marca=/var/lib/swcatalog/.ultima-descarga
+[ -n "$(find "$marca" -mmin -1430 2>/dev/null)" ] && exit 0
+# Si "Actualizar el sistema" esta trabajando, no estorbar.
+[ -d /run/alpine-update.lock ] && exit 0
+log=/var/log/alpine-tienda-catalogo.log
+{
+    date
+    command -v alpine-appstream-downloader >/dev/null 2>&1 \
+        || timeout 600 apk add -q alpine-appstream-downloader || exit 1
+    timeout 600 alpine-appstream-downloader || exit 1
+    mkdir -p /var/lib/swcatalog
+    touch "$marca"
+    echo "Catalogo descargado."
+} >"$log" 2>&1
+INNEREOF
+    chmod 755 /etc/periodic/hourly/alpine-tienda-catalogo
+    enable_service crond default "No se pudo habilitar 'crond': el catalogo de la tienda no se renovara solo."
+
+    # Se descarga ahora aunque haya una descarga reciente (el script se
+    # puede volver a ejecutar): solo cuenta como hecha si esta funciono.
+    rm -f /var/lib/swcatalog/.ultima-descarga
+    _cat_rc=0
+    timeout 900 /etc/periodic/hourly/alpine-tienda-catalogo || _cat_rc=$?
+    cat /var/log/alpine-tienda-catalogo.log >>"$LOG_FILE" 2>/dev/null || true
+    if [ "$_cat_rc" -eq 0 ] && [ -e /var/lib/swcatalog/.ultima-descarga ]; then
+        log_ok "Catalogo de la tienda descargado."
+    else
+        log_warn "No se pudo descargar ahora el catalogo de la tienda (¿sin internet?). Se descargara solo cuando haya conexion."
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # BLOQUE 33: Habilitar el Gestor de Inicio de Sesión (Display Manager)
 # ------------------------------------------------------------------------------
 # La llave de X que crea la pantalla de inicio queda atada al nombre del
@@ -5177,6 +5264,7 @@ main() {
     install_libreoffice
     install_daily_apps
     setup_flatpak
+    setup_software_store
     setup_display_manager
     setup_greeter_resolution
     setup_update_shortcut
