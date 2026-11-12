@@ -55,8 +55,14 @@ if [ ! -e /var/lib/prueba-fase1 ]; then
             decir "PRUEBA-PAQUETE $p no"
         fi
     done
-    decir "=== Flatpak pendientes (Chrome, Brave, OnlyOffice) ==="
-    cat /etc/flatpak-pendientes > "$S" 2>/dev/null || decir "(ninguno)"
+    # En 32 bits Flathub no tiene programas: el script no debe instalar
+    # Flatpak ni dejar aplicaciones "pendientes" que nunca llegarian.
+    if [ -e /etc/flatpak-pendientes ] || apk info -e flatpak >/dev/null 2>&1; then
+        decir "PRUEBA-FALLO en 32 bits quedo Flatpak instalado o con aplicaciones pendientes:"
+        cat /etc/flatpak-pendientes > "$S" 2>/dev/null
+    else
+        decir "PRUEBA-SIN-FLATPAK-OK"
+    fi
     decir "Disco usado: $(df -h / | awk 'NR==2 {print $3}')"
 
     if [ "$rc" != 0 ]; then

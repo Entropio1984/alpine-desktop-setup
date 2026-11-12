@@ -13,7 +13,7 @@
 #
 # Es una prueba aparte, que no bloquea la fusión de los PR ("Todo en verde"
 # no la incluye): corre a mano (Actions > Prueba de 32 bits > Run
-# workflow), cada martes, y en los PR que cambian esta misma prueba.
+# workflow), cada martes, y en los PR que cambian el script o esta prueba.
 name: Prueba de 32 bits
 
 on:
@@ -28,6 +28,7 @@ on:
     paths:
       - .github/workflows/prueba-32-bits.yml
       - .github/prueba-32-bits/**
+      - desktop-postinstall.sh
 
 permissions:
   contents: read
@@ -155,6 +156,7 @@ jobs:
             grep -a -m1 'PRUEBA-ARRANQUE-1' "$log" || echo "La máquina virtual no llegó a correr la prueba."
             grep -a -m1 'PRUEBA-SCRIPT' "$log" || true
             grep -a -m1 'PRUEBA-SESION-OK\|PRUEBA-FALLO' "$log" || true
+            grep -a -m1 'PRUEBA-SIN-FLATPAK-OK' "$log" || true
             grep -a -m1 'PRUEBA-MEMORIA' "$log" || true
             echo
             echo '| Paquete | Instalado |'
@@ -167,6 +169,7 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
+             && grep -aq 'PRUEBA-SIN-FLATPAK-OK' "$log" \
              && grep -aq 'PRUEBA-FIN' "$log"; then
             echo "PRUEBA-32-BITS-OK"
           else

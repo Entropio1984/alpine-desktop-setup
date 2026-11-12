@@ -230,7 +230,7 @@ Todas las decisiones se toman aquí, antes de instalar nada, y cada una queda en
 - **Sin opciones y con terminal:** el menú de casillas (ver [Menú de opciones](#menú-de-opciones)).
 - **Sin opciones y sin terminal:** las variables `OPT_*` del entorno; lo que falte lo pregunta la función `want` en su momento.
 
-En los tres casos se aplican dos reglas: OnlyOffice, Chrome y Brave activan Flatpak, y sin escritorio no se instalan programas gráficos.
+En los tres casos se aplican tres reglas: OnlyOffice, Chrome y Brave activan Flatpak; sin escritorio no se instalan programas gráficos; y en un Alpine de 32 bits (x86) no se ofrecen ni se instalan Flatpak, OnlyOffice, Chrome ni Brave, porque Flathub solo publica programas para equipos de 64 bits (si se piden con `--full` o `--con`, el script avisa y sigue).
 
 ### Bloque 9 — `setup_keyboard_layout`
 Solo si se marcó en el menú. Configura la distribución latinoamericana (`latam`) en cuatro lugares, porque cada uno la lee por su cuenta:
@@ -429,6 +429,8 @@ Para ver qué falla: `yt-dlp -v "https://www.youtube.com/watch?v=..."`. Si el pr
 Firefox ofrece cambiar su interfaz al idioma del sistema en el primer arranque. Al final, el script recomienda dos extensiones, sin instalarlas: **uBlock Origin** (bloquea publicidad y reduce la carga del procesador) y **enhanced-h264ify** (ver Bloque 16).
 
 ### Bloque 32 — `setup_flatpak`
+**No aplica en equipos de 32 bits:** Flathub solo tiene programas para 64 bits, así que en Alpine x86 este bloque se salta y las casillas de Flatpak, OnlyOffice, Chrome y Brave no aparecen en el menú. Firefox, LibreOffice y el resto de programas sí están disponibles.
+
 Solo si se marcó Flatpak, OnlyOffice, Chrome o Brave. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas. Si agregar Flathub o descargar una aplicación falla por un corte de internet, espera a que la red vuelva y lo reintenta (hasta 3 veces).
 
 **Si una aplicación de Flathub no se puede instalar en ese momento** (sin internet, o por ejemplo Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano: una vez por minuto, hasta 20 veces. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
