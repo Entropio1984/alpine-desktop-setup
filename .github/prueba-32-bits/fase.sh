@@ -30,9 +30,17 @@ if [ ! -e /var/lib/prueba-fase1 ]; then
     decir "Red lista. Corriendo desktop-postinstall.sh --escritorio $escritorio --full"
 
     inicio=$(date +%s)
-    { sh /root/desktop-postinstall.sh --escritorio "$escritorio" --full --usuario prueba 2>&1
-      echo $? > /root/prueba-rc; } | sin_colores > "$S"
-    rc="$(cat /root/prueba-rc 2>/dev/null || echo 99)"
+    # La salida va a un archivo y no a una tubería: los servicios que el
+    # script arranca heredan la salida, y con una tubería la dejarían
+    # abierta para siempre (pasó con XFCE). Una copia se va mostrando por
+    # el puerto serie.
+    : > /root/salida.txt
+    tail -f /root/salida.txt | sin_colores > "$S" &
+    rc=0
+    sh /root/desktop-postinstall.sh --escritorio "$escritorio" --full --usuario prueba \
+        > /root/salida.txt 2>&1 < /dev/null || rc=$?
+    sleep 2
+    pkill -f 'tail -f /root/salida.txt' 2>/dev/null || true
     decir "PRUEBA-SCRIPT rc=$rc minutos=$(( ($(date +%s) - inicio) / 60 ))"
 
     decir "=== Avisos y errores del script ==="
