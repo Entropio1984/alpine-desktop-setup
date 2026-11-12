@@ -41,8 +41,10 @@ env:
   # fijada a la versión 0.13.4 y comprobada con su huella.
   AMVI_URL: https://raw.githubusercontent.com/alpinelinux/alpine-make-vm-image/ab659ff532b0e27684a08d11df116b9f7665081a/alpine-make-vm-image
   AMVI_SHA256: c643b7f894e34575836c4835bd2ded6f27958ea5212c1295b4f82ccd0b670029
-  # Inicio automático de sesión: la misma herramienta que usa la ISO.
-  AUTOLOGIN_URL: https://raw.githubusercontent.com/Entropio1984/lazaro-linux/main/live/usr/share/lazaro/lazaro-autologin
+  # Inicio automático de sesión: la misma herramienta que usa la ISO,
+  # fijada a un commit de lazaro-linux y comprobada con su huella.
+  AUTOLOGIN_URL: https://raw.githubusercontent.com/Entropio1984/lazaro-linux/f9603b271c003cef122375627cf2843545a7c01e/live/usr/share/lazaro/lazaro-autologin
+  AUTOLOGIN_SHA256: 8340887fe01148bc6f318e7bb0ca9b82e0759a55f75586bd207ca5a885221692
 
 jobs:
   x86:
@@ -75,9 +77,10 @@ jobs:
       - name: Crear el disco con Alpine de 32 bits
         run: |
           mkdir vm
-          curl -fsSL "$AMVI_URL" -o vm/alpine-make-vm-image
+          curl -fsSL --retry 3 --max-time 120 "$AMVI_URL" -o vm/alpine-make-vm-image
           echo "$AMVI_SHA256  vm/alpine-make-vm-image" | sha256sum -c -
-          curl -fsSL "$AUTOLOGIN_URL" -o vm/lazaro-autologin
+          curl -fsSL --retry 3 --max-time 120 "$AUTOLOGIN_URL" -o vm/lazaro-autologin
+          echo "$AUTOLOGIN_SHA256  vm/lazaro-autologin" | sha256sum -c -
           cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh vm/
           chmod 755 vm/*.sh vm/lazaro-autologin vm/alpine-make-vm-image
           # Alpine x86 no tiene qemu-img: el disco lo crea y lo conecta
@@ -109,6 +112,7 @@ jobs:
           cd vm
           : > serie.log
           tail -f serie.log &
+          vigia=$!
           # Procesador Core Duo (2006): SSE2 y SSE3, sin 64 bits. 1 GB de RAM.
           qemu-system-i386 -enable-kvm -cpu coreduo -smp 2 -m 1024 \
             -drive file=disco.qcow2,if=virtio \
@@ -122,18 +126,22 @@ jobs:
             if [ "$capturado" = no ] && grep -q PRUEBA-CAPTURA serie.log; then
               sleep 3
               echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
-              capturado=si
+              sleep 2
+              [ ! -s captura.ppm ] || capturado=si
             fi
             if [ "$(date +%s)" -gt "$limite" ]; then
               echo "::error::La máquina virtual no terminó en 170 minutos."
               echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
               sleep 3
               kill "$qemu"
-              break
+              kill "$vigia" 2>/dev/null || true
+              exit 1
             fi
             sleep 5
           done
           sleep 2
+          kill "$vigia" 2>/dev/null || true
+          [ "$capturado" = si ] || echo "::warning::No se pudo sacar la captura de pantalla."
           [ ! -f captura.ppm ] || convert captura.ppm "captura-$ESCRITORIO.png"
 
       - name: Resultado
@@ -158,7 +166,8 @@ jobs:
             sed -n '/=== Avisos y errores del script ===/,/=== Programas instalados ===/p' "$log" | head -n 60
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log"; then
+          if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
+             && grep -aq 'PRUEBA-FIN' "$log"; then
             echo "PRUEBA-32-BITS-OK"
           else
             echo "::error::La prueba de 32 bits con $ESCRITORIO falló (ver el registro de arriba)."

@@ -47,7 +47,7 @@ if [ ! -e /var/lib/prueba-fase1 ]; then
     sin_colores < /var/log/desktop-postinstall.log | grep -E '^\[(WARN|ERROR)\]' > "$S" || decir "(ninguno)"
 
     decir "=== Programas instalados ==="
-    for p in firefox libreoffice vlc mpv pipe-viewer gtk-pipe-viewer yt-dlp fastfetch btop flatpak cups \
+    for p in firefox libreoffice vlc mpv pipe-viewer pipe-viewer-gtk yt-dlp fastfetch btop flatpak cups \
              gnome-software lightdm sddm xorg-server lxqt-session xfce4-session networkmanager pipewire; do
         if apk info -e "$p" >/dev/null 2>&1; then
             decir "PRUEBA-PAQUETE $p si $(apk info -e -v "$p" 2>/dev/null)"
