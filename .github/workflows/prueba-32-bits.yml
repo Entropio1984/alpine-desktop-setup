@@ -1,0 +1,187 @@
+# Prueba de 32 bits: Alpine x86 en una máquina virtual con 1 GB de RAM.
+#
+# Responde a "¿qué pasa si corro el script en un Alpine de 32 bits?", la
+# base de un posible Lázaro para equipos de 32 bits (netbooks Atom,
+# portátiles Pentium M / Core Duo). Por cada escritorio:
+#   1. Crea un disco con Alpine x86 recién instalado (alpine-make-vm-image,
+#      dentro de un contenedor Alpine de 32 bits): usuario normal, red y
+#      nada más, como lo deja setup-alpine.
+#   2. Lo arranca en QEMU de 32 bits (procesador Core Duo, 1 GB de RAM,
+#      sin 64 bits) y corre desktop-postinstall.sh --escritorio X --full.
+#   3. Reinicia con inicio automático de sesión, comprueba que el
+#      escritorio abre, mide la memoria y saca una captura de pantalla.
+#
+# Es una prueba aparte, que no bloquea la fusión de los PR ("Todo en verde"
+# no la incluye): corre a mano (Actions > Prueba de 32 bits > Run
+# workflow), cada martes, y en los PR que cambian el script o esta prueba.
+name: Prueba de 32 bits
+
+on:
+  workflow_dispatch:
+    inputs:
+      rama:
+        description: Rama de Alpine (v3.24, edge...)
+        default: v3.24
+  schedule:
+    - cron: '0 9 * * 2'
+  pull_request:
+    paths:
+      - .github/workflows/prueba-32-bits.yml
+      - .github/prueba-32-bits/**
+      - desktop-postinstall.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prueba-32-bits-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Herramienta oficial de Alpine para crear discos de máquinas virtuales,
+  # fijada a la versión 0.13.4 y comprobada con su huella.
+  AMVI_URL: https://raw.githubusercontent.com/alpinelinux/alpine-make-vm-image/ab659ff532b0e27684a08d11df116b9f7665081a/alpine-make-vm-image
+  AMVI_SHA256: c643b7f894e34575836c4835bd2ded6f27958ea5212c1295b4f82ccd0b670029
+  # Inicio automático de sesión: la misma herramienta que usa la ISO,
+  # fijada a un commit de lazaro-linux y comprobada con su huella.
+  AUTOLOGIN_URL: https://raw.githubusercontent.com/Entropio1984/lazaro-linux/f9603b271c003cef122375627cf2843545a7c01e/live/usr/share/lazaro/lazaro-autologin
+  AUTOLOGIN_SHA256: 8340887fe01148bc6f318e7bb0ca9b82e0759a55f75586bd207ca5a885221692
+
+jobs:
+  x86:
+    # Los PR que vienen de forks no corren pruebas pesadas (decisión de
+    # Julián, por seguridad).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Alpine 32 bits con ${{ matrix.escritorio }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        escritorio: [lxqt, xfce]
+    env:
+      RAMA: ${{ inputs.rama || 'v3.24' }}
+      ESCRITORIO: ${{ matrix.escritorio }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Activar KVM e instalar QEMU
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils socat imagemagick
+          # alpine-make-vm-image monta el disco con qemu-nbd.
+          sudo modprobe nbd max_part=16
+
+      - name: Crear el disco con Alpine de 32 bits
+        run: |
+          mkdir vm
+          curl -fsSL --retry 3 --max-time 120 "$AMVI_URL" -o vm/alpine-make-vm-image
+          echo "$AMVI_SHA256  vm/alpine-make-vm-image" | sha256sum -c -
+          curl -fsSL --retry 3 --max-time 120 "$AUTOLOGIN_URL" -o vm/lazaro-autologin
+          echo "$AUTOLOGIN_SHA256  vm/lazaro-autologin" | sha256sum -c -
+          cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh vm/
+          chmod 755 vm/*.sh vm/lazaro-autologin vm/alpine-make-vm-image
+          # Alpine x86 no tiene qemu-img: el disco lo crea y lo conecta
+          # Ubuntu (/dev/nbd0), y el contenedor trabaja sobre ese dispositivo.
+          qemu-img create -f qcow2 vm/disco.qcow2 10G
+          sudo qemu-nbd --connect=/dev/nbd0 --cache=writeback vm/disco.qcow2
+          sleep 2
+          # Contenedor Alpine de 32 bits (corre directo, sin emulación):
+          # así apk instala los paquetes x86 con las llaves de x86.
+          rc=0
+          docker run --rm --privileged --platform linux/386 \
+            -v /dev:/dev -v "$PWD/vm:/vm" -w /vm \
+            -e KEYS_DIR=/etc/apk/keys -e INSTALL_HOST_PKGS=no \
+            alpine:3.24 sh -c '
+              set -e
+              echo "Arquitectura del contenedor: $(apk --print-arch)"
+              apk add -q e2fsprogs rsync sfdisk
+              sh ./alpine-make-vm-image --branch "$0" --kernel-flavor lts \
+                --initfs-features "kms scsi virtio ata" \
+                --script-chroot /dev/nbd0 ./preparar.sh "$1"
+            ' "$RAMA" "$ESCRITORIO" || rc=$?
+          sync
+          sudo qemu-nbd --disconnect /dev/nbd0
+          [ "$rc" -eq 0 ] || exit "$rc"
+          ls -lh vm/disco.qcow2
+
+      - name: Correr el script en la máquina virtual
+        run: |
+          cd vm
+          : > serie.log
+          tail -f serie.log &
+          vigia=$!
+          # Procesador Core Duo (2006): SSE2 y SSE3, sin 64 bits. 1 GB de RAM.
+          qemu-system-i386 -enable-kvm -cpu coreduo -smp 2 -m 1024 \
+            -drive file=disco.qcow2,if=virtio \
+            -nic user,model=e1000 -vga std -display none \
+            -serial file:serie.log \
+            -monitor unix:monitor.sock,server,nowait &
+          qemu=$!
+          capturado=no
+          limite=$(( $(date +%s) + 170 * 60 ))
+          while kill -0 "$qemu" 2>/dev/null; do
+            if [ "$capturado" = no ] && grep -q PRUEBA-CAPTURA serie.log; then
+              sleep 3
+              echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
+              sleep 2
+              [ ! -s captura.ppm ] || capturado=si
+            fi
+            if [ "$(date +%s)" -gt "$limite" ]; then
+              echo "::error::La máquina virtual no terminó en 170 minutos."
+              echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
+              sleep 3
+              kill "$qemu"
+              kill "$vigia" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 5
+          done
+          sleep 2
+          kill "$vigia" 2>/dev/null || true
+          [ "$capturado" = si ] || echo "::warning::No se pudo sacar la captura de pantalla."
+          [ ! -f captura.ppm ] || convert captura.ppm "captura-$ESCRITORIO.png"
+
+      - name: Resultado
+        if: always()
+        run: |
+          cd vm
+          log=serie.log
+          {
+            echo "## Alpine 32 bits ($RAMA) con $ESCRITORIO, 1 GB de RAM"
+            echo
+            grep -a -m1 'PRUEBA-ARRANQUE-1' "$log" || echo "La máquina virtual no llegó a correr la prueba."
+            grep -a -m1 'PRUEBA-SCRIPT' "$log" || true
+            grep -a -m1 'PRUEBA-SESION-OK\|PRUEBA-FALLO' "$log" || true
+            grep -a -m1 'PRUEBA-SIN-FLATPAK-OK' "$log" || true
+            grep -a -m1 'PRUEBA-MEMORIA' "$log" || true
+            echo
+            echo '| Paquete | Instalado |'
+            echo '|---|---|'
+            grep -a '^PRUEBA-PAQUETE' "$log" | awk '{print "| " $2 " | " $3 " " $4 " |"}'
+            echo
+            echo '### Avisos del script'
+            echo '```'
+            sed -n '/=== Avisos y errores del script ===/,/=== Programas instalados ===/p' "$log" | head -n 60
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
+             && grep -aq 'PRUEBA-SIN-FLATPAK-OK' "$log" \
+             && grep -aq 'PRUEBA-FIN' "$log"; then
+            echo "PRUEBA-32-BITS-OK"
+          else
+            echo "::error::La prueba de 32 bits con $ESCRITORIO falló (ver el registro de arriba)."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: prueba-32-bits-${{ matrix.escritorio }}
+          path: |
+            vm/serie.log
+            vm/captura-*.png
+          retention-days: 14

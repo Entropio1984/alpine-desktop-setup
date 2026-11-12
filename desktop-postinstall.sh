@@ -1320,10 +1320,37 @@ aplicar_nvidia() {
     esac
 }
 
+# Flathub solo publica programas para equipos de 64 bits (x86_64 y
+# aarch64). En un Alpine de 32 bits (x86, armv7, armhf) Flatpak se
+# instala pero no hay nada que bajar: OnlyOffice, Chrome y Brave quedaban
+# "pendientes" y se reintentaban en cada arranque sin poder instalarse
+# nunca. Por eso ahi ni se ofrecen ni se instalan.
+# ARQUITECTURA se puede fijar desde fuera solo para probar.
+flathub_disponible() {
+    case "${ARQUITECTURA:-$(apk --print-arch 2>/dev/null)}" in
+        x86|armv7|armhf) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # Reglas que valen sin importar de donde salieron las decisiones:
+#  - En 32 bits no hay Flathub: ni Flatpak ni sus aplicaciones.
 #  - Las aplicaciones de Flathub necesitan Flatpak.
 #  - Sin escritorio, los programas graficos no sirven: no se instalan.
 ajustar_dependencias() {
+    if ! flathub_disponible; then
+        _omitidos=""
+        for _p in flatpak onlyoffice chrome brave; do
+            _var="$(programa_var "$_p")"
+            _val=""
+            eval "_val=\${$_var:-}"
+            [ "$_val" != "yes" ] || _omitidos="$_omitidos $_p"
+            eval "$_var=no"
+        done
+        if [ -n "$_omitidos" ]; then
+            log_warn "Este equipo es de 32 bits y Flathub solo tiene programas para 64 bits: se omiten$_omitidos."
+        fi
+    fi
     if [ "${OPT_ONLYOFFICE:-}" = "yes" ] || [ "${OPT_CHROME:-}" = "yes" ] || [ "${OPT_BRAVE:-}" = "yes" ]; then
         if [ "${OPT_FLATPAK:-}" = "no" ]; then
             log_warn "OnlyOffice, Chrome y Brave se instalan con Flatpak: se activa Flatpak."
@@ -1366,11 +1393,15 @@ menu_checklist() {
             LIBREOFFICE "LibreOffice en el idioma del sistema (paquete pesado)" "$(menu_state "$OPT_LIBREOFFICE")" \
             FIREFOX "Navegador Firefox" "$(menu_state "$OPT_FIREFOX")" \
             VLC "Reproductor de video VLC" "$(menu_state "$OPT_VLC")" \
-            YOUTUBE "YouTube ligero: buscar y ver videos sin navegador" "$(menu_state "$OPT_YOUTUBE")" \
-            FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
-            ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
-            CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
-            BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")"
+            YOUTUBE "YouTube ligero: buscar y ver videos sin navegador" "$(menu_state "$OPT_YOUTUBE")"
+        # En 32 bits Flathub no tiene programas: no se ofrecen.
+        if flathub_disponible; then
+            set -- "$@" \
+                FLATPAK "Flatpak/Flathub (tienda de aplicaciones)" "$(menu_state "$OPT_FLATPAK")" \
+                ONLYOFFICE "OnlyOffice via Flatpak (activa Flatpak)" "$(menu_state "$OPT_ONLYOFFICE")" \
+                CHROME "Google Chrome via Flatpak, paquete comunitario" "$(menu_state "$OPT_CHROME")" \
+                BRAVE "Navegador Brave via Flatpak" "$(menu_state "$OPT_BRAVE")"
+        fi
     fi
     set -- "$@" \
         UPDATE_SHORTCUT "Boton 'Actualizar el sistema' y aviso de actualizaciones" "$(menu_state "$OPT_UPDATE_SHORTCUT")"
@@ -3803,6 +3834,11 @@ print_browser_recommendations() {
 # ------------------------------------------------------------------------------
 setup_flatpak() {
     log_info "== Flatpak / Flathub =="
+
+    if ! flathub_disponible; then
+        log_info "Equipo de 32 bits: Flathub no tiene programas para 32 bits. Se omite Flatpak."
+        return 0
+    fi
 
     if ! want OPT_FLATPAK "¿Deseas habilitar Flatpak/Flathub en este sistema? (necesario solo si planeas instalar apps como OnlyOffice o Chrome desde Flathub)"; then
         log_info "Se omite Flatpak por completo (no se instala infraestructura ni se preguntará por apps individuales)."
