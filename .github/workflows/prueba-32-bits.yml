@@ -80,20 +80,28 @@ jobs:
           curl -fsSL "$AUTOLOGIN_URL" -o vm/lazaro-autologin
           cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh vm/
           chmod 755 vm/*.sh vm/lazaro-autologin vm/alpine-make-vm-image
+          # Alpine x86 no tiene qemu-img: el disco lo crea y lo conecta
+          # Ubuntu (/dev/nbd0), y el contenedor trabaja sobre ese dispositivo.
+          qemu-img create -f qcow2 vm/disco.qcow2 10G
+          sudo qemu-nbd --connect=/dev/nbd0 --cache=writeback vm/disco.qcow2
+          sleep 2
           # Contenedor Alpine de 32 bits (corre directo, sin emulación):
           # así apk instala los paquetes x86 con las llaves de x86.
+          rc=0
           docker run --rm --privileged --platform linux/386 \
             -v /dev:/dev -v "$PWD/vm:/vm" -w /vm \
-            -e KEYS_DIR=/etc/apk/keys \
+            -e KEYS_DIR=/etc/apk/keys -e INSTALL_HOST_PKGS=no \
             alpine:3.24 sh -c '
               set -e
               echo "Arquitectura del contenedor: $(apk --print-arch)"
+              apk add -q e2fsprogs rsync sfdisk
               sh ./alpine-make-vm-image --branch "$0" --kernel-flavor lts \
-                --image-format qcow2 --image-size 10G \
                 --initfs-features "kms scsi virtio ata" \
-                --script-chroot disco.qcow2 ./preparar.sh "$1"
-            ' "$RAMA" "$ESCRITORIO"
-          sudo chown "$(id -u):$(id -g)" vm/disco.qcow2
+                --script-chroot /dev/nbd0 ./preparar.sh "$1"
+            ' "$RAMA" "$ESCRITORIO" || rc=$?
+          sync
+          sudo qemu-nbd --disconnect /dev/nbd0
+          [ "$rc" -eq 0 ] || exit "$rc"
           ls -lh vm/disco.qcow2
 
       - name: Correr el script en la máquina virtual
