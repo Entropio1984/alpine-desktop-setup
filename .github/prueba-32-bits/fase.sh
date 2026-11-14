@@ -134,6 +134,16 @@ if [ "$escritorio" = icewm ]; then
     tail -n 40 /home/prueba/.xsession-errors > "$S" 2>&1
     decir "=== Cargadores de imágenes (SVG para los íconos Papirus) ==="
     ls /usr/lib/gdk-pixbuf-2.0/*/loaders/ > "$S" 2>&1
+    decir "=== IceWM: opciones de la barra de herramientas ==="
+    grep -i -n 'toolbar' /usr/share/icewm/preferences > "$S" 2>&1 || true
+    strings /usr/bin/icewm 2>/dev/null | grep -i 'toolbar' | head -n 20 > "$S" 2>&1 || true
+    decir "=== IceWM: bibliotecas de imagen ==="
+    ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
+    decir "=== Paquetes con cargador SVG ==="
+    apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
+    apk search -q 'librsvg*' 'gdk-pixbuf*' 2>/dev/null > "$S" || true
+    decir "=== Registro de lxsession ==="
+    tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
     decir "=== Menú de aplicaciones de IceWM ==="
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
