@@ -4605,6 +4605,24 @@ show_mounts=1
 always_show_tabs=0
 PCMANFM
     fi
+    # PCManFM 1.3 lee el escritorio de desktop-items-0.conf (la seccion
+    # [desktop] de arriba solo la usan versiones viejas): papelera y
+    # discos en el escritorio, como en LXDE.
+    if [ ! -e "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf" ]; then
+        cat > "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf" <<'ESCRITORIO'
+[*]
+wallpaper_mode=color
+desktop_bg=#3a6593
+desktop_fg=#ffffff
+desktop_shadow=#000000
+desktop_font=DejaVu Sans 10
+show_wm_menu=0
+show_documents=0
+show_trash=1
+show_mounts=1
+sort=mtime;ascending;
+ESCRITORIO
+    fi
     # Terminal de los menus de PCManFM: LXTerminal.
     if [ -f /etc/xdg/libfm/libfm.conf ]; then
         if grep -q '^terminal=' /etc/xdg/libfm/libfm.conf; then
