@@ -143,8 +143,11 @@ if [ "$escritorio" = icewm ]; then
     ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
     decir "=== Paquetes con cargador SVG ==="
     apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
-    { find / -xdev -path '*glycin*' -type f 2>/dev/null | head -n 20
-      cat /usr/share/glycin-loaders/*/conf.d/* 2>/dev/null | head -n 30
+    { ls /usr/lib/imlib2/loaders /usr/lib/imlib2/*/ 2>&1 | head -n 40
+      apk search -q 'imlib2*' 2>&1
+      apk info -L icewm 2>/dev/null | grep -v -E 'share/(icewm/themes|locale|doc|man)' | head -n 40
+      icewm --version 2>&1 | head -n 5
+      icewm --directories 2>&1 | head -n 20
       for f in /usr/share/icons/Papirus/16x16/apps/firefox.svg /usr/share/icons/hicolor/32x32/apps/firefox.png; do
           su -s /bin/sh prueba -c "python3 -c \"import gi; gi.require_version('GdkPixbuf', '2.0'); from gi.repository import GdkPixbuf as P; p = P.Pixbuf.new_from_file('$f'); print('$f', p.get_width(), p.get_height())\"" 2>&1 | tail -n 3
       done
