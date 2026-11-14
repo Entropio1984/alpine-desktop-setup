@@ -48,7 +48,7 @@ if [ ! -e /var/lib/prueba-fase1 ]; then
 
     decir "=== Programas instalados ==="
     for p in firefox libreoffice vlc mpv pipe-viewer pipe-viewer-gtk yt-dlp fastfetch btop flatpak cups \
-             gnome-software lightdm sddm xorg-server lxqt-session xfce4-session networkmanager pipewire; do
+             gnome-software lightdm sddm xorg-server lxqt-session xfce4-session icewm lxsession pcmanfm networkmanager pipewire; do
         if apk info -e "$p" >/dev/null 2>&1; then
             decir "PRUEBA-PAQUETE $p si $(apk info -e -v "$p" 2>/dev/null)"
         else
@@ -92,6 +92,7 @@ case "$escritorio" in
     lxqt) proceso=lxqt-session ;;
     xfce) proceso=xfce4-session ;;
     mate) proceso=mate-session ;;
+    icewm) proceso=icewm ;;
     *)    proceso="$escritorio" ;;
 esac
 
@@ -113,6 +114,23 @@ decir "PRUEBA-SESION-OK $proceso abrió en $((i * 2)) s"
 
 # Se deja asentar la sesión (programas que arrancan solos, avisos...).
 sleep 90
+
+# IceWM: lo que debe arrancar con la sesión de LXDE, y el menú de
+# aplicaciones tal como lo ve el usuario.
+if [ "$escritorio" = icewm ]; then
+    falta=""
+    for p in lxsession pcmanfm nm-applet lxpolkit; do
+        pgrep -x "$p" >/dev/null 2>&1 || falta="$falta $p"
+    done
+    if [ -z "$falta" ]; then
+        decir "PRUEBA-ICEWM-OK lxsession, pcmanfm, nm-applet y lxpolkit corriendo"
+    else
+        decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
+        ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
+    fi
+    decir "=== Menú de aplicaciones de IceWM ==="
+    su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
+fi
 
 decir "=== Memoria con la sesión abierta y sin programas (MB) ==="
 free -m > "$S"

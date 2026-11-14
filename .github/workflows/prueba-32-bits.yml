@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        escritorio: [lxqt, xfce]
+        escritorio: [lxqt, xfce, icewm]
     env:
       RAMA: ${{ inputs.rama || 'v3.24' }}
       ESCRITORIO: ${{ matrix.escritorio }}
@@ -158,6 +158,7 @@ jobs:
             grep -a -m1 'PRUEBA-SESION-OK\|PRUEBA-FALLO' "$log" || true
             grep -a -m1 'PRUEBA-SIN-FLATPAK-OK' "$log" || true
             grep -a -m1 'PRUEBA-MEMORIA' "$log" || true
+            grep -a -m1 'PRUEBA-ICEWM-OK' "$log" || true
             echo
             echo '| Paquete | Instalado |'
             echo '|---|---|'
@@ -170,6 +171,8 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
              && grep -aq 'PRUEBA-SIN-FLATPAK-OK' "$log" \
+             && ! grep -aq 'PRUEBA-FALLO' "$log" \
+             && { [ "$ESCRITORIO" != icewm ] || grep -aq 'PRUEBA-ICEWM-OK' "$log"; } \
              && grep -aq 'PRUEBA-FIN' "$log"; then
             echo "PRUEBA-32-BITS-OK"
           else
