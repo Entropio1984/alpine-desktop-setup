@@ -4101,13 +4101,14 @@ setup_icewm() {
     [ "$DE_ICEWM" = "yes" ] || return 0
     log_info "== IceWM con apariencia de LXDE =="
     # En una sola línea: la ISO de Lázaro lee esta lista con grep.
-    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs librsvg glycin-svg glycin-image-rs
+    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs rsvg-convert
 
     icewm_sesion
     icewm_preferencias
     icewm_tema
     icewm_menu
     icewm_barra
+    icewm_iconos
     icewm_teclas
     icewm_pcmanfm
     log_ok "IceWM configurado (sesion '$ICEWM_SESION')."
@@ -4136,7 +4137,7 @@ upgrade_manager/command=
 
 [GTK]
 sNet/ThemeName=Greybird
-sNet/IconThemeName=Papirus
+sNet/IconThemeName=Papirus-Light
 sGtk/FontName=DejaVu Sans 10
 sGtk/CursorThemeName=
 iGtk/ToolbarStyle=3
@@ -4188,7 +4189,7 @@ SESION
         cat > /etc/gtk-3.0/settings.ini <<'GTK'
 [Settings]
 gtk-theme-name=Greybird
-gtk-icon-theme-name=Papirus
+gtk-icon-theme-name=Papirus-Light
 gtk-font-name=DejaVu Sans 10
 GTK
     fi
@@ -4248,7 +4249,7 @@ OpaqueResize=0
 SupportSemitransparency=0
 
 # Iconos y letras.
-IconPath="/usr/share/icons/Papirus:/usr/share/icons/hicolor:/usr/share/pixmaps"
+IconPath="/usr/share/icewm-lxde/iconos:/usr/share/icons/hicolor:/usr/share/pixmaps"
 MenuIconSize=16
 SmallIconSize=16
 LargeIconSize=32
@@ -4469,6 +4470,70 @@ includeprog /usr/local/libexec/icewm-lxde/menu-aplicaciones
 separator
 prog "$_salir" system-log-out lxsession-logout
 MENU
+}
+
+# Iconos en PNG para IceWM. IceWM de Alpine dibuja con Imlib2, que no
+# abre SVG, y Papirus solo trae SVG: sin esto el menu y la barra salen
+# sin iconos. Se pasan a PNG (16 y 32 px) solo los que usan el menu y la
+# barra, y se repite despues de cada instalacion con apk (los programas
+# nuevos traen sus iconos).
+icewm_iconos() {
+    mkdir -p /usr/local/libexec/icewm-lxde /etc/apk/commit_hooks.d
+    cat > /usr/local/libexec/icewm-lxde/iconos <<'ICONOS'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: pasa a PNG los iconos del menu y
+# la barra de IceWM (nombre_16x16.png y nombre_32x32.png).
+destino=/usr/share/icewm-lxde/iconos
+command -v rsvg-convert >/dev/null 2>&1 || exit 0
+mkdir -p "$destino" || exit 0
+
+nombres() {
+    {
+        /usr/local/libexec/icewm-lxde/menu-aplicaciones 2>/dev/null
+        cat /etc/icewm/toolbar /etc/icewm/menu 2>/dev/null
+    } | sed -En 's/^[[:space:]]*(menu|prog) "[^"]*" ([^ ]+).*/\2/p'
+}
+
+buscar() { # NOMBRE TAMANO
+    for tema in Papirus-Light Papirus; do
+        for f in /usr/share/icons/$tema/${2}x${2}/*/"$1".svg; do
+            [ -f "$f" ] && { echo "$f"; return 0; }
+        done
+    done
+    for f in /usr/share/icons/hicolor/${2}x${2}/apps/"$1".png \
+        /usr/share/icons/hicolor/scalable/apps/"$1".svg \
+        /usr/share/pixmaps/"$1".png /usr/share/pixmaps/"$1".svg; do
+        [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    return 1
+}
+
+nombres | sort -u | while read -r n; do
+    case "$n" in ""|*/*) continue ;; esac
+    n="${n%.png}"; n="${n%.svg}"; n="${n%.xpm}"
+    for tam in 16 32; do
+        sal="$destino/${n}_${tam}x${tam}.png"
+        [ -s "$sal" ] && continue
+        f="$(buscar "$n" "$tam" || buscar "$n" 48 || buscar "$n" 64)" || continue
+        rsvg-convert -w "$tam" -h "$tam" -o "$sal" "$f" 2>/dev/null || rm -f "$sal"
+    done
+done
+exit 0
+ICONOS
+    chmod 755 /usr/local/libexec/icewm-lxde/iconos
+    # rsvg-convert tambien abre PNG, asi quedan todos del tamano justo.
+    cat > /etc/apk/commit_hooks.d/icewm-lxde-iconos.hook <<'HOOK'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: iconos de IceWM para los
+# programas recien instalados.
+[ "$1" = post-commit ] || exit 0
+[ -x /usr/local/libexec/icewm-lxde/iconos ] || exit 0
+/usr/local/libexec/icewm-lxde/iconos >/dev/null 2>&1 &
+exit 0
+HOOK
+    chmod 755 /etc/apk/commit_hooks.d/icewm-lxde-iconos.hook
+    /usr/local/libexec/icewm-lxde/iconos || true
+    log_info "Iconos de IceWM: $(find /usr/share/icewm-lxde/iconos -name '*.png' 2>/dev/null | wc -l) en PNG."
 }
 
 # Botones de la barra (a la derecha del menu): los que esten instalados.

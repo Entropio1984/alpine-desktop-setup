@@ -141,17 +141,8 @@ if [ "$escritorio" = icewm ]; then
     DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 xwininfo -root -tree 2>&1 | grep -i -E 'ice|tool|button|object' | head -n 40 > "$S" 2>&1 || true
     decir "=== IceWM: bibliotecas de imagen ==="
     ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
-    decir "=== Paquetes con cargador SVG ==="
-    apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
-    { ls /usr/lib/imlib2/loaders /usr/lib/imlib2/*/ 2>&1 | head -n 40
-      apk search -q 'imlib2*' 2>&1
-      apk info -L icewm 2>/dev/null | grep -v -E 'share/(icewm/themes|locale|doc|man)' | head -n 40
-      icewm --version 2>&1 | head -n 5
-      icewm --directories 2>&1 | head -n 20
-      for f in /usr/share/icons/Papirus/16x16/apps/firefox.svg /usr/share/icons/hicolor/32x32/apps/firefox.png; do
-          su -s /bin/sh prueba -c "python3 -c \"import gi; gi.require_version('GdkPixbuf', '2.0'); from gi.repository import GdkPixbuf as P; p = P.Pixbuf.new_from_file('$f'); print('$f', p.get_width(), p.get_height())\"" 2>&1 | tail -n 3
-      done
-    } > "$S" 2>&1 || true
+    decir "=== Iconos PNG para IceWM ==="
+    { ls /usr/share/icewm-lxde/iconos | wc -l; ls /usr/share/icewm-lxde/iconos | head -n 30; } > "$S" 2>&1 || true
     decir "=== Registro de lxsession ==="
     tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
     decir "=== Menú de aplicaciones de IceWM ==="
