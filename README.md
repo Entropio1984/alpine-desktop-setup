@@ -34,7 +34,7 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 ## Requisitos
 
 - Alpine Linux instalado con `setup-alpine`.
-- Un escritorio instalado con `setup-desktop`: XFCE, KDE Plasma, GNOME, MATE, LXQt o Sway. El script lo complementa; también puede instalarlo él mismo con `--escritorio` (ver [Opciones](#opciones-de-la-línea-de-órdenes)). Sin escritorio, hace solo la configuración de consola.
+- Un escritorio instalado con `setup-desktop`: XFCE, KDE Plasma, GNOME, MATE, LXQt o Sway. El script lo complementa; también puede instalarlo él mismo con `--escritorio` (ver [Opciones](#opciones-de-la-línea-de-órdenes)), incluido **IceWM con apariencia de LXDE**, el más liviano, que `setup-desktop` no tiene. Sin escritorio, hace solo la configuración de consola.
 - Repositorios `main` y `community` habilitados en `/etc/apk/repositories`. Casi todo lo que instala el script está en `community`.
 - Conexión a internet.
 - Acceso de administrador (`doas` o una sesión de `root`).
@@ -84,7 +84,7 @@ Sin opciones aparece el menú. Con cualquiera de estas opciones (salvo `--usuari
 | `--teclado latam` o `--teclado no` | Teclado latinoamericano, o no tocar el teclado |
 | `--nvidia seguro`, `optimus` o `activa` | Qué hacer con una NVIDIA (ver [Bloque 16](#bloque-16--install_drivers)). `optimus` es el modo automático: en portátiles con dos gráficas apaga la NVIDIA; en los demás equipos la deja activa si es Kepler (2012) o más nueva y usa el modo seguro si es más antigua o no se identificó |
 | `--usuario NOMBRE` | El usuario del escritorio, si no se puede adivinar |
-| `--escritorio NOMBRE` | Instala antes ese escritorio con `setup-desktop`: `xfce`, `xfce-wayland`, `mate`, `lxqt`, `gnome`, `plasma` o `sway` |
+| `--escritorio NOMBRE` | Instala antes ese escritorio con `setup-desktop`: `xfce`, `xfce-wayland`, `mate`, `lxqt`, `gnome`, `plasma` o `sway`. Con `icewm`, el script instala él mismo IceWM con apariencia de LXDE (ver Bloque 32c) |
 | `--destino CARPETA` | Configura el sistema instalado en esa carpeta, sin reiniciar |
 | `--ayuda` | Muestra la ayuda |
 
@@ -208,10 +208,10 @@ Son **hasta 4 intentos** en total, y cada reintento sigue donde quedó, porque `
 `ensure_hw_tools` instala `pciutils` y `usbutils`. El BusyBox de Alpine trae un `lsusb` reducido que solo muestra códigos numéricos, sin los nombres que necesitan los bloques de detección.
 
 ### Bloque 5 — `install_desktop`
-Solo con `--escritorio NOMBRE`. Instala ese escritorio con `setup-desktop`, la herramienta de Alpine, antes de todo lo demás. Si falla (por ejemplo, por un corte de internet), espera a la red y lo repite hasta 3 veces. Si el escritorio ya estaba, `setup-desktop` solo comprueba que no falte nada.
+Solo con `--escritorio NOMBRE`. Instala ese escritorio con `setup-desktop`, la herramienta de Alpine, antes de todo lo demás. `icewm` no está en `setup-desktop`: el script pone la misma base gráfica (`setup-xorg-base`), IceWM, `lxsession` (la sesión de LXDE) y LightDM. Si falla (por ejemplo, por un corte de internet), espera a la red y lo repite hasta 3 veces. Si el escritorio ya estaba, `setup-desktop` solo comprueba que no falte nada.
 
 ### Bloque 6 — `detect_desktop_environment`
-Pregunta a `apk` qué escritorios están instalados y guarda el resultado en `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE`, `DE_LXQT` y `DE_SWAY`. Si hay más de uno, configura todos.
+Pregunta a `apk` qué escritorios están instalados y guarda el resultado en `DE_XFCE`, `DE_PLASMA`, `DE_GNOME`, `DE_MATE`, `DE_LXQT`, `DE_SWAY` y `DE_ICEWM` (IceWM junto con `lxsession`). Si hay más de uno, configura todos.
 
 ### Bloque 7 — `detect_hardware`
 Clasifica todas las tarjetas gráficas leyendo `/sys` (fabricante y tipo en números, sin depender del texto de `lspci`). Además averigua:
@@ -267,6 +267,7 @@ Luego instala los indicadores de red y volumen de cada escritorio:
 | MATE | `network-manager-applet` | `mate-media` |
 | LXQt | `network-manager-applet` | `pavucontrol-qt` (el control de la bandeja ya viene en `lxqt-panel`) |
 | Sway | `network-manager-applet` (en la bandeja de `waybar`) | control de volumen de `waybar`; al hacer clic abre `pavucontrol` |
+| IceWM | `network-manager-applet` (en la bandeja de IceWM) | botón "Volumen" de la barra (`pavucontrol`) y las teclas de volumen del teclado (`pactl`); Alpine no tiene un control de volumen para bandeja |
 
 En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para cada usuario sale de `/etc/xdg/xfce4/panel/default.xml`, que no lo incluye. El script lo agrega ahí, junto al área de notificación y con las teclas de volumen activadas. Solo afecta a los usuarios que todavía no entraron a XFCE; quien ya tiene su panel lo agrega con clic derecho en el panel > Panel > Agregar elementos > Plugin de audio PulseAudio.
 
@@ -435,6 +436,18 @@ Solo si se marcó Flatpak, OnlyOffice, Chrome o Brave. Instala Flatpak, agrega F
 
 **Si una aplicación de Flathub no se puede instalar en ese momento** (sin internet, o por ejemplo Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano: una vez por minuto, hasta 20 veces. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
 
+### Bloque 32c — `setup_icewm`
+Solo con IceWM. Es el escritorio más liviano del script, pensado para equipos con 1 GB de memoria: IceWM (ventanas y barra) dentro de la sesión de LXDE (`lxsession`), sin compositor ni efectos. Queda así:
+
+- **Sesión** `icewm-lxde` ("IceWM (estilo LXDE)" en LightDM, que la ofrece primero): `lxsession` arranca IceWM, los programas de `/etc/xdg/autostart` (red, aviso de actualizaciones), el agente de contraseñas `lxpolkit` y aplica el tema a los programas GTK. "Salir" abre la ventana de LXDE (`lxsession-logout`): cerrar sesión, reiniciar o apagar.
+- **Barra abajo**, como en LXDE: menú, botones para el navegador, archivos (PCManFM), terminal (LXTerminal) y volumen, las ventanas abiertas, la bandeja y el reloj. La batería aparece solo en portátiles.
+- **Menú de aplicaciones** por categorías y en el idioma del sistema (español, inglés o portugués). Alpine compila IceWM sin traducciones, así que el menú lo arma `/usr/local/libexec/icewm-lxde/menu-aplicaciones` a partir de los `.desktop` cada vez que IceWM lo carga. Los menús propios de IceWM (por ejemplo el de cada ventana) quedan en inglés.
+- **Apariencia:** tema plano `lxde-plano` (títulos azules, barra y menús claros, sin imágenes), tema GTK Greybird, iconos Papirus y letra DejaVu Sans. Iconos del escritorio con PCManFM sobre fondo azul liso.
+- **Teclas:** Super abre el menú, teclas de volumen, Imprimir guarda una captura en Imágenes (`scrot`), Super+E abre Archivos y Ctrl+Alt+T la terminal.
+- **Accesorios** (Bloque 31): GPicView (fotos), Mousepad (texto), Galculator, Xarchiver (archivos comprimidos) y `scrot`.
+
+Todo va en `/etc/icewm/` (`preferences`, `menu`, `toolbar`, `keys`, `themes/lxde-plano/`), `/etc/xdg/lxsession/icewm-lxde/` y `/etc/xdg/pcmanfm/icewm-lxde/`. Cada usuario puede cambiar algo copiando el archivo a `~/.icewm/`. Sin tienda de aplicaciones (GNOME Software o Discover pesan demasiado para estos equipos).
+
 ### Bloque 33 — `setup_display_manager`
 Habilita la pantalla de inicio de sesión que corresponde al escritorio: SDDM para Plasma, GDM para GNOME y LightDM para los demás. Si hay más de una instalada, avisa cuál eligió. Si no hay ninguna de esas tres pero está **greetd** (la que usan Sway y XFCE Wayland), habilita greetd.
 
@@ -567,6 +580,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 - **Montaje de USB:** depende de que `elogind` reconozca la sesión gráfica como activa. Si al montar pide la contraseña de root, el problema está ahí, no en los grupos del usuario.
 - **Resolución de la pantalla de inicio:** no funciona con greetd (Sway, XFCE Wayland), que usa la resolución que sugiere el monitor. Con varios usuarios, la pantalla de inicio usa la resolución de la última sesión, sea de quien sea.
 - **Escritorio:** el script no elige ni configura un escritorio por su cuenta: o ya está instalado, o se pide con `--escritorio`.
+- **IceWM:** Alpine lo compila sin traducciones: el menú de aplicaciones sale en el idioma del sistema, pero los menús propios de IceWM (el de cada ventana: minimizar, cerrar...) quedan en inglés.
 - **`--destino`:** la carpeta no puede tener espacios. Las aplicaciones de Flathub que no se pueden instalar dentro de un `chroot` (como Chrome) quedan para después del primer arranque.
 
 ## Solución de problemas
@@ -648,6 +662,8 @@ pasan la revisión rápida: por seguridad no compilan la ISO, igual que en
 lazaro-linux. Esos se prueban a mano antes de fusionar.
 
 El detalle está en `.github/workflows/pruebas.yml`.
+
+Aparte está la **prueba de 32 bits** (`.github/workflows/prueba-32-bits.yml`), que no bloquea la fusión: instala Alpine x86 en una máquina virtual con 1 GB de memoria, corre el script con LXQt, XFCE e IceWM, entra a la sesión, mide la memoria y saca una captura de pantalla. Con IceWM además comprueba que la sesión de LXDE arrancó (red en la bandeja, iconos del escritorio, agente de contraseñas) y muestra el menú de aplicaciones.
 
 ---
 

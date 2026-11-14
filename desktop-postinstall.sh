@@ -127,8 +127,9 @@ programa_var() {
     esac
 }
 
-# Escritorios que acepta --escritorio (los de setup-desktop de Alpine).
-ESCRITORIOS="xfce xfce-wayland mate lxqt gnome plasma sway"
+# Escritorios que acepta --escritorio: los de setup-desktop de Alpine e
+# IceWM con apariencia de LXDE (lo instala el propio script, Bloque 5).
+ESCRITORIOS="xfce xfce-wayland mate lxqt gnome plasma sway icewm"
 
 ARG_MODO=""          # vacio, "full" o "minimo"
 ARG_MENU="no"        # --menu: mostrar el menu aunque haya opciones
@@ -166,7 +167,9 @@ de abajo (salvo --usuario, --escritorio y --destino) no pregunta nada.
                        en adelante, Kepler, y si no la bloquea).
   --usuario NOMBRE     Usuario del escritorio (si no se puede adivinar).
   --escritorio NOMBRE  Instala antes ese escritorio con setup-desktop:
-                       xfce, xfce-wayland, mate, lxqt, gnome, plasma o sway.
+                       xfce, xfce-wayland, mate, lxqt, gnome, plasma o sway;
+                       o icewm (IceWM con apariencia de LXDE, el mas
+                       liviano, para equipos con 1 GB de memoria).
   --destino CARPETA    Configura el sistema instalado en CARPETA (p. ej.
                        /mnt) sin reiniciar, desde el sistema en uso.
   --ayuda              Muestra esta ayuda.
@@ -886,6 +889,10 @@ hw_revisado() {
 # falte nada.
 install_desktop() {
     [ -n "$ARG_ESCRITORIO" ] || return 0
+    if [ "$ARG_ESCRITORIO" = icewm ]; then
+        instalar_icewm
+        return 0
+    fi
     log_info "== Escritorio: $ARG_ESCRITORIO (setup-desktop) =="
     command -v setup-desktop >/dev/null 2>&1 || install_pkg alpine-conf
     command -v setup-desktop >/dev/null 2>&1 \
@@ -904,6 +911,37 @@ install_desktop() {
     morir "No se pudo instalar el escritorio '$ARG_ESCRITORIO' (detalles en $LOG_FILE)."
 }
 
+# IceWM con apariencia de LXDE (--escritorio icewm): no esta en
+# setup-desktop, asi que se instala aqui con la misma base grafica
+# (setup-xorg-base) y la pantalla de inicio de XFCE (LightDM). lxsession
+# hace de sesion de LXDE: arranca lo de /etc/xdg/autostart, el agente de
+# contrasenas (lxpolkit), aplica el tema GTK y trae la ventana de "Salir".
+# La barra, el menu y el tema los configura setup_icewm (Bloque 32c).
+instalar_icewm() {
+    log_info "== Escritorio: icewm (IceWM con apariencia de LXDE) =="
+    command -v setup-xorg-base >/dev/null 2>&1 || install_pkg alpine-conf
+    command -v setup-xorg-base >/dev/null 2>&1 \
+        || morir "No esta 'setup-xorg-base' (paquete alpine-conf): no se puede instalar el escritorio."
+    for _intento in 1 2 3; do
+        if con_avance setup-xorg-base >>"$LOG_FILE" 2>&1; then
+            break
+        fi
+        [ "$_intento" -lt 3 ] || morir "No se pudo instalar la base grafica (setup-xorg-base; detalles en $LOG_FILE)."
+        log_warn "setup-xorg-base fallo; se reintenta ($_intento/3)..."
+        esperar_red || break
+    done
+    # En una sola linea: la ISO de Lazaro lee esta lista con grep para
+    # llevar los paquetes en el USB.
+    install_pkgs icewm lxsession lightdm lightdm-gtk-greeter dbus dbus-x11 elogind polkit-elogind gvfs udisks2 font-dejavu
+    if ! pkg_installed icewm || ! pkg_installed lxsession; then
+        morir "No se pudo instalar IceWM (detalles en $LOG_FILE)."
+    fi
+    enable_service dbus
+    enable_service elogind
+    enable_service lightdm
+    log_ok "Escritorio 'icewm' instalado."
+}
+
 # ------------------------------------------------------------------------------
 # BLOQUE 6: Detección multiparadigma del entorno de escritorio
 # ------------------------------------------------------------------------------
@@ -913,10 +951,11 @@ DE_GNOME="no"
 DE_MATE="no"
 DE_LXQT="no"
 DE_SWAY="no"
+DE_ICEWM="no"
 
 # Devuelve 0 si se detecto al menos un entorno de escritorio.
 has_desktop() {
-    [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]
+    [ "$DE_XFCE" = "yes" ] || [ "$DE_PLASMA" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ] || [ "$DE_ICEWM" = "yes" ]
 }
 
 detect_desktop_environment() {
@@ -936,6 +975,11 @@ detect_desktop_environment() {
     pkg_installed mate-session-manager && { DE_MATE="yes"; log_ok "MATE detectado."; }
     pkg_installed lxqt-session && { DE_LXQT="yes"; log_ok "LXQt detectado."; }
     pkg_installed sway && { DE_SWAY="yes"; log_ok "Sway detectado."; }
+    # IceWM cuenta como escritorio con lxsession, que le da la sesion de
+    # LXDE (programas que arrancan solos, apariencia, salir).
+    if pkg_installed icewm && pkg_installed lxsession; then
+        DE_ICEWM="yes"; log_ok "IceWM (estilo LXDE) detectado."
+    fi
 
     if ! has_desktop; then
         log_warn "No se detectó un entorno soportado. Se instalarán herramientas genéricas de consola."
@@ -1771,6 +1815,13 @@ setup_applets() {
         setup_sway_barra
     fi
 
+    if [ "$DE_ICEWM" = "yes" ]; then
+        # IceWM no tiene control de volumen propio: el boton "Volumen" de
+        # la barra abre pavucontrol y las teclas de volumen usan pactl
+        # (setup_icewm). nm-applet va en la bandeja de IceWM.
+        install_pkgs network-manager-applet pavucontrol
+    fi
+
     enable_service networkmanager
 
     log_ok "Arquitectura de red y audio acoplada al entorno visual."
@@ -2548,7 +2599,7 @@ agente=no
 for c in /proc/[0-9]*/comm; do
     [ -O "$c" ] || continue
     read -r n < "$c" 2>/dev/null || continue
-    case "$n" in polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*) agente=si; break ;; esac
+    case "$n" in polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*|lxpolkit) agente=si; break ;; esac
 done
 if [ "$agente" = no ]; then
     for a in /usr/libexec/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 \
@@ -3219,6 +3270,11 @@ setup_usb_automount() {
         install_pkgs gvfs lxqt-policykit
     fi
 
+    if [ "$DE_ICEWM" = "yes" ]; then
+        # El agente de contrasenas (lxpolkit) viene con lxsession.
+        install_pkg "gvfs"
+    fi
+
     if [ "$DE_PLASMA" = "yes" ]; then
         log_info "Plasma detectado: Dolphin usa KIO/Solid + udisks2 directamente, sin necesidad de gvfs."
     fi
@@ -3715,7 +3771,7 @@ install_daily_apps() {
     if [ "$DE_PLASMA" = "yes" ]; then
         install_pkgs okular
     fi
-    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
+    if [ "$DE_XFCE" = "yes" ] || [ "$DE_GNOME" = "yes" ] || [ "$DE_MATE" = "yes" ] || [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ] || [ "$DE_ICEWM" = "yes" ]; then
         install_pkgs evince
     fi
     if pdf_app="$(find_desktop_file org.gnome.Evince.desktop evince.desktop okularApplication_pdf.desktop org.kde.okular.desktop)"; then
@@ -3748,6 +3804,25 @@ install_daily_apps() {
             log_ok "Editor de texto predeterminado: $txt_app"
         else
             log_warn "No se encontro Mousepad instalado; no se cambio el editor de texto predeterminado."
+        fi
+    fi
+
+    # --- Accesorios de IceWM (estilo LXDE) ---
+    # Los mismos que trae LXDE: visor de fotos, editor de texto,
+    # calculadora, descompresor y capturas de pantalla (tecla Imprimir,
+    # setup_icewm). Todos GTK y livianos.
+    if [ "$DE_ICEWM" = "yes" ]; then
+        # En una sola línea: la ISO de Lázaro lee esta lista con grep.
+        install_pkgs gpicview mousepad galculator xarchiver scrot
+        if img_app="$(find_desktop_file gpicview.desktop)"; then
+            set_default_app "$img_app" \
+                image/jpeg image/png image/gif image/webp image/bmp image/tiff \
+                image/x-icon image/vnd.microsoft.icon image/x-portable-pixmap image/x-tga
+            log_ok "Visor de fotos predeterminado: $img_app"
+        fi
+        if txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop)"; then
+            set_default_app "$txt_app" text/plain
+            log_ok "Editor de texto predeterminado: $txt_app"
         fi
     fi
 
@@ -4001,6 +4076,477 @@ INNEREOF
         log_ok "Catalogo de la tienda descargado."
     else
         log_warn "No se pudo descargar ahora el catalogo de la tienda (¿sin internet?). Se descargara solo cuando haya conexion."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# BLOQUE 32c: IceWM con apariencia de LXDE
+# ------------------------------------------------------------------------------
+# El escritorio mas liviano del script, pensado para equipos con 1 GB de
+# memoria: IceWM (ventanas y barra, unos 10 MB) dentro de la sesion de
+# LXDE (lxsession). Sin compositor ni efectos. Queda como LXDE:
+#   - Barra abajo con el menu, botones para el navegador, archivos,
+#     terminal y volumen, las ventanas abiertas, la bandeja (red, avisos)
+#     y el reloj. Bateria solo en portatiles.
+#   - Menu de aplicaciones por categorias en el idioma del sistema (lo
+#     arma /usr/local/libexec/icewm-lxde/menu-aplicaciones cada vez que
+#     IceWM carga el menu: Alpine compila IceWM sin traducciones).
+#   - Iconos del escritorio con PCManFM, tema GTK Greybird e iconos
+#     Papirus, ventana de "Salir" de LXDE.
+# Todo va en /etc (para todos los usuarios); cada usuario puede cambiarlo
+# copiando el archivo a ~/.icewm/.
+ICEWM_SESION="icewm-lxde"
+
+setup_icewm() {
+    [ "$DE_ICEWM" = "yes" ] || return 0
+    log_info "== IceWM con apariencia de LXDE =="
+    # En una sola línea: la ISO de Lázaro lee esta lista con grep.
+    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs librsvg glycin-svg glycin-image-rs
+
+    icewm_sesion
+    icewm_preferencias
+    icewm_tema
+    icewm_menu
+    icewm_barra
+    icewm_teclas
+    icewm_pcmanfm
+    log_ok "IceWM configurado (sesion '$ICEWM_SESION')."
+}
+
+# Sesion: lxsession con su perfil propio. Arranca IceWM, lo de
+# /etc/xdg/autostart (red, avisos), el agente de contrasenas y aplica el
+# tema GTK a todos los programas (xsettings).
+icewm_sesion() {
+    mkdir -p "/etc/xdg/lxsession/$ICEWM_SESION" /usr/share/xsessions
+    cat > "/etc/xdg/lxsession/$ICEWM_SESION/desktop.conf" <<'CONF'
+# Generado por desktop-postinstall.sh: sesion de LXDE con IceWM.
+[Session]
+windows_manager/command=icewm
+disable_autostart=no
+polkit/command=lxpolkit
+clipboard/command=
+xsettings_manager/command=build-in
+proxy_manager/command=build-in
+keyring/command=
+quit_manager/command=lxsession-logout
+quit_manager/layout=top
+lock_manager/command=
+terminal_manager/command=lxterminal
+upgrade_manager/command=
+
+[GTK]
+sNet/ThemeName=Greybird
+sNet/IconThemeName=Papirus
+sGtk/FontName=DejaVu Sans 10
+sGtk/CursorThemeName=
+iGtk/ToolbarStyle=3
+iGtk/ToolbarIconSize=3
+iGtk/ButtonImages=1
+iGtk/MenuImages=1
+iXft/Antialias=1
+iXft/Hinting=1
+sXft/HintStyle=hintslight
+sXft/RGBA=rgb
+
+[Dbus]
+lxde=true
+
+[State]
+guess_default=false
+CONF
+    # Iconos del escritorio (PCManFM) si esta instalado.
+    : > "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
+    if command -v pcmanfm >/dev/null 2>&1; then
+        echo "@pcmanfm --desktop --profile $ICEWM_SESION" > "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
+    fi
+
+    cat > "/usr/share/xsessions/$ICEWM_SESION.desktop" <<SESION
+[Desktop Entry]
+Type=Application
+Name=IceWM (estilo LXDE)
+Comment=Escritorio liviano para equipos con poca memoria
+Exec=lxsession -s $ICEWM_SESION -e LXDE
+TryExec=lxsession
+DesktopNames=LXDE
+SESION
+
+    # LightDM ofrece esta sesion primero (IceWM trae ademas las suyas,
+    # sin la sesion de LXDE: sin red en la bandeja ni iconos).
+    if [ -d /etc/lightdm ]; then
+        mkdir -p /etc/lightdm/lightdm.conf.d
+        cat > /etc/lightdm/lightdm.conf.d/40-icewm-lxde.conf <<SESION
+# Generado por desktop-postinstall.sh
+[Seat:*]
+user-session=$ICEWM_SESION
+SESION
+    fi
+
+    # Programas que se abren fuera de la sesion (por ejemplo con doas)
+    # tambien con el tema de la sesion.
+    mkdir -p /etc/gtk-3.0
+    if [ ! -e /etc/gtk-3.0/settings.ini ]; then
+        cat > /etc/gtk-3.0/settings.ini <<'GTK'
+[Settings]
+gtk-theme-name=Greybird
+gtk-icon-theme-name=Papirus
+gtk-font-name=DejaVu Sans 10
+GTK
+    fi
+}
+
+icewm_preferencias() {
+    mkdir -p /etc/icewm
+    cat > /etc/icewm/preferences <<'PREF'
+# Generado por desktop-postinstall.sh: IceWM con apariencia de LXDE.
+# Cada usuario puede cambiarlo copiando este archivo a ~/.icewm/.
+Theme="lxde-plano/default.theme"
+
+# Barra abajo, como en LXDE: menu, botones, ventanas, bandeja y reloj.
+TaskBarAtTop=0
+TaskBarAutoHide=0
+TaskBarShowStartMenu=1
+TaskBarShowWindows=1
+TaskBarShowTray=1
+TaskBarShowClock=1
+TaskBarClockLeds=0
+TimeFormat="%H:%M"
+TaskBarShowShowDesktopButton=1
+TaskBarShowWorkspaces=0
+TaskBarShowWindowListMenu=0
+TaskBarShowCPUStatus=0
+TaskBarShowNetStatus=0
+TaskBarShowMEMStatus=0
+TaskBarShowMailboxStatus=0
+TaskBarShowCollapseButton=0
+# Bateria: solo si el equipo tiene una.
+TaskBarShowAPMStatus=0
+TaskBarShowAPMAuto=1
+TaskBarLaunchOnSingleClick=1
+
+# Menu: solo las aplicaciones (en el idioma del sistema) y "Salir" de
+# LXDE. Lo demas de IceWM esta en ingles (Alpine lo compila sin
+# traducciones) y no hace falta.
+ShowProgramsMenu=0
+ShowSettingsMenu=0
+ShowFocusModeMenu=0
+ShowThemesMenu=0
+ShowHelp=0
+ShowAbout=0
+ShowRun=0
+ShowWindowList=0
+ShowLogoutMenu=0
+ShowLogoutSubMenu=0
+
+# Ventanas: clic para enfocar, sin efectos ni transparencias.
+ClickToFocus=1
+RaiseOnFocus=1
+FocusOnAppRaise=1
+QuickSwitch=1
+EdgeSwitch=0
+OpaqueMove=1
+OpaqueResize=0
+SupportSemitransparency=0
+
+# Iconos y letras.
+IconPath="/usr/share/icons/Papirus:/usr/share/icons/hicolor:/usr/share/pixmaps"
+MenuIconSize=16
+SmallIconSize=16
+LargeIconSize=32
+TitleFontNameXft="DejaVu Sans:size=10:bold"
+MenuFontNameXft="DejaVu Sans:size=10"
+NormalTaskBarFontNameXft="DejaVu Sans:size=10"
+ActiveTaskBarFontNameXft="DejaVu Sans:size=10"
+ToolButtonFontNameXft="DejaVu Sans:size=10"
+StatusFontNameXft="DejaVu Sans Mono:size=10"
+QuickSwitchFontNameXft="DejaVu Sans:size=10"
+ClockFontNameXft="DejaVu Sans:size=10"
+ToolTipFontNameXft="DejaVu Sans:size=10"
+
+# El fondo y los iconos del escritorio los pone PCManFM.
+DesktopBackgroundCenter=0
+PREF
+}
+
+# Tema plano con los colores de LXDE: titulos azules, barra y menus
+# claros. Sin imagenes: se dibuja rapido en cualquier grafica.
+icewm_tema() {
+    mkdir -p /etc/icewm/themes/lxde-plano
+    cat > /etc/icewm/themes/lxde-plano/default.theme <<'TEMA'
+# Generado por desktop-postinstall.sh: tema plano al estilo de LXDE.
+ThemeDescription="Plano, al estilo de LXDE"
+Look=flat
+TitleBarHeight=22
+TitleBarJustify=0
+TitleBarHorzOffset=6
+BorderSizeX=3
+BorderSizeY=3
+DlgBorderSizeX=3
+DlgBorderSizeY=3
+CornerSizeX=12
+CornerSizeY=12
+TitleButtonsLeft="s"
+TitleButtonsRight="imx"
+TitleButtonsSupported="ismx"
+TaskBarClockLeds=0
+
+ColorActiveTitleBar="#3d6a9e"
+ColorActiveTitleBarText="#ffffff"
+ColorNormalTitleBar="#d4d4d4"
+ColorNormalTitleBarText="#4a4a4a"
+ColorActiveBorder="#3d6a9e"
+ColorNormalBorder="#bdbdbd"
+ColorActiveButton="#c8d7ea"
+ColorNormalButton="#ececec"
+ColorNormalButtonText="#202020"
+ColorActiveButtonText="#000000"
+ColorDialog="#efefef"
+ColorInput="#ffffff"
+ColorInputText="#000000"
+ColorInputSelection="#3d6a9e"
+ColorInputSelectionText="#ffffff"
+ColorToolTip="#ffffe1"
+ColorToolTipText="#000000"
+
+ColorDefaultTaskBar="#ececec"
+ColorNormalTaskBarApp="#ececec"
+ColorNormalTaskBarAppText="#202020"
+ColorActiveTaskBarApp="#c8d7ea"
+ColorActiveTaskBarAppText="#000000"
+ColorMinimizedTaskBarApp="#e0e0e0"
+ColorMinimizedTaskBarAppText="#707070"
+ColorInvisibleTaskBarAppText="#909090"
+ColorClock="#ececec"
+ColorClockText="#202020"
+ColorApm="#ececec"
+ColorApmText="#202020"
+
+ColorNormalMenu="#f7f7f7"
+ColorNormalMenuItemText="#202020"
+ColorActiveMenuItem="#3d6a9e"
+ColorActiveMenuItemText="#ffffff"
+ColorDisabledMenuItemText="#9a9a9a"
+ColorDisabledMenuItemShadow="#f7f7f7"
+ColorMenuIconBackground="#f7f7f7"
+
+ColorQuickSwitch="#f7f7f7"
+ColorQuickSwitchText="#202020"
+ColorQuickSwitchActive="#3d6a9e"
+TEMA
+}
+
+# Menu de aplicaciones. Alpine compila IceWM sin traducciones, asi que el
+# menu de IceWM (icewm-menu-fdo) quedaria con las categorias en ingles:
+# se arma uno propio con los nombres en el idioma del sistema.
+icewm_menu() {
+    mkdir -p /usr/local/libexec/icewm-lxde
+    cat > /usr/local/libexec/icewm-lxde/menu-aplicaciones <<'MENU'
+#!/bin/sh
+# Generado por desktop-postinstall.sh. Escribe el menu de aplicaciones de
+# IceWM (formato de ~/.icewm/menu) a partir de los .desktop instalados:
+# categorias y nombres en el idioma de la sesion (espanol, ingles o
+# portugues). IceWM lo ejecuta al cargar el menu ("includeprog").
+idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-es}}}"
+idioma="${idioma%%.*}"
+idioma="${idioma%%@*}"
+corto="${idioma%%_*}"
+datos="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# Los del usuario primero: tapan a los del sistema con el mismo nombre.
+set --
+vistos=" "
+viejo_ifs="$IFS"; IFS=:
+for d in $datos; do
+    IFS="$viejo_ifs"
+    for f in "$d"/applications/*.desktop; do
+        [ -f "$f" ] || continue
+        b="${f##*/}"
+        case "$vistos" in *" $b "*) continue ;; esac
+        vistos="$vistos$b "
+        set -- "$@" "$f"
+    done
+    IFS=:
+done
+IFS="$viejo_ifs"
+[ $# -gt 0 ] || exit 0
+
+awk -v largo="$idioma" -v corto="$corto" '
+    function salida() {
+        if (archivo == "" || tipo != "Application" || nodisp == "true" || oculto == "true") return
+        if (solo != "" && solo !~ /(^|;)LXDE(;|$)/) return
+        if (nomostrar ~ /(^|;)LXDE(;|$)/) return
+        if (prueba != "" && system("command -v \"" prueba "\" >/dev/null 2>&1") != 0) return
+        n = (nl != "") ? nl : ((nc != "") ? nc : nombre)
+        if (n == "" || ejec == "") return
+        gsub(/"/, "\047", n)
+        e = ejec
+        gsub(/ ?%[fFuUdDnNickvm]/, "", e)
+        gsub(/%%/, "%", e)
+        if (term == "true") e = "lxterminal -e " e
+        c = "otros"
+        if (cats ~ /(^|;)(AudioVideo|Audio|Video)(;|$)/) c = "multimedia"
+        else if (cats ~ /(^|;)Development(;|$)/) c = "programacion"
+        else if (cats ~ /(^|;)(Education|Science)(;|$)/) c = "educacion"
+        else if (cats ~ /(^|;)Game(;|$)/) c = "juegos"
+        else if (cats ~ /(^|;)Graphics(;|$)/) c = "graficos"
+        else if (cats ~ /(^|;)Network(;|$)/) c = "internet"
+        else if (cats ~ /(^|;)Office(;|$)/) c = "oficina"
+        else if (cats ~ /(^|;)Settings(;|$)/) c = "preferencias"
+        else if (cats ~ /(^|;)System(;|$)/) c = "sistema"
+        else if (cats ~ /(^|;)Utility(;|$)/) c = "accesorios"
+        printf "%s\t%s\t%s\t%s\n", c, n, (icono != "" ? icono : "-"), e
+    }
+    FNR == 1 {
+        salida()
+        archivo = FILENAME; seccion = ""; tipo = ""; nodisp = ""; oculto = ""
+        solo = ""; nomostrar = ""; prueba = ""; nombre = ""; nl = ""; nc = ""
+        ejec = ""; term = ""; cats = ""; icono = ""
+    }
+    /^\[/ { seccion = $0; next }
+    seccion != "[Desktop Entry]" { next }
+    {
+        i = index($0, "="); if (i == 0) next
+        k = substr($0, 1, i - 1); v = substr($0, i + 1)
+        sub(/[ \t]+$/, "", k)
+        sub(/^[ \t]+/, "", v)
+        if (k == "Type") tipo = v
+        else if (k == "NoDisplay") nodisp = v
+        else if (k == "Hidden") oculto = v
+        else if (k == "OnlyShowIn") solo = v
+        else if (k == "NotShowIn") nomostrar = v
+        else if (k == "TryExec") prueba = v
+        else if (k == "Name") nombre = v
+        else if (k == "Name[" largo "]") nl = v
+        else if (k == "Name[" corto "]") nc = v
+        else if (k == "Exec") ejec = v
+        else if (k == "Terminal") term = v
+        else if (k == "Categories") cats = v
+        else if (k == "Icon") icono = v
+    }
+    END { salida() }
+' "$@" | LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2f | awk -F '\t' -v corto="$corto" '
+    BEGIN {
+        split("multimedia programacion educacion juegos graficos internet oficina preferencias sistema accesorios otros", orden, " ")
+        icono["multimedia"] = "applications-multimedia"; icono["programacion"] = "applications-development"
+        icono["educacion"] = "applications-education"; icono["juegos"] = "applications-games"
+        icono["graficos"] = "applications-graphics"; icono["internet"] = "applications-internet"
+        icono["oficina"] = "applications-office"; icono["preferencias"] = "preferences-desktop"
+        icono["sistema"] = "applications-system"; icono["accesorios"] = "applications-accessories"
+        icono["otros"] = "applications-other"
+        if (corto == "pt") {
+            t["accesorios"] = "Acessórios"; t["educacion"] = "Educação"; t["juegos"] = "Jogos"
+            t["graficos"] = "Gráficos"; t["internet"] = "Internet"; t["oficina"] = "Escritório"
+            t["programacion"] = "Programação"; t["multimedia"] = "Som e vídeo"
+            t["preferencias"] = "Preferências"; t["sistema"] = "Ferramentas do sistema"; t["otros"] = "Outros"
+        } else if (corto == "es") {
+            t["accesorios"] = "Accesorios"; t["educacion"] = "Educación"; t["juegos"] = "Juegos"
+            t["graficos"] = "Gráficos"; t["internet"] = "Internet"; t["oficina"] = "Oficina"
+            t["programacion"] = "Programación"; t["multimedia"] = "Sonido y video"
+            t["preferencias"] = "Preferencias"; t["sistema"] = "Herramientas del sistema"; t["otros"] = "Otros"
+        } else {
+            t["accesorios"] = "Accessories"; t["educacion"] = "Education"; t["juegos"] = "Games"
+            t["graficos"] = "Graphics"; t["internet"] = "Internet"; t["oficina"] = "Office"
+            t["programacion"] = "Programming"; t["multimedia"] = "Sound & Video"
+            t["preferencias"] = "Preferences"; t["sistema"] = "System Tools"; t["otros"] = "Other"
+        }
+    }
+    { linea[$1] = linea[$1] "    prog \"" $2 "\" " $3 " " $4 "\n" }
+    END {
+        for (j = 1; j <= 11; j++) {
+            c = orden[j]
+            if (!(c in linea)) continue
+            printf "menu \"%s\" %s {\n%s}\n", t[c], icono[c], linea[c]
+        }
+    }'
+MENU
+    chmod 755 /usr/local/libexec/icewm-lxde/menu-aplicaciones
+
+    _salir="Salir"
+    case "${OPT_LANG:-es}" in en*) _salir="Log Out" ;; pt*) _salir="Sair" ;; esac
+    cat > /etc/icewm/menu <<MENU
+# Generado por desktop-postinstall.sh: aplicaciones por categorias (en el
+# idioma de la sesion) y la ventana de salir de LXDE.
+includeprog /usr/local/libexec/icewm-lxde/menu-aplicaciones
+separator
+prog "$_salir" system-log-out lxsession-logout
+MENU
+}
+
+# Botones de la barra (a la derecha del menu): los que esten instalados.
+icewm_barra() {
+    {
+        echo "# Generado por desktop-postinstall.sh: botones de la barra."
+        if command -v firefox >/dev/null 2>&1; then
+            echo 'prog "Firefox" firefox firefox'
+        elif command -v netsurf-gtk3 >/dev/null 2>&1; then
+            echo 'prog "NetSurf" netsurf netsurf-gtk3'
+        fi
+        command -v pcmanfm >/dev/null 2>&1 && echo 'prog "Archivos" system-file-manager pcmanfm'
+        command -v lxterminal >/dev/null 2>&1 && echo 'prog "Terminal" utilities-terminal lxterminal'
+        command -v pavucontrol >/dev/null 2>&1 && echo 'prog "Volumen" multimedia-volume-control pavucontrol'
+        true
+    } > /etc/icewm/toolbar
+}
+
+# Teclas: volumen (las del teclado del portatil), capturas con Imprimir,
+# Super+E archivos y Ctrl+Alt+T terminal. La tecla Super sola abre el
+# menu (IceWM lo hace por su cuenta).
+icewm_teclas() {
+    cat > /usr/local/libexec/icewm-lxde/captura <<'CAPTURA'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: captura de pantalla con Imprimir.
+d="$(xdg-user-dir PICTURES 2>/dev/null)"
+[ -n "$d" ] && [ -d "$d" ] || d="$HOME"
+exec scrot "$d/Captura-%Y-%m-%d-%H%M%S.png"
+CAPTURA
+    chmod 755 /usr/local/libexec/icewm-lxde/captura
+    cat > /etc/icewm/keys <<'TECLAS'
+# Generado por desktop-postinstall.sh
+key "XF86AudioRaiseVolume"  pactl set-sink-volume @DEFAULT_SINK@ +5%
+key "XF86AudioLowerVolume"  pactl set-sink-volume @DEFAULT_SINK@ -5%
+key "XF86AudioMute"         pactl set-sink-mute @DEFAULT_SINK@ toggle
+key "Print"                 /usr/local/libexec/icewm-lxde/captura
+key "Super+e"               pcmanfm
+key "Alt+Ctrl+t"            lxterminal
+TECLAS
+}
+
+# PCManFM: iconos del escritorio sobre un fondo azul liso (como LXDE) y
+# memorias USB que se abren solas. Lo usa el perfil de la sesion.
+icewm_pcmanfm() {
+    command -v pcmanfm >/dev/null 2>&1 || return 0
+    mkdir -p "/etc/xdg/pcmanfm/$ICEWM_SESION"
+    if [ ! -e "/etc/xdg/pcmanfm/$ICEWM_SESION/pcmanfm.conf" ]; then
+        cat > "/etc/xdg/pcmanfm/$ICEWM_SESION/pcmanfm.conf" <<'PCMANFM'
+# Generado por desktop-postinstall.sh: PCManFM en IceWM (estilo LXDE).
+[config]
+bm_open_method=0
+
+[volume]
+mount_on_startup=1
+mount_removable=1
+autorun=1
+
+[desktop]
+wallpaper_mode=color
+desktop_bg=#3a6593
+desktop_fg=#ffffff
+desktop_shadow=#000000
+show_wm_menu=0
+show_documents=0
+show_trash=1
+show_mounts=1
+
+[ui]
+always_show_tabs=0
+PCMANFM
+    fi
+    # Terminal de los menus de PCManFM: LXTerminal.
+    if [ -f /etc/xdg/libfm/libfm.conf ]; then
+        if grep -q '^terminal=' /etc/xdg/libfm/libfm.conf; then
+            sed -i 's|^terminal=.*|terminal=lxterminal -e %s|' /etc/xdg/libfm/libfm.conf
+        else
+            sed -i '/^\[config\]/a terminal=lxterminal -e %s' /etc/xdg/libfm/libfm.conf
+        fi
     fi
 }
 
@@ -4857,7 +5403,7 @@ polkit_agent_running() {
         [ -O "$c" ] || continue
         read -r name < "$c" 2>/dev/null || continue
         case "$name" in
-            polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*) return 0 ;;
+            polkit-gnome-*|polkit-kde-*|polkit-mate-*|lxqt-policykit*|lxpolkit) return 0 ;;
         esac
     done
     return 1
@@ -5095,7 +5641,7 @@ INNEREOF
 # abren el boton "Actualizar el sistema". Plasma trae su propio aviso
 # (Discover) y Sway lo muestra en waybar (sway_config_waybar).
 shortcut_write_notifier() {
-    if [ "$DE_XFCE" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_GNOME" = "no" ]; then
+    if [ "$DE_XFCE" = "no" ] && [ "$DE_MATE" = "no" ] && [ "$DE_LXQT" = "no" ] && [ "$DE_GNOME" = "no" ] && [ "$DE_ICEWM" = "no" ]; then
         return 0
     fi
     install_pkgs py3-gobject3 gtk+3.0 libnotify
@@ -5301,6 +5847,7 @@ main() {
     install_daily_apps
     setup_flatpak
     setup_software_store
+    setup_icewm
     setup_display_manager
     setup_greeter_resolution
     setup_update_shortcut

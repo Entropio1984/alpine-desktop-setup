@@ -48,7 +48,7 @@ if [ ! -e /var/lib/prueba-fase1 ]; then
 
     decir "=== Programas instalados ==="
     for p in firefox libreoffice vlc mpv pipe-viewer pipe-viewer-gtk yt-dlp fastfetch btop flatpak cups \
-             gnome-software lightdm sddm xorg-server lxqt-session xfce4-session networkmanager pipewire; do
+             gnome-software lightdm sddm xorg-server lxqt-session xfce4-session icewm lxsession pcmanfm networkmanager pipewire; do
         if apk info -e "$p" >/dev/null 2>&1; then
             decir "PRUEBA-PAQUETE $p si $(apk info -e -v "$p" 2>/dev/null)"
         else
@@ -92,6 +92,7 @@ case "$escritorio" in
     lxqt) proceso=lxqt-session ;;
     xfce) proceso=xfce4-session ;;
     mate) proceso=mate-session ;;
+    icewm) proceso=icewm ;;
     *)    proceso="$escritorio" ;;
 esac
 
@@ -113,6 +114,48 @@ decir "PRUEBA-SESION-OK $proceso abrió en $((i * 2)) s"
 
 # Se deja asentar la sesión (programas que arrancan solos, avisos...).
 sleep 90
+
+# IceWM: lo que debe arrancar con la sesión de LXDE, y el menú de
+# aplicaciones tal como lo ve el usuario.
+if [ "$escritorio" = icewm ]; then
+    falta=""
+    for p in lxsession pcmanfm nm-applet lxpolkit; do
+        pgrep -x "$p" >/dev/null 2>&1 || falta="$falta $p"
+    done
+    if [ -z "$falta" ]; then
+        decir "PRUEBA-ICEWM-OK lxsession, pcmanfm, nm-applet y lxpolkit corriendo"
+    else
+        decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
+        ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
+    fi
+    decir "=== Barra de IceWM (/etc/icewm/toolbar) ==="
+    cat /etc/icewm/toolbar > "$S" 2>&1
+    decir "=== Avisos de la sesión (.xsession-errors) ==="
+    tail -n 40 /home/prueba/.xsession-errors > "$S" 2>&1
+    decir "=== Cargadores de imágenes (SVG para los íconos Papirus) ==="
+    ls /usr/lib/gdk-pixbuf-2.0/*/loaders/ > "$S" 2>&1
+    decir "=== IceWM: opciones de la barra (TaskBar*, ToolBar, Object) ==="
+    grep -n -i -E '^#? *(TaskBar|.*Object|.*ToolBar)[A-Za-z]*=' /usr/share/icewm/preferences > "$S" 2>&1 || true
+    decir "=== IceWM: ventanas de la barra ==="
+    apk add -q xwininfo >/dev/null 2>&1 || true
+    DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 xwininfo -root -tree 2>&1 | grep -i -E 'ice|tool|button|object' | head -n 40 > "$S" 2>&1 || true
+    decir "=== IceWM: bibliotecas de imagen ==="
+    ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
+    decir "=== Paquetes con cargador SVG ==="
+    apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
+    { apk info -R gdk-pixbuf gdk-pixbuf-loaders librsvg
+      apk search -q '*glycin*' '*svg*' '*rsvg*'
+      ls -R /usr/libexec/glycin-loaders /usr/share/glycin-loaders 2>&1 | head -n 20
+      ls -l /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
+      grep -c . /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
+      command -v rsvg-convert bwrap
+      gdk-pixbuf-csource /usr/share/icons/Papirus/16x16/apps/firefox.svg 2>&1 | head -n 2
+    } > "$S" 2>&1 || true
+    decir "=== Registro de lxsession ==="
+    tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
+    decir "=== Menú de aplicaciones de IceWM ==="
+    su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
+fi
 
 decir "=== Memoria con la sesión abierta y sin programas (MB) ==="
 free -m > "$S"
