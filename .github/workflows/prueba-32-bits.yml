@@ -144,6 +144,15 @@ jobs:
           kill "$vigia" 2>/dev/null || true
           [ "$capturado" = si ] || echo "::warning::No se pudo sacar la captura de pantalla."
           [ ! -f captura.ppm ] || convert captura.ppm "captura-$ESCRITORIO.png"
+          # Copia chica (640x360, como las de la pantalla Escritorio del
+          # instalador de Lázaro) impresa en el registro: los archivos de
+          # resultados no siempre se pueden descargar.
+          if [ -f captura.ppm ]; then
+            convert captura.ppm -resize 640x360! -strip "chica-$ESCRITORIO.png"
+            echo "CAPTURA-BASE64-INICIO"
+            base64 -w 0 "chica-$ESCRITORIO.png"; echo
+            echo "CAPTURA-BASE64-FIN"
+          fi
 
       - name: Resultado
         if: always()
