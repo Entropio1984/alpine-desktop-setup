@@ -4183,16 +4183,15 @@ SESION
 
     # Programas que se abren fuera de la sesion (por ejemplo con doas)
     # tambien con el tema de la sesion.
-    for _gtk in /etc/gtk-3.0; do
-        mkdir -p "$_gtk"
-        [ -e "$_gtk/settings.ini" ] && continue
-        cat > "$_gtk/settings.ini" <<'GTK'
+    mkdir -p /etc/gtk-3.0
+    if [ ! -e /etc/gtk-3.0/settings.ini ]; then
+        cat > /etc/gtk-3.0/settings.ini <<'GTK'
 [Settings]
 gtk-theme-name=Greybird
 gtk-icon-theme-name=Papirus
 gtk-font-name=DejaVu Sans 10
 GTK
-    done
+    fi
 }
 
 icewm_preferencias() {
