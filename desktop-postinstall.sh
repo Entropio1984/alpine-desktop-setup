@@ -4101,7 +4101,7 @@ setup_icewm() {
     [ "$DE_ICEWM" = "yes" ] || return 0
     log_info "== IceWM con apariencia de LXDE =="
     # En una sola línea: la ISO de Lázaro lee esta lista con grep.
-    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs
+    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs librsvg
 
     icewm_sesion
     icewm_preferencias

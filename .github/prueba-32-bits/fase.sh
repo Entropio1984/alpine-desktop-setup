@@ -128,6 +128,12 @@ if [ "$escritorio" = icewm ]; then
         decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
         ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
     fi
+    decir "=== Barra de IceWM (/etc/icewm/toolbar) ==="
+    cat /etc/icewm/toolbar > "$S" 2>&1
+    decir "=== Avisos de la sesión (.xsession-errors) ==="
+    tail -n 40 /home/prueba/.xsession-errors > "$S" 2>&1
+    decir "=== Cargadores de imágenes (SVG para los íconos Papirus) ==="
+    ls /usr/lib/gdk-pixbuf-2.0/*/loaders/ > "$S" 2>&1
     decir "=== Menú de aplicaciones de IceWM ==="
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
