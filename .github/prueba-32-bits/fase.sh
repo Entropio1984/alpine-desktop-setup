@@ -143,7 +143,14 @@ if [ "$escritorio" = icewm ]; then
     ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
     decir "=== Paquetes con cargador SVG ==="
     apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
-    apk info -L gdk-pixbuf-loaders 2>/dev/null | head -n 20 > "$S" || true
+    { apk info -R gdk-pixbuf gdk-pixbuf-loaders librsvg
+      apk search -q '*glycin*' '*svg*' '*rsvg*'
+      ls -R /usr/libexec/glycin-loaders /usr/share/glycin-loaders 2>&1 | head -n 20
+      ls -l /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
+      grep -c . /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
+      command -v rsvg-convert bwrap
+      gdk-pixbuf-csource /usr/share/icons/Papirus/16x16/apps/firefox.svg 2>&1 | head -n 2
+    } > "$S" 2>&1 || true
     decir "=== Registro de lxsession ==="
     tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
     decir "=== Menú de aplicaciones de IceWM ==="
