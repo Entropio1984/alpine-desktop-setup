@@ -143,7 +143,7 @@ if [ "$escritorio" = icewm ]; then
     ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
     decir "=== Paquetes con cargador SVG ==="
     apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
-    apk search -q 'librsvg*' 'gdk-pixbuf*' 2>/dev/null > "$S" || true
+    apk info -L gdk-pixbuf-loaders 2>/dev/null | head -n 20 > "$S" || true
     decir "=== Registro de lxsession ==="
     tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
     decir "=== Menú de aplicaciones de IceWM ==="

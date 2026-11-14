@@ -4101,7 +4101,7 @@ setup_icewm() {
     [ "$DE_ICEWM" = "yes" ] || return 0
     log_info "== IceWM con apariencia de LXDE =="
     # En una sola línea: la ISO de Lázaro lee esta lista con grep.
-    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs librsvg
+    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs librsvg gdk-pixbuf-loaders
 
     icewm_sesion
     icewm_preferencias
@@ -4219,8 +4219,8 @@ TaskBarShowMEMStatus=0
 TaskBarShowMailboxStatus=0
 TaskBarShowCollapseButton=0
 # Bateria: solo si el equipo tiene una.
-TaskBarShowApm=0
-TaskBarShowApmAuto=1
+TaskBarShowAPMStatus=0
+TaskBarShowAPMAuto=1
 TaskBarLaunchOnSingleClick=1
 
 # Menu: solo las aplicaciones (en el idioma del sistema) y "Salir" de
