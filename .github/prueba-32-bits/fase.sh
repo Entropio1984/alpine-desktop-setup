@@ -128,23 +128,18 @@ if [ "$escritorio" = icewm ]; then
         decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
         ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
     fi
+    # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
+    # quedan sin iconos.
+    iconos=$(ls /usr/share/icewm-lxde/iconos 2>/dev/null | grep -c '_16x16\.png$')
+    if [ "$iconos" -ge 10 ]; then
+        decir "PRUEBA-ICEWM-ICONOS-OK $iconos iconos en PNG"
+    else
+        decir "PRUEBA-FALLO IceWM: solo $iconos iconos en PNG (barra y menú sin iconos)"
+    fi
     decir "=== Barra de IceWM (/etc/icewm/toolbar) ==="
     cat /etc/icewm/toolbar > "$S" 2>&1
     decir "=== Avisos de la sesión (.xsession-errors) ==="
-    tail -n 40 /home/prueba/.xsession-errors > "$S" 2>&1
-    decir "=== Cargadores de imágenes (SVG para los íconos Papirus) ==="
-    ls /usr/lib/gdk-pixbuf-2.0/*/loaders/ > "$S" 2>&1
-    decir "=== IceWM: opciones de la barra (TaskBar*, ToolBar, Object) ==="
-    grep -n -i -E '^#? *(TaskBar|.*Object|.*ToolBar)[A-Za-z]*=' /usr/share/icewm/preferences > "$S" 2>&1 || true
-    decir "=== IceWM: ventanas de la barra ==="
-    apk add -q xwininfo >/dev/null 2>&1 || true
-    DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 xwininfo -root -tree 2>&1 | grep -i -E 'ice|tool|button|object' | head -n 40 > "$S" 2>&1 || true
-    decir "=== IceWM: bibliotecas de imagen ==="
-    ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
-    decir "=== Iconos PNG para IceWM ==="
-    { ls /usr/share/icewm-lxde/iconos | wc -l; ls /usr/share/icewm-lxde/iconos | head -n 30; } > "$S" 2>&1 || true
-    decir "=== Registro de lxsession ==="
-    tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
+    tail -n 20 /home/prueba/.xsession-errors > "$S" 2>&1 || true
     decir "=== Menú de aplicaciones de IceWM ==="
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
