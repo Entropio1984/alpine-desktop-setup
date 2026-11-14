@@ -143,13 +143,11 @@ if [ "$escritorio" = icewm ]; then
     ldd /usr/bin/icewm 2>&1 | grep -i -E 'pixbuf|imlib|rsvg|png|xpm' > "$S" 2>&1 || true
     decir "=== Paquetes con cargador SVG ==="
     apk info -L librsvg 2>/dev/null | grep -i -E 'loader|pixbuf' > "$S" 2>&1 || true
-    { apk info -R gdk-pixbuf gdk-pixbuf-loaders librsvg
-      apk search -q '*glycin*' '*svg*' '*rsvg*'
-      ls -R /usr/libexec/glycin-loaders /usr/share/glycin-loaders 2>&1 | head -n 20
-      ls -l /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
-      grep -c . /usr/lib/gdk-pixbuf-2.0/*/loaders.cache
-      command -v rsvg-convert bwrap
-      gdk-pixbuf-csource /usr/share/icons/Papirus/16x16/apps/firefox.svg 2>&1 | head -n 2
+    { find / -xdev -path '*glycin*' -type f 2>/dev/null | head -n 20
+      cat /usr/share/glycin-loaders/*/conf.d/* 2>/dev/null | head -n 30
+      for f in /usr/share/icons/Papirus/16x16/apps/firefox.svg /usr/share/icons/hicolor/32x32/apps/firefox.png; do
+          su -s /bin/sh prueba -c "python3 -c \"import gi; gi.require_version('GdkPixbuf', '2.0'); from gi.repository import GdkPixbuf as P; p = P.Pixbuf.new_from_file('$f'); print('$f', p.get_width(), p.get_height())\"" 2>&1 | tail -n 3
+      done
     } > "$S" 2>&1 || true
     decir "=== Registro de lxsession ==="
     tail -n 30 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1 || true
