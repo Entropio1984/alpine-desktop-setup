@@ -96,14 +96,16 @@ for nav in "$@"; do
         inicio=$(awk '{print $1}' /proc/uptime)
         maxpss=0; ultimo=0; quieto=0; carga=""
         cpu_total=0
-        for i in $(seq 1 $((VENTANA * 2))); do
+        for _ in $(seq 1 $((VENTANA * 2))); do
             sleep 0.5
-            set -- $(muestra)
-            [ "$1" -gt "$maxpss" ] && maxpss=$1
-            [ "$2" -gt "$cpu_total" ] && cpu_total=$2
+            read -r pss cpu <<EOF2
+$(muestra)
+EOF2
+            [ "${pss:-0}" -gt "$maxpss" ] && maxpss=$pss
+            [ "${cpu:-0}" -gt "$cpu_total" ] && cpu_total=$cpu
             # Menos de 0,05 s de procesador en 1 s (2 muestras) = quieto.
-            delta=$(( $2 - ultimo )); ultimo=$2
-            if [ "$2" -gt 50 ] && [ "$delta" -lt 3 ]; then
+            delta=$(( ${cpu:-0} - ultimo )); ultimo=${cpu:-0}
+            if [ "${cpu:-0}" -gt 50 ] && [ "$delta" -lt 3 ]; then
                 quieto=$((quieto + 1))
             else
                 quieto=0
@@ -116,5 +118,4 @@ for nav in "$@"; do
         echo "RESULTADO $nav $n ${carga:-+$VENTANA} $(awk -v c="$cpu_total" 'BEGIN {printf "%.1f", c / 100}') $((maxpss / 1024))"
         limpiar
     done
-    set -- # (los argumentos se reusaron arriba)
 done

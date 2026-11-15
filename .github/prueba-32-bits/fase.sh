@@ -130,7 +130,7 @@ if [ "$escritorio" = icewm ]; then
     fi
     # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
     # quedan sin iconos.
-    iconos=$(ls /usr/share/icewm-lxde/iconos 2>/dev/null | grep -c '_16x16\.png$')
+    iconos=$(find /usr/share/icewm-lxde/iconos -name '*_16x16.png' 2>/dev/null | wc -l)
     if [ "$iconos" -ge 10 ]; then
         decir "PRUEBA-ICEWM-ICONOS-OK $iconos iconos en PNG"
     else
@@ -138,7 +138,7 @@ if [ "$escritorio" = icewm ]; then
     fi
     # Opciones que usa el script y que IceWM debe conocer (si una cambia
     # de nombre, IceWM la ignora en silencio).
-    for op in MenuMouseTracking SubmenuMenuDelay TaskBarShowAPMAuto TaskBarShowShowDesktopButton; do
+    for op in $(sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)=.*/\1/p' /etc/icewm/preferences); do
         grep -q "^# *$op=" /usr/share/icewm/preferences \
             || decir "PRUEBA-FALLO IceWM no conoce la opción $op"
     done

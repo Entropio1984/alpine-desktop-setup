@@ -4445,7 +4445,7 @@ icewm_botones() { # DIRECTORIO_DEL_TEMA
 ......................
 ......................'
     for _b in cerrar:close maximizar:maximize minimizar:minimize restaurar:restore; do
-        eval "_dibujo=\$_${_b%%:*}"
+        _dibujo=""; eval "_dibujo=\$_${_b%%:*}"
         _n="${_b#*:}"
         _xpm "$1/${_n}A.xpm" "#3d6a9e" "#ffffff" "$_dibujo"
         _xpm "$1/${_n}I.xpm" "#d4d4d4" "#4a4a4a" "$_dibujo"
