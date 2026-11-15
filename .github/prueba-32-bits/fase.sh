@@ -136,6 +136,12 @@ if [ "$escritorio" = icewm ]; then
     else
         decir "PRUEBA-FALLO IceWM: solo $iconos iconos en PNG (barra y menú sin iconos)"
     fi
+    # Opciones que usa el script y que IceWM debe conocer (si una cambia
+    # de nombre, IceWM la ignora en silencio).
+    for op in MenuMouseTracking SubmenuMenuDelay TaskBarShowAPMAuto TaskBarShowShowDesktopButton; do
+        grep -q "^# *$op=" /usr/share/icewm/preferences \
+            || decir "PRUEBA-FALLO IceWM no conoce la opción $op"
+    done
     decir "=== Barra de IceWM (/etc/icewm/toolbar) ==="
     cat /etc/icewm/toolbar > "$S" 2>&1
     decir "=== Avisos de la sesión (.xsession-errors) ==="

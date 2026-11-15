@@ -4239,6 +4239,9 @@ ShowLogoutMenu=0
 ShowLogoutSubMenu=0
 
 # Ventanas: clic para enfocar, sin efectos ni transparencias.
+# Menu: los submenus se abren con solo pasar el mouse, como en LXDE.
+MenuMouseTracking=1
+SubmenuMenuDelay=150
 ClickToFocus=1
 RaiseOnFocus=1
 FocusOnAppRaise=1
