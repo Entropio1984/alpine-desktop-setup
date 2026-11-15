@@ -139,6 +139,8 @@ if [ "$escritorio" = icewm ]; then
     # Opciones que usa el script y que IceWM debe conocer (si una cambia
     # de nombre, IceWM la ignora en silencio).
     for op in $(sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)=.*/\1/p' /etc/icewm/preferences); do
+        # Theme vale aunque no figure en la lista de ejemplo de IceWM.
+        [ "$op" = Theme ] && continue
         grep -q "^# *$op=" /usr/share/icewm/preferences \
             || decir "PRUEBA-FALLO IceWM no conoce la opción $op"
     done

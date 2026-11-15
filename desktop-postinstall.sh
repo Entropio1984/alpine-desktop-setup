@@ -4243,7 +4243,7 @@ ShowLogoutSubMenu=0
 # Ventanas: clic para enfocar, sin efectos ni transparencias.
 # Menu: los submenus se abren con solo pasar el mouse, como en LXDE.
 MenuMouseTracking=1
-SubmenuMenuDelay=150
+SubmenuMenuActivateDelay=150
 ClickToFocus=1
 RaiseOnFocus=1
 FocusOnAppRaise=1
@@ -4347,14 +4347,19 @@ TEMA
 # (ventana activa: blanco sobre azul), I (inactiva: gris sobre gris
 # claro) y O (con el mouse encima; cerrar en rojo).
 icewm_botones() { # DIRECTORIO_DEL_TEMA
+    # IceWM parte cada imagen en dos mitades: arriba el boton normal y
+    # abajo el boton apretado. Con una sola mitad mostraba medio dibujo y
+    # un borde negro. Apretado: el mismo dibujo con el fondo mas oscuro.
     _xpm() { # ARCHIVO FONDO TRAZO DIBUJO
         {
             echo '/* XPM */'
             echo 'static char *boton[] = {'
-            echo '"22 22 2 1",'
+            echo '"22 44 3 1",'
             echo "\". c $2\","
             echo "\"# c $3\","
+            echo "\"o c #2a4a70\","
             printf '%s\n' "$4" | sed 's/^/"/; s/$/",/'
+            printf '%s\n' "$4" | sed 's/\./o/g; s/^/"/; s/$/",/'
             echo '};'
         } > "$1"
     }
