@@ -4447,6 +4447,7 @@ import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import GLib, Gdk, Gtk  # noqa: E402
 
 IDIOMA = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
