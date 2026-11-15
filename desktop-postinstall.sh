@@ -4291,7 +4291,7 @@ DlgBorderSizeY=3
 CornerSizeX=12
 CornerSizeY=12
 TitleButtonsLeft="s"
-TitleButtonsRight="imx"
+TitleButtonsRight="xmi"
 TitleButtonsSupported="ismx"
 TaskBarClockLeds=0
 
