@@ -4289,9 +4289,11 @@ PREF
 # los de Windows 10. Todo son colores planos e imagenes XPM pequenas: se
 # dibuja tan rapido como el tema anterior y no usa mas memoria.
 ICEWM_TEMA="moderno"
-icewm_tema() {
-    _dir="/etc/icewm/themes/$ICEWM_TEMA"
-    rm -rf /etc/icewm/themes/lxde-plano
+# Con un argumento deja el tema en esa carpeta de temas (la ISO de Lazaro
+# lo usa para su sesion de prueba).
+icewm_tema() { # [CARPETA_DE_TEMAS]
+    _dir="${1:-/etc/icewm/themes}/$ICEWM_TEMA"
+    [ -n "${1:-}" ] || rm -rf /etc/icewm/themes/lxde-plano
     mkdir -p "$_dir/taskbar"
     cat > "$_dir/default.theme" <<'TEMA'
 # Generado por desktop-postinstall.sh: tema plano oscuro, colores de Lazaro.
