@@ -130,12 +130,20 @@ if [ "$escritorio" = icewm ]; then
     fi
     # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
     # quedan sin iconos.
-    iconos=$(ls /usr/share/icewm-lxde/iconos 2>/dev/null | grep -c '_16x16\.png$')
+    iconos=$(find /usr/share/icewm-lxde/iconos -name '*_16x16.png' 2>/dev/null | wc -l)
     if [ "$iconos" -ge 10 ]; then
         decir "PRUEBA-ICEWM-ICONOS-OK $iconos iconos en PNG"
     else
         decir "PRUEBA-FALLO IceWM: solo $iconos iconos en PNG (barra y menú sin iconos)"
     fi
+    # Opciones que usa el script y que IceWM debe conocer (si una cambia
+    # de nombre, IceWM la ignora en silencio).
+    for op in $(sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)=.*/\1/p' /etc/icewm/preferences); do
+        # Theme vale aunque no figure en la lista de ejemplo de IceWM.
+        [ "$op" = Theme ] && continue
+        grep -q "^# *$op=" /usr/share/icewm/preferences \
+            || decir "PRUEBA-FALLO IceWM no conoce la opción $op"
+    done
     decir "=== Barra de IceWM (/etc/icewm/toolbar) ==="
     cat /etc/icewm/toolbar > "$S" 2>&1
     decir "=== Avisos de la sesión (.xsession-errors) ==="
@@ -153,6 +161,34 @@ for d in /proc/[0-9]*; do
 done | sort -rn | head -n 15 > "$S"
 decir "=== Zram ==="
 cat /proc/swaps > "$S" 2>&1
+
+# IceWM: una ventana abierta en la captura, para ver la barra de título
+# con sus botones (después de medir la memoria, para no sumarla).
+if [ "$escritorio" = icewm ] && command -v lxterminal >/dev/null 2>&1; then
+    DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 lxterminal >/dev/null 2>&1 &
+    sleep 10
+    # Con la ventana abierta, abrir el menú con un clic en el botón de la
+    # barra (abajo a la izquierda) y pasar el mouse por la primera
+    # categoría: la captura debe mostrar el menú encima de la ventana y
+    # el submenú abierto sin otro clic.
+    if apk add -q xdotool > "$S" 2>&1; then
+        export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+        alto=$(xdotool getdisplaygeometry | cut -d' ' -f2)
+        decir "=== Ventanas antes de abrir el menú ==="
+        xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
+        xdotool mousemove 12 $((alto - 10)) click 1
+        sleep 3
+        decir "=== Ventanas con el menú abierto ==="
+        xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
+        xdotool mousemove_relative -- 60 -80
+        sleep 1
+        xdotool mousemove_relative -- 10 -10
+        sleep 3
+        unset DISPLAY XAUTHORITY
+    else
+        decir "PRUEBA-AVISO no se pudo instalar xdotool para abrir el menú"
+    fi
+fi
 
 decir "PRUEBA-CAPTURA"
 sleep 15
