@@ -4163,12 +4163,15 @@ CONF
     # Deja listo el menu de aplicaciones apenas abre la sesion.
     echo "@/usr/local/libexec/icewm-lxde/menu-aplicaciones --cache" >> "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
 
+    # La sesion arranca con su propio bus de D-Bus (como startlxde): sin
+    # el, los programas usan uno "automatico" que gvfs no siempre
+    # encuentra, y PCManFM se queda sin papelera.
     cat > "/usr/share/xsessions/$ICEWM_SESION.desktop" <<SESION
 [Desktop Entry]
 Type=Application
 Name=IceWM (estilo LXDE)
 Comment=Escritorio liviano para equipos con poca memoria
-Exec=lxsession -s $ICEWM_SESION -e LXDE
+Exec=dbus-launch --exit-with-session lxsession -s $ICEWM_SESION -e LXDE
 TryExec=lxsession
 DesktopNames=LXDE
 SESION
@@ -4734,54 +4737,110 @@ key "Alt+Ctrl+t"            lxterminal
 TECLAS
 }
 
-# PCManFM: iconos del escritorio sobre un fondo azul liso (como LXDE) y
-# memorias USB que se abren solas. Lo usa el perfil de la sesion.
+# PCManFM: iconos del escritorio, el fondo de pantalla y memorias USB
+# que se abren solas. Lo usa el perfil de la sesion.
+#
+# Fondo: si la distribucion trae una imagen de fondo (Lazaro Linux deja
+# su logo en ICEWM_FONDOS), esa imagen llenando la pantalla; si no, azul
+# liso como LXDE. Con una imagen puesta, "Preferencias del escritorio"
+# muestra el campo "Fondo" ya activo para elegir otra foto (con el modo
+# "color" ese campo sale apagado y parece que no se puede).
+ICEWM_FONDOS="/usr/share/backgrounds/lazaro/lazaro-fondo.jpg /usr/share/backgrounds/lazaro/lazaro-fondo.png"
+ICEWM_COLOR_VIEJO="#3a6593"
 icewm_pcmanfm() {
     command -v pcmanfm >/dev/null 2>&1 || return 0
+    _fondo=""
+    for _f in $ICEWM_FONDOS; do
+        if [ -f "$_f" ]; then _fondo="$_f"; break; fi
+    done
+    if [ -n "$_fondo" ]; then
+        _modo=crop; _color="#06223a"
+    else
+        _modo=color; _color="$ICEWM_COLOR_VIEJO"
+    fi
     mkdir -p "/etc/xdg/pcmanfm/$ICEWM_SESION"
-    if [ ! -e "/etc/xdg/pcmanfm/$ICEWM_SESION/pcmanfm.conf" ]; then
-        cat > "/etc/xdg/pcmanfm/$ICEWM_SESION/pcmanfm.conf" <<'PCMANFM'
-# Generado por desktop-postinstall.sh: PCManFM en IceWM (estilo LXDE).
-[config]
-bm_open_method=0
-
-[volume]
-mount_on_startup=1
-mount_removable=1
-autorun=1
-
-[desktop]
-wallpaper_mode=color
-desktop_bg=#3a6593
-desktop_fg=#ffffff
-desktop_shadow=#000000
-show_wm_menu=0
-show_documents=0
-show_trash=1
-show_mounts=1
-
-[ui]
-always_show_tabs=0
-PCMANFM
+    _conf="/etc/xdg/pcmanfm/$ICEWM_SESION/pcmanfm.conf"
+    # Se reescribe si no existe o si lo escribio este script (asi un
+    # fondo nuevo llega tambien a los equipos ya instalados).
+    if [ ! -e "$_conf" ] || grep -q '^# Generado por desktop-postinstall.sh' "$_conf"; then
+        {
+            echo "# Generado por desktop-postinstall.sh: PCManFM en IceWM (estilo LXDE)."
+            echo "[config]"
+            echo "bm_open_method=0"
+            echo
+            echo "[volume]"
+            echo "mount_on_startup=1"
+            echo "mount_removable=1"
+            echo "autorun=1"
+            echo
+            # PCManFM copia esta seccion a ~/.config/pcmanfm/<perfil>/
+            # desktop-items-0.conf la primera vez que abre el escritorio;
+            # desde ahi manda lo que cada usuario elija.
+            echo "[desktop]"
+            echo "wallpaper_mode=$_modo"
+            [ -z "$_fondo" ] || echo "wallpaper=$_fondo"
+            echo "wallpaper_common=1"
+            echo "desktop_bg=$_color"
+            echo "desktop_fg=#ffffff"
+            echo "desktop_shadow=#000000"
+            echo "desktop_font=DejaVu Sans 10"
+            echo "show_wm_menu=0"
+            echo "show_documents=0"
+            echo "show_trash=1"
+            echo "show_mounts=1"
+            echo
+            echo "[ui]"
+            echo "always_show_tabs=0"
+        } > "$_conf"
     fi
-    # PCManFM 1.3 lee el escritorio de desktop-items-0.conf (la seccion
-    # [desktop] de arriba solo la usan versiones viejas): papelera y
-    # discos en el escritorio, como en LXDE.
-    if [ ! -e "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf" ]; then
-        cat > "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf" <<'ESCRITORIO'
-[*]
-wallpaper_mode=color
-desktop_bg=#3a6593
-desktop_fg=#ffffff
-desktop_shadow=#000000
-desktop_font=DejaVu Sans 10
-show_wm_menu=0
-show_documents=0
-show_trash=1
-show_mounts=1
-sort=mtime;ascending;
-ESCRITORIO
+    # Versiones anteriores dejaban aqui un desktop-items-0.conf que
+    # PCManFM no lee (solo lo busca en la carpeta de cada usuario).
+    if grep -q '^show_trash=1' "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf" 2>/dev/null; then
+        rm -f "/etc/xdg/pcmanfm/$ICEWM_SESION/desktop-items-0.conf"
     fi
+    # Usuarios que ya abrieron la sesion con el azul liso de antes y no lo
+    # cambiaron: pasan al fondo con imagen. Si alguien eligio otro color
+    # u otra foto, se respeta.
+    if [ -n "$_fondo" ]; then
+        for _h in /home/*; do
+            _d="$_h/.config/pcmanfm/$ICEWM_SESION/desktop-items-0.conf"
+            [ -f "$_d" ] || continue
+            grep -q '^wallpaper_mode=color' "$_d" || continue
+            grep -qi "^desktop_bg=$ICEWM_COLOR_VIEJO" "$_d" || continue
+            grep -q '^wallpaper=.' "$_d" && continue
+            sed -i -e "s|^wallpaper_mode=color|wallpaper_mode=$_modo\nwallpaper=$_fondo|" \
+                -e "s|^desktop_bg=.*|desktop_bg=$_color|" "$_d"
+            log_info "Fondo de pantalla de IceWM actualizado para $(basename "$_h")."
+        done
+    fi
+    # Clic derecho sobre una foto (en el escritorio o en una carpeta):
+    # "Usar como fondo del escritorio". Solo en esta sesion (LXQt tiene
+    # su propio PCManFM-Qt, que tambien lee estas acciones).
+    mkdir -p /usr/local/libexec/icewm-lxde /usr/share/file-manager/actions
+    cat > /usr/local/libexec/icewm-lxde/fondo <<FONDO
+#!/bin/sh
+# Generado por desktop-postinstall.sh: pone la foto \$1 de fondo del
+# escritorio (llenando la pantalla, sin deformarla).
+[ -f "\$1" ] || exit 1
+exec pcmanfm --profile $ICEWM_SESION --set-wallpaper "\$1" --wallpaper-mode crop
+FONDO
+    chmod 755 /usr/local/libexec/icewm-lxde/fondo
+    cat > /usr/share/file-manager/actions/icewm-lxde-fondo.desktop <<'ACCION'
+[Desktop Entry]
+Type=Action
+Name=Use as desktop background
+Name[es]=Usar como fondo del escritorio
+Name[pt_BR]=Usar como fundo da área de trabalho
+Icon=preferences-desktop-wallpaper
+OnlyShowIn=LXDE;
+Profiles=foto;
+
+[X-Action-Profile foto]
+MimeTypes=image/jpeg;image/png;image/gif;image/bmp;image/webp;image/tiff;image/x-portable-pixmap;
+SelectionCount==1
+Exec=/usr/local/libexec/icewm-lxde/fondo %f
+ACCION
+
     # Terminal de los menus de PCManFM: LXTerminal.
     if [ -f /etc/xdg/libfm/libfm.conf ]; then
         if grep -q '^terminal=' /etc/xdg/libfm/libfm.conf; then

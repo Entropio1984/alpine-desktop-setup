@@ -82,7 +82,7 @@ jobs:
           echo "$AMVI_SHA256  vm/alpine-make-vm-image" | sha256sum -c -
           curl -fsSL --retry 3 --max-time 120 "$AUTOLOGIN_URL" -o vm/lazaro-autologin
           echo "$AUTOLOGIN_SHA256  vm/lazaro-autologin" | sha256sum -c -
-          cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh vm/
+          cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh .github/prueba-32-bits/fondo-prueba.jpg vm/
           chmod 755 vm/*.sh vm/lazaro-autologin vm/alpine-make-vm-image
           # Alpine x86 no tiene qemu-img: el disco lo crea y lo conecta
           # Ubuntu (/dev/nbd0), y el contenedor trabaja sobre ese dispositivo.
@@ -168,6 +168,7 @@ jobs:
             grep -a -m1 'PRUEBA-SIN-FLATPAK-OK' "$log" || true
             grep -a -m1 'PRUEBA-MEMORIA' "$log" || true
             grep -a -m1 'PRUEBA-ICEWM-OK' "$log" || true
+            grep -a -m1 'PRUEBA-ICEWM-ESCRITORIO-OK' "$log" || true
             echo
             echo '| Paquete | Instalado |'
             echo '|---|---|'
@@ -181,7 +182,7 @@ jobs:
           if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
              && grep -aq 'PRUEBA-SIN-FLATPAK-OK' "$log" \
              && ! grep -aq 'PRUEBA-FALLO' "$log" \
-             && { [ "$ESCRITORIO" != icewm ] || grep -aq 'PRUEBA-ICEWM-OK' "$log"; } \
+             && { [ "$ESCRITORIO" != icewm ] || { grep -aq 'PRUEBA-ICEWM-OK' "$log" && grep -aq 'PRUEBA-ICEWM-ESCRITORIO-OK' "$log"; }; } \
              && grep -aq 'PRUEBA-FIN' "$log"; then
             echo "PRUEBA-32-BITS-OK"
           else

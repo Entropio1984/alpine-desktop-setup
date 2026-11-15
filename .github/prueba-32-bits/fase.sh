@@ -152,6 +152,36 @@ if [ "$escritorio" = icewm ]; then
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
 
+# IceWM: el escritorio de PCManFM. Debe tener de fondo la imagen de la
+# distribución (preparar.sh deja la de Lázaro), la papelera (necesita el
+# bus de D-Bus de la sesión) y "Usar como fondo del escritorio" en el
+# clic derecho de una foto. Después se pone otra foto de fondo con esa
+# misma orden, como lo haría la persona.
+if [ "$escritorio" = icewm ]; then
+    decir "=== Escritorio de IceWM (PCManFM) ==="
+    conf=/home/prueba/.config/pcmanfm/icewm-lxde/desktop-items-0.conf
+    pid=$(pgrep -x pcmanfm | head -n 1)
+    U="XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DBUS_SESSION_BUS_ADDRESS|DISPLAY|LANG|XDG_[A-Z_]*)=' | sed "s/=\(.*\)/='\1'/" | tr '\n' ' ')"
+    falla=""
+    grep -q '^wallpaper=/usr/share/backgrounds/lazaro/' "$conf" 2>/dev/null || falla="$falla sin-fondo-de-la-distribucion"
+    su -s /bin/sh prueba -c "$U gio info trash:/// >/dev/null 2>&1" || falla="$falla sin-papelera"
+    grep -q 'icewm-lxde/fondo' /usr/share/file-manager/actions/icewm-lxde-fondo.desktop 2>/dev/null || falla="$falla sin-usar-como-fondo"
+    foto=/home/prueba/foto-de-prueba.png
+    rsvg-convert -w 256 -h 256 "$(find /usr/share/icons/Papirus -name 'firefox.svg' | head -n 1)" -o "$foto" 2>/dev/null
+    chown prueba:prueba "$foto"
+    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo $foto" > "$S" 2>&1
+    sleep 5
+    grep -q "^wallpaper=$foto" "$conf" 2>/dev/null || falla="$falla usar-como-fondo-no-cambio-el-fondo"
+    cat "$conf" > "$S" 2>&1
+    if [ -z "$falla" ]; then
+        decir "PRUEBA-ICEWM-ESCRITORIO-OK fondo con imagen, papelera y 'Usar como fondo del escritorio'"
+    else
+        decir "PRUEBA-FALLO IceWM, escritorio:$falla"
+    fi
+    # La captura final muestra el fondo de la distribución.
+    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo /usr/share/backgrounds/lazaro/lazaro-fondo.jpg" > "$S" 2>&1
+fi
+
 decir "=== Memoria con la sesión abierta y sin programas (MB) ==="
 free -m > "$S"
 decir "PRUEBA-MEMORIA usada=$(awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {print int((t-a)/1024)}' /proc/meminfo) disponible=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
