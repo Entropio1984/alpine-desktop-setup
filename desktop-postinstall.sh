@@ -4160,6 +4160,8 @@ CONF
     if command -v pcmanfm >/dev/null 2>&1; then
         echo "@pcmanfm --desktop --profile $ICEWM_SESION" > "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
     fi
+    # Deja listo el menu de aplicaciones apenas abre la sesion.
+    echo "@/usr/local/libexec/icewm-lxde/menu-aplicaciones --cache" >> "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
 
     cat > "/usr/share/xsessions/$ICEWM_SESION.desktop" <<SESION
 [Desktop Entry]
@@ -4468,11 +4470,41 @@ icewm_menu() {
 # IceWM (formato de ~/.icewm/menu) a partir de los .desktop instalados:
 # categorias y nombres en el idioma de la sesion (espanol, ingles o
 # portugues). IceWM lo ejecuta al cargar el menu ("includeprog").
+#
+# Armarlo lee todos los .desktop y en un equipo viejo con Firefox abierto
+# tarda tanto que IceWM se rinde y el menu queda solo con "Salir". Por
+# eso se guarda en ~/.cache y solo se vuelve a armar cuando cambia una
+# carpeta de aplicaciones (se instalo o quito un programa). Con
+# "--cache" (al iniciar la sesion) solo prepara el archivo, sin escribir.
 idioma="${LC_ALL:-${LC_MESSAGES:-${LANG:-es}}}"
 idioma="${idioma%%.*}"
 idioma="${idioma%%@*}"
 corto="${idioma%%_*}"
 datos="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+guardado="${XDG_CACHE_HOME:-$HOME/.cache}/icewm-lxde/menu-$idioma"
+if [ -s "$guardado" ]; then
+    viejo=no
+    viejo_ifs="$IFS"; IFS=:
+    for d in $datos; do
+        [ "$d/applications" -nt "$guardado" ] && viejo=si
+    done
+    IFS="$viejo_ifs"
+    if [ "$viejo" = no ]; then
+        [ "${1:-}" = --cache ] || cat "$guardado"
+        exit 0
+    fi
+fi
+if [ "${1:-}" != --armar ] && mkdir -p "${guardado%/*}" 2>/dev/null; then
+    nuevo="$guardado.$$"
+    if "$0" --armar > "$nuevo" 2>/dev/null && [ -s "$nuevo" ]; then
+        mv -f "$nuevo" "$guardado"
+        [ "${1:-}" = --cache ] || cat "$guardado"
+        exit 0
+    fi
+    rm -f "$nuevo"
+fi
+[ "${1:-}" != --cache ] || exit 0
 
 # Los del usuario primero: tapan a los del sistema con el mismo nombre.
 set --
