@@ -165,6 +165,27 @@ cat /proc/swaps > "$S" 2>&1
 if [ "$escritorio" = icewm ] && command -v lxterminal >/dev/null 2>&1; then
     DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 lxterminal >/dev/null 2>&1 &
     sleep 10
+    # Con la ventana abierta, abrir el menú con un clic en el botón de la
+    # barra (abajo a la izquierda) y pasar el mouse por la primera
+    # categoría: la captura debe mostrar el menú encima de la ventana y
+    # el submenú abierto sin otro clic.
+    if apk add -q xdotool > "$S" 2>&1; then
+        export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+        alto=$(xdotool getdisplaygeometry | cut -d' ' -f2)
+        decir "=== Ventanas antes de abrir el menú ==="
+        xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
+        xdotool mousemove 12 $((alto - 10)) click 1
+        sleep 3
+        decir "=== Ventanas con el menú abierto ==="
+        xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
+        xdotool mousemove_relative -- 60 -80
+        sleep 1
+        xdotool mousemove_relative -- 10 -10
+        sleep 3
+        unset DISPLAY XAUTHORITY
+    else
+        decir "PRUEBA-AVISO no se pudo instalar xdotool para abrir el menú"
+    fi
 fi
 
 decir "PRUEBA-CAPTURA"
