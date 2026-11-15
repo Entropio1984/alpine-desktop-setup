@@ -160,6 +160,13 @@ done | sort -rn | head -n 15 > "$S"
 decir "=== Zram ==="
 cat /proc/swaps > "$S" 2>&1
 
+# IceWM: una ventana abierta en la captura, para ver la barra de título
+# con sus botones (después de medir la memoria, para no sumarla).
+if [ "$escritorio" = icewm ] && command -v lxterminal >/dev/null 2>&1; then
+    DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0 lxterminal >/dev/null 2>&1 &
+    sleep 10
+fi
+
 decir "PRUEBA-CAPTURA"
 sleep 15
 decir "PRUEBA-FIN"

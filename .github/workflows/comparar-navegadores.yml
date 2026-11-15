@@ -1,0 +1,91 @@
+# Comparar navegadores: ¿cuál de los navegadores de Alpine de 32 bits es
+# más rápido que Firefox sin quedarse corto con las páginas de hoy?
+#
+# Corre cada navegador en un contenedor Alpine x86 limitado a 1
+# procesador y 1 GB de memoria, con una pantalla virtual de 1024x768, y
+# abre varias páginas comunes. Por cada una anota el tiempo aproximado de
+# carga, el procesador y la memoria que gastó, y saca una captura para
+# ver si la página se ve bien. Los resultados quedan en el resumen de la
+# ejecución y las capturas en el registro (en base64).
+#
+# Es una herramienta aparte: no bloquea la fusión de los PR. Corre a mano
+# (Actions > Comparar navegadores > Run workflow) y en los PR que la
+# cambian.
+name: Comparar navegadores
+
+on:
+  workflow_dispatch:
+    inputs:
+      navegadores:
+        description: Navegadores a comparar
+        default: firefox netsurf dillo epiphany badwolf surf
+  pull_request:
+    paths:
+      - .github/workflows/comparar-navegadores.yml
+      - .github/comparar-navegadores/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comparar-navegadores-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SITIOS: >-
+    https://es.wikipedia.org/wiki/Colombia
+    https://www.google.com/search?q=clima+bogota
+    https://www.youtube.com/
+    https://www.eltiempo.com/
+    https://www.mercadolibre.com.co/
+    https://accounts.google.com/
+    https://www.facebook.com/
+
+jobs:
+  comparar:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Comparar navegadores (32 bits)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      NAVEGADORES: ${{ inputs.navegadores || 'firefox netsurf dillo epiphany badwolf surf' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Medir
+        run: |
+          mkdir -p salida
+          sudo apt-get install -y -q imagemagick >/dev/null
+          # Contenedor Alpine de 32 bits, 1 procesador, 1 GB sin swap extra.
+          docker run --rm --platform linux/386 --cap-add=SYS_PTRACE --cpus=1 --memory=1g --memory-swap=1g \
+            --shm-size=256m -e SITIOS -e VENTANA=40 \
+            -v "$PWD/.github/comparar-navegadores:/c:ro" -v "$PWD/salida:/salida" \
+            alpine:3.24 sh /c/medir.sh /salida $NAVEGADORES | tee salida/registro.txt
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Navegadores de Alpine de 32 bits (1 procesador, 1 GB)"
+            echo
+            echo "Carga: segundos hasta que el navegador deja de trabajar (aprox.). CPU: segundos de procesador en 40 s. Memoria: máximo, en MB."
+            echo
+            n=0
+            echo "| Navegador | Página | Carga (s) | CPU (s) | Memoria (MB) |"
+            echo "|---|---|---|---|---|"
+            grep '^RESULTADO' salida/registro.txt | while read -r _ nav i carga cpu mem; do
+              sitio=$(echo $SITIOS | tr ' ' '\n' | sed -n "${i}p" 2>/dev/null)
+              echo "| $nav | ${sitio:-$i} | $carga | $cpu | $mem |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Una hoja de capturas por navegador, impresa en base64 (los
+          # archivos de resultados no siempre se pueden descargar).
+          cd salida
+          for nav in $NAVEGADORES; do
+            ls "$nav"-*.png >/dev/null 2>&1 || continue
+            montage "$nav"-*.png -tile 4x -geometry 400x300+4+4 -background '#888' "hoja-$nav.png"
+            convert "hoja-$nav.png" -resize 50% "hoja-$nav.png"
+            echo "HOJA-INICIO $nav"
+            base64 -w 0 "hoja-$nav.png"; echo
+            echo "HOJA-FIN $nav"
+          done
