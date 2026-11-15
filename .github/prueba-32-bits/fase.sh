@@ -152,6 +152,53 @@ if [ "$escritorio" = icewm ]; then
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
 
+# IceWM: el escritorio de PCManFM (iconos, imagenes, papelera, menu
+# del clic derecho).
+if [ "$escritorio" = icewm ]; then
+    apk add -q xdotool xprop > "$S" 2>&1 || true
+    export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+    decir "=== Escritorio de PCManFM ==="
+    pid=$(pgrep -x pcmanfm | head -n 1)
+    decir "pcmanfm pid=$pid: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
+    tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DBUS|XDG|LANG|HOME|DISPLAY|GIO|GVFS)' > "$S"
+    ps -o pid,user,args | grep -E 'gvfs|dbus|lxsession|pcmanfm' | grep -v grep > "$S" 2>&1
+    decir "--- user-dirs.dirs ---"
+    cat /home/prueba/.config/user-dirs.dirs > "$S" 2>&1
+    decir "--- carpetas de prueba ---"
+    ls -la /home/prueba /home/prueba/.config /home/prueba/.config/pcmanfm/* > "$S" 2>&1
+    cat /home/prueba/.config/pcmanfm/*/desktop-items-0.conf > "$S" 2>&1
+    dir=$(su -s /bin/sh prueba -c 'xdg-user-dir DESKTOP' 2>/dev/null)
+    decir "Carpeta del escritorio: $dir"
+    icono=$(find /usr/share/icons/Papirus -name 'firefox.svg' 2>/dev/null | head -n 1)
+    su -s /bin/sh prueba -c "mkdir -p '$dir' && rsvg-convert -w 128 -h 128 '$icono' -o '$dir/imagen-de-prueba.png' && cp /etc/os-release '$dir/texto-de-prueba.txt'" > "$S" 2>&1
+    ls -la "$dir" > "$S" 2>&1
+    decir "--- ventanas de pcmanfm ---"
+    for w in $(xdotool search --class pcmanfm 2>/dev/null); do
+        decir "ventana $w: $(xdotool getwindowname $w 2>/dev/null) $(xdotool getwindowgeometry $w 2>/dev/null | tr '\n' ' ')"
+        xprop -id "$w" _NET_WM_WINDOW_TYPE WM_CLASS _NET_WM_STATE > "$S" 2>&1
+    done
+    xprop -root _NET_SUPPORTING_WM_CHECK _NET_WORKAREA > "$S" 2>&1
+    decir "--- papelera (gio) ---"
+    dbus=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-)
+    su -s /bin/sh prueba -c "DBUS_SESSION_BUS_ADDRESS='$dbus' gio info trash:/// 2>&1 | head -n 5" > "$S" 2>&1
+    sleep 8
+    decir "PRUEBA-FOTO escritorio"
+    sleep 12
+    ancho=$(xdotool getdisplaygeometry | cut -d' ' -f1)
+    alto=$(xdotool getdisplaygeometry | cut -d' ' -f2)
+    xdotool mousemove $((ancho * 2 / 3)) $((alto / 2)) click 3
+    sleep 4
+    decir "=== Ventanas con el clic derecho en el escritorio ==="
+    xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
+    decir "PRUEBA-FOTO clic-derecho"
+    sleep 12
+    xdotool key Escape
+    sleep 2
+    decir "=== Avisos de PCManFM (.xsession-errors) ==="
+    grep -i -E 'pcmanfm|libfm|gvfs|gio|dbus' /home/prueba/.xsession-errors > "$S" 2>&1 || true
+    unset DISPLAY XAUTHORITY
+fi
+
 decir "=== Memoria con la sesión abierta y sin programas (MB) ==="
 free -m > "$S"
 decir "PRUEBA-MEMORIA usada=$(awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {print int((t-a)/1024)}' /proc/meminfo) disponible=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
