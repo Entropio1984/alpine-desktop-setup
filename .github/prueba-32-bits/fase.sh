@@ -128,6 +128,13 @@ if [ "$escritorio" = icewm ]; then
     else
         decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
         ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
+        case "$falta" in *volumen*)
+            decir "=== Volumen: arranque a mano (errores) ==="
+            su -s /bin/sh prueba -c 'DISPLAY=:0 timeout 8 /usr/local/libexec/icewm-lxde/volumen' > "$S" 2>&1
+            decir "=== Autostart y run.log de lxsession ==="
+            cat /etc/xdg/lxsession/icewm-lxde/autostart > "$S" 2>&1
+            tail -n 20 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1
+        esac
     fi
     # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
     # quedan sin iconos.
