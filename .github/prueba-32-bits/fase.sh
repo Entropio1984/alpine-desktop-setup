@@ -152,100 +152,34 @@ if [ "$escritorio" = icewm ]; then
     su -s /bin/sh prueba -c 'LANG=es_ES.UTF-8 /usr/local/libexec/icewm-lxde/menu-aplicaciones' > "$S" 2>&1
 fi
 
-# IceWM: el escritorio de PCManFM (iconos, imagenes, papelera, menu
-# del clic derecho).
+# IceWM: el escritorio de PCManFM. Debe tener de fondo la imagen de la
+# distribución (preparar.sh deja la de Lázaro), la papelera (necesita el
+# bus de D-Bus de la sesión) y "Usar como fondo del escritorio" en el
+# clic derecho de una foto. Después se pone otra foto de fondo con esa
+# misma orden, como lo haría la persona.
 if [ "$escritorio" = icewm ]; then
-    apk add -q xdotool xprop > "$S" 2>&1 || true
-    export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
-    decir "=== Escritorio de PCManFM ==="
+    decir "=== Escritorio de IceWM (PCManFM) ==="
+    conf=/home/prueba/.config/pcmanfm/icewm-lxde/desktop-items-0.conf
     pid=$(pgrep -x pcmanfm | head -n 1)
-    decir "pcmanfm pid=$pid: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
-    tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DBUS|XDG|LANG|HOME|DISPLAY|GIO|GVFS)' > "$S"
-    ps -o pid,user,args | grep -E 'gvfs|dbus|lxsession|pcmanfm' | grep -v grep > "$S" 2>&1
-    decir "--- user-dirs.dirs ---"
-    cat /home/prueba/.config/user-dirs.dirs > "$S" 2>&1
-    decir "--- carpetas de prueba ---"
-    ls -la /home/prueba /home/prueba/.config /home/prueba/.config/pcmanfm/* > "$S" 2>&1
-    cat /home/prueba/.config/pcmanfm/*/desktop-items-0.conf > "$S" 2>&1
-    dir=$(su -s /bin/sh prueba -c 'xdg-user-dir DESKTOP' 2>/dev/null)
-    decir "Carpeta del escritorio: $dir"
-    icono=$(find /usr/share/icons/Papirus -name 'firefox.svg' 2>/dev/null | head -n 1)
-    su -s /bin/sh prueba -c "mkdir -p '$dir' && rsvg-convert -w 128 -h 128 '$icono' -o '$dir/imagen-de-prueba.png' && cp /etc/os-release '$dir/texto-de-prueba.txt'" > "$S" 2>&1
-    ls -la "$dir" > "$S" 2>&1
-    decir "--- ventanas de pcmanfm ---"
-    for w in $(xdotool search --class pcmanfm 2>/dev/null); do
-        decir "ventana $w: $(xdotool getwindowname $w 2>/dev/null) $(xdotool getwindowgeometry $w 2>/dev/null | tr '\n' ' ')"
-        xprop -id "$w" _NET_WM_WINDOW_TYPE WM_CLASS _NET_WM_STATE > "$S" 2>&1
-    done
-    xprop -root _NET_SUPPORTING_WM_CHECK _NET_WORKAREA > "$S" 2>&1
-    decir "--- papelera (gio) ---"
-    ls /usr/libexec/gvfsd* /usr/libexec/gvfs/ > "$S" 2>&1
-    U="XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|DISPLAY|LANG|XDG_[A-Z_]*)=' | sed "s/=\(.*\)/='\1'/" | tr '\n' ' ')"
-    decir "entorno para el usuario: $U"
-    su -s /bin/sh prueba -c "$U gio info trash:/// 2>&1 | head -n 5" > "$S" 2>&1
-    su -s /bin/sh prueba -c "$U gio mime image/png 2>&1 | head -n 3" > "$S" 2>&1
-    ls -la /usr/share/file-manager/actions > "$S" 2>&1
-    sleep 8
-    decir "PRUEBA-FOTO escritorio"
-    sleep 12
-    ancho=$(xdotool getdisplaygeometry | cut -d' ' -f1)
-    alto=$(xdotool getdisplaygeometry | cut -d' ' -f2)
-    xdotool mousemove $((ancho * 2 / 3)) $((alto / 2)) click 3
-    sleep 4
-    decir "PRUEBA-FOTO clic-derecho"
-    sleep 12
-    xdotool key Escape
-    sleep 2
-    # Clic derecho sobre la imagen del escritorio (segundo icono, debajo
-    # de la papelera).
-    xdotool mousemove 60 150 click 1
-    sleep 1
-    xdotool click 3
-    sleep 4
-    decir "PRUEBA-FOTO clic-derecho-imagen"
-    sleep 12
-    xdotool key Escape
-    sleep 2
-    # Arrastrar una foto desde una ventana de PCManFM al escritorio.
-    mkdir -p /home/prueba/Pictures
-    cp "$dir/imagen-de-prueba.png" /home/prueba/Pictures/arrastrada.png
-    chown prueba:prueba /home/prueba/Pictures/arrastrada.png
-    su -s /bin/sh prueba -c "$U pcmanfm --profile icewm-lxde --new-win /home/prueba/Pictures >/dev/null 2>&1 &"
-    sleep 8
-    w=$(xdotool search --onlyvisible --name Pictures 2>/dev/null | tail -n 1)
-    decir "ventana de Pictures: $w"
-    if [ -n "$w" ]; then
-        xdotool windowmove "$w" 600 150 windowsize "$w" 600 400
-        sleep 3
-        xdotool getwindowgeometry "$w" > "$S" 2>&1
-        decir "PRUEBA-FOTO ventana-pictures"
-        sleep 12
-        # Arrastrar la foto (primer icono de la ventana) al escritorio.
-        xdotool mousemove 805 245 mousedown 1
-        for paso in 1 2 3 4 5 6 7 8 9 10; do
-            xdotool mousemove_relative -- -50 25
-            sleep 0.2
-        done
-        sleep 1
-        xdotool mouseup 1
-        sleep 4
-        ls -la "$dir" > "$S" 2>&1
-        decir "PRUEBA-FOTO arrastrar"
-        sleep 12
-        xdotool key Escape
-    fi
-    unset DISPLAY XAUTHORITY
-    decir "--- poner la foto de fondo ---"
-    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo /home/prueba/Pictures/arrastrada.png" > "$S" 2>&1
-    decir "fondo rc=$?"
-    export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+    U="XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DBUS_SESSION_BUS_ADDRESS|DISPLAY|LANG|XDG_[A-Z_]*)=' | sed "s/=\(.*\)/='\1'/" | tr '\n' ' ')"
+    falla=""
+    grep -q '^wallpaper=/usr/share/backgrounds/lazaro/' "$conf" 2>/dev/null || falla="$falla sin-fondo-de-la-distribucion"
+    su -s /bin/sh prueba -c "$U gio info trash:/// >/dev/null 2>&1" || falla="$falla sin-papelera"
+    grep -q 'icewm-lxde/fondo' /usr/share/file-manager/actions/icewm-lxde-fondo.desktop 2>/dev/null || falla="$falla sin-usar-como-fondo"
+    foto=/home/prueba/foto-de-prueba.png
+    rsvg-convert -w 256 -h 256 "$(find /usr/share/icons/Papirus -name 'firefox.svg' | head -n 1)" -o "$foto" 2>/dev/null
+    chown prueba:prueba "$foto"
+    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo $foto" > "$S" 2>&1
     sleep 5
-    cat /home/prueba/.config/pcmanfm/icewm-lxde/desktop-items-0.conf > "$S" 2>&1
-    decir "PRUEBA-FOTO fondo"
-    sleep 12
-    decir "=== Avisos de PCManFM (.xsession-errors) ==="
-    grep -i -E 'pcmanfm|libfm|gvfs|gio|dbus' /home/prueba/.xsession-errors > "$S" 2>&1 || true
-    unset DISPLAY XAUTHORITY
+    grep -q "^wallpaper=$foto" "$conf" 2>/dev/null || falla="$falla usar-como-fondo-no-cambio-el-fondo"
+    cat "$conf" > "$S" 2>&1
+    if [ -z "$falla" ]; then
+        decir "PRUEBA-ICEWM-ESCRITORIO-OK fondo con imagen, papelera y 'Usar como fondo del escritorio'"
+    else
+        decir "PRUEBA-FALLO IceWM, escritorio:$falla"
+    fi
+    # La captura final muestra el fondo de la distribución.
+    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo /usr/share/backgrounds/lazaro/lazaro-fondo.jpg" > "$S" 2>&1
 fi
 
 decir "=== Memoria con la sesión abierta y sin programas (MB) ==="

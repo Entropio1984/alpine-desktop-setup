@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        escritorio: [icewm]  # TEMPORAL diagnostico
+        escritorio: [lxqt, xfce, icewm]
     env:
       RAMA: ${{ inputs.rama || 'v3.24' }}
       ESCRITORIO: ${{ matrix.escritorio }}
@@ -122,7 +122,6 @@ jobs:
             -monitor unix:monitor.sock,server,nowait &
           qemu=$!
           capturado=no
-          fotos=0
           limite=$(( $(date +%s) + 170 * 60 ))
           while kill -0 "$qemu" 2>/dev/null; do
             if [ "$capturado" = no ] && grep -q PRUEBA-CAPTURA serie.log; then
@@ -131,13 +130,6 @@ jobs:
               sleep 2
               [ ! -s captura.ppm ] || capturado=si
             fi
-            n=$(grep -ac '^PRUEBA-FOTO ' serie.log || true)
-            while [ "$fotos" -lt "$n" ]; do
-              fotos=$((fotos + 1))
-              nombre=$(grep -a '^PRUEBA-FOTO ' serie.log | sed -n "${fotos}p" | awk '{print $2}' | tr -cd 'a-z0-9-')
-              sleep 2
-              echo "screendump foto-$fotos-$nombre.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
-            done
             if [ "$(date +%s)" -gt "$limite" ]; then
               echo "::error::La máquina virtual no terminó en 170 minutos."
               echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
@@ -155,13 +147,6 @@ jobs:
           # Copia chica (640x360, como las de la pantalla Escritorio del
           # instalador de Lázaro) impresa en el registro: los archivos de
           # resultados no siempre se pueden descargar.
-          for f in foto-*.ppm; do
-            [ -s "$f" ] || continue
-            convert "$f" -resize 960x540! -strip "${f%.ppm}.png"
-            echo "FOTO-BASE64-INICIO ${f%.ppm}"
-            base64 -w 0 "${f%.ppm}.png"; echo
-            echo "FOTO-BASE64-FIN"
-          done
           if [ -f captura.ppm ]; then
             convert captura.ppm -resize 640x360! -strip "chica-$ESCRITORIO.png"
             echo "CAPTURA-BASE64-INICIO"
@@ -183,6 +168,7 @@ jobs:
             grep -a -m1 'PRUEBA-SIN-FLATPAK-OK' "$log" || true
             grep -a -m1 'PRUEBA-MEMORIA' "$log" || true
             grep -a -m1 'PRUEBA-ICEWM-OK' "$log" || true
+            grep -a -m1 'PRUEBA-ICEWM-ESCRITORIO-OK' "$log" || true
             echo
             echo '| Paquete | Instalado |'
             echo '|---|---|'
@@ -196,7 +182,7 @@ jobs:
           if grep -aq 'PRUEBA-SCRIPT rc=0' "$log" && grep -aq 'PRUEBA-SESION-OK' "$log" \
              && grep -aq 'PRUEBA-SIN-FLATPAK-OK' "$log" \
              && ! grep -aq 'PRUEBA-FALLO' "$log" \
-             && { [ "$ESCRITORIO" != icewm ] || grep -aq 'PRUEBA-ICEWM-OK' "$log"; } \
+             && { [ "$ESCRITORIO" != icewm ] || { grep -aq 'PRUEBA-ICEWM-OK' "$log" && grep -aq 'PRUEBA-ICEWM-ESCRITORIO-OK' "$log"; }; } \
              && grep -aq 'PRUEBA-FIN' "$log"; then
             echo "PRUEBA-32-BITS-OK"
           else
