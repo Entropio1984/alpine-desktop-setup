@@ -4291,6 +4291,7 @@ PREF
 ICEWM_TEMA="moderno"
 # Con un argumento deja el tema en esa carpeta de temas (la ISO de Lazaro
 # lo usa para su sesion de prueba).
+# shellcheck disable=SC2120 # Lázaro la llama con la carpeta de temas de su sesión de prueba
 icewm_tema() { # [CARPETA_DE_TEMAS]
     _dir="${1:-/etc/icewm/themes}/$ICEWM_TEMA"
     [ -n "${1:-}" ] || rm -rf /etc/icewm/themes/lxde-plano
