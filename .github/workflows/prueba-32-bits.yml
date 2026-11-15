@@ -82,7 +82,7 @@ jobs:
           echo "$AMVI_SHA256  vm/alpine-make-vm-image" | sha256sum -c -
           curl -fsSL --retry 3 --max-time 120 "$AUTOLOGIN_URL" -o vm/lazaro-autologin
           echo "$AUTOLOGIN_SHA256  vm/lazaro-autologin" | sha256sum -c -
-          cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh vm/
+          cp desktop-postinstall.sh .github/prueba-32-bits/preparar.sh .github/prueba-32-bits/fase.sh .github/prueba-32-bits/fondo-prueba.jpg vm/
           chmod 755 vm/*.sh vm/lazaro-autologin vm/alpine-make-vm-image
           # Alpine x86 no tiene qemu-img: el disco lo crea y lo conecta
           # Ubuntu (/dev/nbd0), y el contenedor trabaja sobre ese dispositivo.

@@ -180,7 +180,7 @@ if [ "$escritorio" = icewm ]; then
     xprop -root _NET_SUPPORTING_WM_CHECK _NET_WORKAREA > "$S" 2>&1
     decir "--- papelera (gio) ---"
     ls /usr/libexec/gvfsd* /usr/libexec/gvfs/ > "$S" 2>&1
-    U="DISPLAY=:0 XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | sed "s/=\(.*\)/='\1'/")"
+    U="XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|DISPLAY|LANG|XDG_[A-Z_]*)=' | sed "s/=\(.*\)/='\1'/" | tr '\n' ' ')"
     decir "entorno para el usuario: $U"
     su -s /bin/sh prueba -c "$U gio info trash:/// 2>&1 | head -n 5" > "$S" 2>&1
     su -s /bin/sh prueba -c "$U gio mime image/png 2>&1 | head -n 3" > "$S" 2>&1
@@ -196,8 +196,9 @@ if [ "$escritorio" = icewm ]; then
     sleep 12
     xdotool key Escape
     sleep 2
-    # Clic derecho sobre la imagen del escritorio (primer icono).
-    xdotool mousemove 60 40 click 1
+    # Clic derecho sobre la imagen del escritorio (segundo icono, debajo
+    # de la papelera).
+    xdotool mousemove 60 150 click 1
     sleep 1
     xdotool click 3
     sleep 4
@@ -219,6 +220,19 @@ if [ "$escritorio" = icewm ]; then
         xdotool getwindowgeometry "$w" > "$S" 2>&1
         decir "PRUEBA-FOTO ventana-pictures"
         sleep 12
+        # Arrastrar la foto (primer icono de la ventana) al escritorio.
+        xdotool mousemove 805 245 mousedown 1
+        for paso in 1 2 3 4 5 6 7 8 9 10; do
+            xdotool mousemove_relative -- -50 25
+            sleep 0.2
+        done
+        sleep 1
+        xdotool mouseup 1
+        sleep 4
+        ls -la "$dir" > "$S" 2>&1
+        decir "PRUEBA-FOTO arrastrar"
+        sleep 12
+        xdotool key Escape
     fi
     unset DISPLAY XAUTHORITY
     decir "--- poner la foto de fondo ---"

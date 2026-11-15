@@ -28,6 +28,10 @@ install -Dm755 /mnt/fase.sh /usr/local/sbin/prueba-fase
 install -Dm755 /mnt/lazaro-autologin /usr/local/sbin/lazaro-autologin
 echo "$escritorio" > /etc/prueba-escritorio
 
+# El fondo de pantalla que deja Lázaro Linux (su logo): con él, IceWM
+# arranca con esa imagen de fondo en vez del azul liso.
+install -Dm644 /mnt/fondo-prueba.jpg /usr/share/backgrounds/lazaro/lazaro-fondo.jpg
+
 # El servicio "local" corre esto en cada arranque. Se lanza aparte para
 # que el arranque termine y el script trabaje en un sistema ya en marcha.
 cat > /etc/local.d/prueba.start <<'FIN'
