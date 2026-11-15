@@ -130,6 +130,12 @@ jobs:
               sleep 2
               [ ! -s captura.ppm ] || capturado=si
             fi
+            # Segunda captura (opcional): por ejemplo, la barrita de volumen.
+            if [ ! -s captura2.ppm ] && grep -q PRUEBA-OTRA-CAPTURA serie.log; then
+              sleep 3
+              echo "screendump captura2.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
+              sleep 2
+            fi
             if [ "$(date +%s)" -gt "$limite" ]; then
               echo "::error::La máquina virtual no terminó en 170 minutos."
               echo "screendump captura.ppm" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
@@ -152,6 +158,12 @@ jobs:
             echo "CAPTURA-BASE64-INICIO"
             base64 -w 0 "chica-$ESCRITORIO.png"; echo
             echo "CAPTURA-BASE64-FIN"
+          fi
+          if [ -s captura2.ppm ]; then
+            convert captura2.ppm -resize 640x360! -strip "chica2-$ESCRITORIO.png"
+            echo "CAPTURA2-BASE64-INICIO"
+            base64 -w 0 "chica2-$ESCRITORIO.png"; echo
+            echo "CAPTURA2-BASE64-FIN"
           fi
 
       - name: Resultado
