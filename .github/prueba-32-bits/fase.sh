@@ -122,11 +122,19 @@ if [ "$escritorio" = icewm ]; then
     for p in lxsession pcmanfm nm-applet lxpolkit; do
         pgrep -x "$p" >/dev/null 2>&1 || falta="$falta $p"
     done
+    pgrep -f icewm-lxde/volumen >/dev/null 2>&1 || falta="$falta volumen"
     if [ -z "$falta" ]; then
-        decir "PRUEBA-ICEWM-OK lxsession, pcmanfm, nm-applet y lxpolkit corriendo"
+        decir "PRUEBA-ICEWM-OK lxsession, pcmanfm, nm-applet, lxpolkit y volumen corriendo"
     else
         decir "PRUEBA-FALLO IceWM: no están corriendo:$falta"
         ps -o pid,user,args > "$S" 2>&1 || ps > "$S" 2>&1
+        case "$falta" in *volumen*)
+            decir "=== Volumen: arranque a mano (errores) ==="
+            su -s /bin/sh prueba -c 'DISPLAY=:0 timeout 8 /usr/local/libexec/icewm-lxde/volumen' > "$S" 2>&1
+            decir "=== Autostart y run.log de lxsession ==="
+            cat /etc/xdg/lxsession/icewm-lxde/autostart > "$S" 2>&1
+            tail -n 20 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1
+        esac
     fi
     # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
     # quedan sin iconos.
@@ -222,5 +230,24 @@ fi
 
 decir "PRUEBA-CAPTURA"
 sleep 15
+
+# IceWM: segunda captura con la barrita de volumen abierta (clic en el
+# icono de la bandeja).
+if [ "$escritorio" = icewm ] && command -v xdotool >/dev/null 2>&1; then
+    export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+    xdotool key Escape; sleep 1
+    icono=$(xdotool search --onlyvisible --class volumen 2>/dev/null | head -n 1)
+    if [ -n "$icono" ]; then
+        eval "$(xdotool getwindowgeometry --shell "$icono")"
+        decir "Icono de volumen en x=$X y=$Y (${WIDTH}x$HEIGHT)"
+        xdotool mousemove $((X + WIDTH / 2)) $((Y + HEIGHT / 2)) click 1
+        sleep 4
+        decir "PRUEBA-OTRA-CAPTURA"
+        sleep 15
+    else
+        decir "PRUEBA-AVISO no se encontró el icono de volumen para hacerle clic"
+    fi
+    unset DISPLAY XAUTHORITY
+fi
 decir "PRUEBA-FIN"
 poweroff

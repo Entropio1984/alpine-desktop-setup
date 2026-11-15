@@ -128,7 +128,7 @@ programa_var() {
 }
 
 # Escritorios que acepta --escritorio: los de setup-desktop de Alpine e
-# IceWM con apariencia de LXDE (lo instala el propio script, Bloque 5).
+# IceWM moderno (sesion de LXDE) (lo instala el propio script, Bloque 5).
 ESCRITORIOS="xfce xfce-wayland mate lxqt gnome plasma sway icewm"
 
 ARG_MODO=""          # vacio, "full" o "minimo"
@@ -168,7 +168,7 @@ de abajo (salvo --usuario, --escritorio y --destino) no pregunta nada.
   --usuario NOMBRE     Usuario del escritorio (si no se puede adivinar).
   --escritorio NOMBRE  Instala antes ese escritorio con setup-desktop:
                        xfce, xfce-wayland, mate, lxqt, gnome, plasma o sway;
-                       o icewm (IceWM con apariencia de LXDE, el mas
+                       o icewm (IceWM moderno (sesion de LXDE), el mas
                        liviano, para equipos con 1 GB de memoria).
   --destino CARPETA    Configura el sistema instalado en CARPETA (p. ej.
                        /mnt) sin reiniciar, desde el sistema en uso.
@@ -911,14 +911,14 @@ install_desktop() {
     morir "No se pudo instalar el escritorio '$ARG_ESCRITORIO' (detalles en $LOG_FILE)."
 }
 
-# IceWM con apariencia de LXDE (--escritorio icewm): no esta en
+# IceWM moderno (sesion de LXDE) (--escritorio icewm): no esta en
 # setup-desktop, asi que se instala aqui con la misma base grafica
 # (setup-xorg-base) y la pantalla de inicio de XFCE (LightDM). lxsession
 # hace de sesion de LXDE: arranca lo de /etc/xdg/autostart, el agente de
 # contrasenas (lxpolkit), aplica el tema GTK y trae la ventana de "Salir".
 # La barra, el menu y el tema los configura setup_icewm (Bloque 32c).
 instalar_icewm() {
-    log_info "== Escritorio: icewm (IceWM con apariencia de LXDE) =="
+    log_info "== Escritorio: icewm (IceWM moderno (sesion de LXDE)) =="
     command -v setup-xorg-base >/dev/null 2>&1 || install_pkg alpine-conf
     command -v setup-xorg-base >/dev/null 2>&1 \
         || morir "No esta 'setup-xorg-base' (paquete alpine-conf): no se puede instalar el escritorio."
@@ -978,7 +978,7 @@ detect_desktop_environment() {
     # IceWM cuenta como escritorio con lxsession, que le da la sesion de
     # LXDE (programas que arrancan solos, apariencia, salir).
     if pkg_installed icewm && pkg_installed lxsession; then
-        DE_ICEWM="yes"; log_ok "IceWM (estilo LXDE) detectado."
+        DE_ICEWM="yes"; log_ok "IceWM moderno detectado."
     fi
 
     if ! has_desktop; then
@@ -1816,9 +1816,9 @@ setup_applets() {
     fi
 
     if [ "$DE_ICEWM" = "yes" ]; then
-        # IceWM no tiene control de volumen propio: el boton "Volumen" de
-        # la barra abre pavucontrol y las teclas de volumen usan pactl
-        # (setup_icewm). nm-applet va en la bandeja de IceWM.
+        # IceWM no tiene control de volumen propio: el script pone uno en
+        # la bandeja (icewm_volumen, abre pavucontrol) y las teclas de
+        # volumen usan pactl (setup_icewm). nm-applet va en la bandeja.
         install_pkgs network-manager-applet pavucontrol
     fi
 
@@ -3807,7 +3807,7 @@ install_daily_apps() {
         fi
     fi
 
-    # --- Accesorios de IceWM (estilo LXDE) ---
+    # --- Accesorios de IceWM moderno ---
     # Los mismos que trae LXDE: visor de fotos, editor de texto,
     # calculadora, descompresor y capturas de pantalla (tecla Imprimir,
     # setup_icewm). Todos GTK y livianos.
@@ -4080,13 +4080,14 @@ INNEREOF
 }
 
 # ------------------------------------------------------------------------------
-# BLOQUE 32c: IceWM con apariencia de LXDE
+# BLOQUE 32c: IceWM moderno (sesion de LXDE)
 # ------------------------------------------------------------------------------
 # El escritorio mas liviano del script, pensado para equipos con 1 GB de
 # memoria: IceWM (ventanas y barra, unos 10 MB) dentro de la sesion de
-# LXDE (lxsession). Sin compositor ni efectos. Queda como LXDE:
-#   - Barra abajo con el menu, botones para el navegador, archivos,
-#     terminal y volumen, las ventanas abiertas, la bandeja (red, avisos)
+# LXDE (lxsession). Sin compositor ni efectos. Aspecto oscuro parecido a
+# Windows 10, con los colores del fondo de Lazaro:
+#   - Barra abajo con el menu, botones para el navegador, archivos y
+#     terminal, las ventanas abiertas, la bandeja (red, volumen, avisos)
 #     y el reloj. Bateria solo en portatiles.
 #   - Menu de aplicaciones por categorias en el idioma del sistema (lo
 #     arma /usr/local/libexec/icewm-lxde/menu-aplicaciones cada vez que
@@ -4099,14 +4100,15 @@ ICEWM_SESION="icewm-lxde"
 
 setup_icewm() {
     [ "$DE_ICEWM" = "yes" ] || return 0
-    log_info "== IceWM con apariencia de LXDE =="
+    log_info "== IceWM moderno (sesion de LXDE) =="
     # En una sola línea: la ISO de Lázaro lee esta lista con grep.
-    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs rsvg-convert
+    install_pkgs pcmanfm lxterminal papirus-icon-theme greybird-themes pulseaudio-utils xdg-user-dirs rsvg-convert python3 py3-gobject3 gtk+3.0
 
     icewm_sesion
     icewm_preferencias
     icewm_tema
     icewm_menu
+    icewm_volumen
     icewm_barra
     icewm_iconos
     icewm_teclas
@@ -4137,7 +4139,7 @@ upgrade_manager/command=
 
 [GTK]
 sNet/ThemeName=Greybird
-sNet/IconThemeName=Papirus-Light
+sNet/IconThemeName=Papirus
 sGtk/FontName=DejaVu Sans 10
 sGtk/CursorThemeName=
 iGtk/ToolbarStyle=3
@@ -4162,6 +4164,8 @@ CONF
     fi
     # Deja listo el menu de aplicaciones apenas abre la sesion.
     echo "@/usr/local/libexec/icewm-lxde/menu-aplicaciones --cache" >> "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
+    # Volumen en la bandeja (icewm_volumen).
+    echo "@/usr/local/libexec/icewm-lxde/volumen" >> "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
 
     # La sesion arranca con su propio bus de D-Bus (como startlxde): sin
     # el, los programas usan uno "automatico" que gvfs no siempre
@@ -4169,7 +4173,7 @@ CONF
     cat > "/usr/share/xsessions/$ICEWM_SESION.desktop" <<SESION
 [Desktop Entry]
 Type=Application
-Name=IceWM (estilo LXDE)
+Name=IceWM
 Comment=Escritorio liviano para equipos con poca memoria
 Exec=dbus-launch --exit-with-session lxsession -s $ICEWM_SESION -e LXDE
 TryExec=lxsession
@@ -4194,18 +4198,22 @@ SESION
         cat > /etc/gtk-3.0/settings.ini <<'GTK'
 [Settings]
 gtk-theme-name=Greybird
-gtk-icon-theme-name=Papirus-Light
+gtk-icon-theme-name=Papirus
 gtk-font-name=DejaVu Sans 10
 GTK
+    else
+        # Version anterior (barra clara): Papirus-Light. La barra ahora es
+        # oscura y la bandeja necesita los iconos claros de Papirus.
+        sed -i 's/^gtk-icon-theme-name=Papirus-Light$/gtk-icon-theme-name=Papirus/' /etc/gtk-3.0/settings.ini
     fi
 }
 
 icewm_preferencias() {
     mkdir -p /etc/icewm
     cat > /etc/icewm/preferences <<'PREF'
-# Generado por desktop-postinstall.sh: IceWM con apariencia de LXDE.
+# Generado por desktop-postinstall.sh: IceWM moderno (sesion de LXDE).
 # Cada usuario puede cambiarlo copiando este archivo a ~/.icewm/.
-Theme="lxde-plano/default.theme"
+Theme="moderno/default.theme"
 
 # Barra abajo, como en LXDE: menu, botones, ventanas, bandeja y reloj.
 TaskBarAtTop=0
@@ -4276,21 +4284,29 @@ DesktopBackgroundCenter=0
 PREF
 }
 
-# Tema plano con los colores de LXDE: titulos azules, barra y menus
-# claros. Sin imagenes: se dibuja rapido en cualquier grafica.
-icewm_tema() {
-    mkdir -p /etc/icewm/themes/lxde-plano
-    cat > /etc/icewm/themes/lxde-plano/default.theme <<'TEMA'
-# Generado por desktop-postinstall.sh: tema plano al estilo de LXDE.
-ThemeDescription="Plano, al estilo de LXDE"
+# Tema "moderno": barra y menus oscuros con los colores del fondo de
+# Lazaro (azul marino y celeste), ventanas planas con botones anchos como
+# los de Windows 10. Todo son colores planos e imagenes XPM pequenas: se
+# dibuja tan rapido como el tema anterior y no usa mas memoria.
+ICEWM_TEMA="moderno"
+# Con un argumento deja el tema en esa carpeta de temas (la ISO de Lazaro
+# lo usa para su sesion de prueba).
+# shellcheck disable=SC2120 # Lázaro la llama con la carpeta de temas de su sesión de prueba
+icewm_tema() { # [CARPETA_DE_TEMAS]
+    _dir="${1:-/etc/icewm/themes}/$ICEWM_TEMA"
+    [ -n "${1:-}" ] || rm -rf /etc/icewm/themes/lxde-plano
+    mkdir -p "$_dir/taskbar"
+    cat > "$_dir/default.theme" <<'TEMA'
+# Generado por desktop-postinstall.sh: tema plano oscuro, colores de Lazaro.
+ThemeDescription="Moderno: barra oscura y ventanas planas"
 Look=flat
-TitleBarHeight=22
+TitleBarHeight=26
 TitleBarJustify=0
-TitleBarHorzOffset=6
-BorderSizeX=3
-BorderSizeY=3
-DlgBorderSizeX=3
-DlgBorderSizeY=3
+TitleBarHorzOffset=8
+BorderSizeX=2
+BorderSizeY=2
+DlgBorderSizeX=2
+DlgBorderSizeY=2
 CornerSizeX=12
 CornerSizeY=12
 TitleButtonsLeft="s"
@@ -4298,173 +4314,343 @@ TitleButtonsRight="xmi"
 TitleButtonsSupported="ismx"
 TaskBarClockLeds=0
 
-ColorActiveTitleBar="#3d6a9e"
+ColorActiveTitleBar="#0f3a5f"
 ColorActiveTitleBarText="#ffffff"
-ColorNormalTitleBar="#d4d4d4"
-ColorNormalTitleBarText="#4a4a4a"
-ColorActiveBorder="#3d6a9e"
-ColorNormalBorder="#bdbdbd"
-ColorActiveButton="#c8d7ea"
-ColorNormalButton="#ececec"
-ColorNormalButtonText="#202020"
-ColorActiveButtonText="#000000"
-ColorDialog="#efefef"
+ColorNormalTitleBar="#2a3b4c"
+ColorNormalTitleBarText="#a9b8c6"
+ColorActiveBorder="#0f3a5f"
+ColorNormalBorder="#2a3b4c"
+ColorNormalButton="#06192b"
+ColorNormalButtonText="#e6eef5"
+ColorActiveButton="#1d4a70"
+ColorActiveButtonText="#ffffff"
+ColorToolButton="#06192b"
+ColorToolButtonText="#e6eef5"
+ColorDialog="#1c2b39"
 ColorInput="#ffffff"
 ColorInputText="#000000"
-ColorInputSelection="#3d6a9e"
+ColorInputSelection="#1f6aa5"
 ColorInputSelectionText="#ffffff"
-ColorToolTip="#ffffe1"
-ColorToolTipText="#000000"
+ColorToolTip="#2b3a48"
+ColorToolTipText="#ffffff"
 
-ColorDefaultTaskBar="#ececec"
-ColorNormalTaskBarApp="#ececec"
-ColorNormalTaskBarAppText="#202020"
-ColorActiveTaskBarApp="#c8d7ea"
-ColorActiveTaskBarAppText="#000000"
-ColorMinimizedTaskBarApp="#e0e0e0"
-ColorMinimizedTaskBarAppText="#707070"
-ColorInvisibleTaskBarAppText="#909090"
-ColorClock="#ececec"
-ColorClockText="#202020"
-ColorApm="#ececec"
-ColorApmText="#202020"
+ColorDefaultTaskBar="#06192b"
+ColorNormalTaskBarApp="#06192b"
+ColorNormalTaskBarAppText="#e6eef5"
+ColorActiveTaskBarApp="#1d4a70"
+ColorActiveTaskBarAppText="#ffffff"
+ColorMinimizedTaskBarApp="#06192b"
+ColorMinimizedTaskBarAppText="#8aa0b4"
+ColorInvisibleTaskBarAppText="#6c8296"
+ColorClock="#06192b"
+ColorClockText="#ffffff"
+ColorApm="#06192b"
+ColorApmText="#ffffff"
 
-ColorNormalMenu="#f7f7f7"
-ColorNormalMenuItemText="#202020"
-ColorActiveMenuItem="#3d6a9e"
+ColorNormalMenu="#1c2b39"
+ColorNormalMenuItemText="#f0f4f8"
+ColorActiveMenuItem="#1f6aa5"
 ColorActiveMenuItemText="#ffffff"
-ColorDisabledMenuItemText="#9a9a9a"
-ColorDisabledMenuItemShadow="#f7f7f7"
-ColorMenuIconBackground="#f7f7f7"
+ColorDisabledMenuItemText="#7a8a99"
+ColorDisabledMenuItemShadow="#1c2b39"
+ColorMenuIconBackground="#1c2b39"
 
-ColorQuickSwitch="#f7f7f7"
-ColorQuickSwitchText="#202020"
-ColorQuickSwitchActive="#3d6a9e"
+ColorQuickSwitch="#1c2b39"
+ColorQuickSwitchText="#f0f4f8"
+ColorQuickSwitchActive="#1f6aa5"
 TEMA
-    icewm_botones /etc/icewm/themes/lxde-plano
+    icewm_botones "$_dir"
+    icewm_boton_menu "$_dir/taskbar/start.xpm"
 }
 
-# Botones de las ventanas (minimizar, maximizar, restaurar, cerrar) como
-# imagenes propias: sin ellas IceWM los dibuja por su cuenta y pueden
-# dejar de verse. Cada dibujo es de 22x22 ("#" = trazo). Version A
-# (ventana activa: blanco sobre azul), I (inactiva: gris sobre gris
-# claro) y O (con el mouse encima; cerrar en rojo).
+# Botones de ventana anchos y con trazo fino, como en Windows 10: guion,
+# cuadrado, dos cuadrados y X de 10 px. El de cerrar se pone rojo con el
+# mouse encima; los demas, un poco mas claros. IceWM parte cada imagen en
+# dos mitades: arriba el boton normal y abajo el apretado.
 icewm_botones() { # DIRECTORIO_DEL_TEMA
-    # IceWM parte cada imagen en dos mitades: arriba el boton normal y
-    # abajo el boton apretado. Con una sola mitad mostraba medio dibujo y
-    # un borde negro. Apretado: el mismo dibujo con el fondo mas oscuro.
-    _xpm() { # ARCHIVO FONDO TRAZO DIBUJO
-        {
-            echo '/* XPM */'
-            echo 'static char *boton[] = {'
-            echo '"22 44 3 1",'
-            echo "\". c $2\","
-            echo "\"# c $3\","
-            echo "\"o c #2a4a70\","
-            printf '%s\n' "$4" | sed 's/^/"/; s/$/",/'
-            printf '%s\n' "$4" | sed 's/\./o/g; s/^/"/; s/$/",/'
-            echo '};'
-        } > "$1"
+    _xpm() { # ARCHIVO FORMA FONDO TRAZO APRETADO
+        awk -v forma="$2" -v fondo="$3" -v trazo="$4" -v apretado="$5" 'BEGIN {
+            an = 36; al = 26; x0 = 13; y0 = 8
+            print "/* XPM */"
+            print "static char *boton[] = {"
+            printf "\"%d %d 3 1\",\n", an, al * 2
+            printf "\". c %s\",\n\"# c %s\",\n\"o c %s\",\n", fondo, trazo, apretado
+            for (mitad = 0; mitad < 2; mitad++)
+                for (y = 0; y < al; y++) {
+                    fila = ""
+                    for (x = 0; x < an; x++) {
+                        i = x - x0; j = y - y0; p = 0
+                        if (forma == "minimize") p = (j == 5 && i >= 0 && i <= 9)
+                        else if (forma == "maximize")
+                            p = (i >= 0 && i <= 9 && j >= 0 && j <= 9 && (i == 0 || i == 9 || j == 0 || j == 9))
+                        else if (forma == "restore")
+                            p = (i >= 0 && i <= 7 && j >= 2 && j <= 9 && (i == 0 || i == 7 || j == 2 || j == 9)) \
+                                || ((j == 0 && i >= 2 && i <= 9) || (i == 9 && j >= 0 && j <= 7))
+                        else if (forma == "close")
+                            p = (i >= 0 && i <= 9 && j >= 0 && j <= 9 && (i == j || i == 9 - j))
+                        fila = fila (p ? "#" : (mitad ? "o" : "."))
+                    }
+                    printf "\"%s\"%s\n", fila, (mitad == 1 && y == al - 1) ? "" : ","
+                }
+            print "};"
+        }' > "$1"
     }
-    _cerrar='......................
-......................
-......................
-......................
-......................
-......................
-.......##......##.....
-.......###....###.....
-........###..###......
-.........######.......
-..........####........
-..........####........
-.........######.......
-........###..###......
-.......###....###.....
-.......##......##.....
-......................
-......................
-......................
-......................
-......................
-......................'
-    _maximizar='......................
-......................
-......................
-......................
-......................
-......................
-......##########......
-......##########......
-......#........#......
-......#........#......
-......#........#......
-......#........#......
-......#........#......
-......#........#......
-......#........#......
-......##########......
-......................
-......................
-......................
-......................
-......................
-......................'
-    _minimizar='......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......................
-......##########......
-......##########......
-......................
-......................
-......................
-......................
-......................
-......................'
-    _restaurar='......................
-......................
-......................
-......................
-......................
-......................
-.........#######......
-.........#######......
-.........#.....#......
-......#######..#......
-......#######..#......
-......#.....#..#......
-......#.....####......
-......#.....#.........
-......#.....#.........
-......#######.........
-......................
-......................
-......................
-......................
-......................
-......................'
-    for _b in cerrar:close maximizar:maximize minimizar:minimize restaurar:restore; do
-        _dibujo=""; eval "_dibujo=\$_${_b%%:*}"
-        _n="${_b#*:}"
-        _xpm "$1/${_n}A.xpm" "#3d6a9e" "#ffffff" "$_dibujo"
-        _xpm "$1/${_n}I.xpm" "#d4d4d4" "#4a4a4a" "$_dibujo"
+    for _n in close maximize minimize restore; do
+        _xpm "$1/${_n}A.xpm" "$_n" "#0f3a5f" "#ffffff" "#0a2a46"
+        _xpm "$1/${_n}I.xpm" "$_n" "#2a3b4c" "#a9b8c6" "#22313f"
         if [ "$_n" = close ]; then
-            _xpm "$1/${_n}O.xpm" "#c94a4a" "#ffffff" "$_dibujo"
+            _xpm "$1/${_n}O.xpm" "$_n" "#e81123" "#ffffff" "#b00d1b"
         else
-            _xpm "$1/${_n}O.xpm" "#5a86b8" "#ffffff" "$_dibujo"
+            _xpm "$1/${_n}O.xpm" "$_n" "#2a5a82" "#ffffff" "#0a2a46"
         fi
     done
+}
+
+# Boton del menu: circulo celeste con la linea de pulso blanca (como el
+# logo de Lazaro), en vez del logo de IceWM.
+icewm_boton_menu() { # ARCHIVO
+    awk 'BEGIN {
+        n = 24; c = 11.5
+        # Linea de pulso: alturas por columna (centro en 12).
+        split("12 12 12 12 12 12 12 11 8 5 9 14 17 15 12 12 11 12 12 12 12 12 12 12", h, " ")
+        print "/* XPM */"
+        print "static char *menu[] = {"
+        printf "\"%d %d 3 1\",\n\"  c None\",\n\". c #29b6f6\",\n\"# c #ffffff\",\n", n, n
+        for (y = 0; y < n; y++) {
+            fila = ""
+            for (x = 0; x < n; x++) {
+                d = (x - c) * (x - c) + (y - c) * (y - c)
+                if (d > 11.6 * 11.6) { fila = fila " "; continue }
+                a = h[x + 1]; b = (x + 2 <= n) ? h[x + 2] : a
+                lo = (a < b) ? a : b; hi = (a < b) ? b : a
+                fila = fila ((x >= 3 && x <= 20 && y >= lo && y <= hi + (lo == hi ? 1 : 0)) ? "#" : ".")
+            }
+            printf "\"%s\"%s\n", fila, (y == n - 1) ? "" : ","
+        }
+        print "};"
+    }' > "$1"
+}
+
+# Volumen en la bandeja, a la derecha de la barra (como en Windows):
+# Alpine estable no trae un control de volumen para bandeja (pasystray,
+# volumeicon y pnmixer estan solo en "testing"), asi que se hace uno
+# chico en Python con GTK, que la ISO de Lazaro ya trae. Icono segun el
+# volumen; clic: barrita para subir o bajar; rueda: +-5 %; clic del
+# medio: silenciar; clic derecho: silenciar o abrir el mezclador.
+icewm_volumen() {
+    mkdir -p /usr/local/libexec/icewm-lxde
+    cat > /usr/local/libexec/icewm-lxde/volumen <<'VOLUMEN'
+#!/usr/bin/env python3
+# Generado por desktop-postinstall.sh: volumen en la bandeja de IceWM.
+import os
+import re
+import subprocess
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import GLib, Gdk, Gtk  # noqa: E402
+
+IDIOMA = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
+          or os.environ.get("LANG") or "es")[:2]
+TEXTOS = {
+    "es": ("Volumen", "Silenciar", "Mezclador de volumen", "sin sonido"),
+    "pt": ("Volume", "Silenciar", "Mixer de volume", "sem som"),
+    "en": ("Volume", "Mute", "Volume mixer", "muted"),
+}
+T_VOLUMEN, T_SILENCIAR, T_MEZCLADOR, T_MUDO = TEXTOS.get(IDIOMA, TEXTOS["en"])
+ENTORNO = dict(os.environ, LC_ALL="C")
+
+
+def pactl(*args):
+    try:
+        return subprocess.run(["pactl", *args], capture_output=True, text=True,
+                              timeout=3, env=ENTORNO).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+class Volumen:
+    def __init__(self):
+        self.vol, self.mudo = 0, False
+        self.icono = Gtk.StatusIcon()
+        self.icono.connect("activate", self.mostrar_barra)
+        self.icono.connect("popup-menu", self.menu)
+        self.icono.connect("scroll-event", self.rueda)
+        self.icono.connect("button-press-event", self.boton)
+        self.barra = None
+        self.cerrada = 0
+        self.leer()
+        self.escuchar()
+
+    # Estado del sonido
+    def leer(self):
+        m = re.search(r"(\d+)%", pactl("get-sink-volume", "@DEFAULT_SINK@"))
+        self.vol = int(m.group(1)) if m else 0
+        self.mudo = "yes" in pactl("get-sink-mute", "@DEFAULT_SINK@")
+        if self.mudo or self.vol == 0:
+            nombre = "audio-volume-muted"
+        elif self.vol < 34:
+            nombre = "audio-volume-low"
+        elif self.vol < 67:
+            nombre = "audio-volume-medium"
+        else:
+            nombre = "audio-volume-high"
+        self.icono.set_from_icon_name(nombre)
+        texto = f"{T_VOLUMEN}: {self.vol} %"
+        self.icono.set_tooltip_text(texto + (f" ({T_MUDO})" if self.mudo else ""))
+        if self.barra is not None:
+            self.ajuste_ignorar = True
+            self.escala.set_value(self.vol)
+            self.ajuste_ignorar = False
+            self.etiqueta.set_text(f"{self.vol} %")
+        return False
+
+    # Avisos de PulseAudio: se lee de nuevo solo cuando algo cambia (sin
+    # consultar cada tantos segundos). Si PulseAudio aun no arranco, se
+    # reintenta.
+    def escuchar(self):
+        try:
+            self.proc = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE,
+                                         env=ENTORNO, text=True, bufsize=1)
+        except OSError:
+            GLib.timeout_add_seconds(5, self.escuchar)
+            return False
+        GLib.io_add_watch(self.proc.stdout, GLib.PRIORITY_DEFAULT,
+                          GLib.IO_IN | GLib.IO_HUP, self.aviso)
+        return False
+
+    def aviso(self, fuente, condicion):
+        linea = fuente.readline() if condicion & GLib.IO_IN else ""
+        if not linea:
+            self.proc.wait()
+            GLib.timeout_add_seconds(5, self.reintentar)
+            return False
+        if "sink" in linea or "server" in linea:
+            GLib.idle_add(self.leer)
+        return True
+
+    def reintentar(self):
+        self.leer()
+        self.escuchar()
+        return False
+
+    # Acciones
+    def poner(self, vol):
+        vol = max(0, min(100, int(vol)))
+        pactl("set-sink-mute", "@DEFAULT_SINK@", "0")
+        pactl("set-sink-volume", "@DEFAULT_SINK@", f"{vol}%")
+        self.leer()
+
+    def silenciar(self, *_):
+        pactl("set-sink-mute", "@DEFAULT_SINK@", "toggle")
+        self.leer()
+
+    def mezclador(self, *_):
+        try:
+            subprocess.Popen(["pavucontrol"])
+        except OSError:
+            pass
+
+    def rueda(self, _icono, evento):
+        paso = 0
+        if evento.direction == Gdk.ScrollDirection.UP:
+            paso = 5
+        elif evento.direction == Gdk.ScrollDirection.DOWN:
+            paso = -5
+        elif evento.direction == Gdk.ScrollDirection.SMOOTH:
+            paso = -5 if evento.delta_y > 0 else 5
+        if paso:
+            self.poner(self.vol + paso)
+        return True
+
+    def boton(self, _icono, evento):
+        if evento.button == 2:
+            self.silenciar()
+            return True
+        return False
+
+    def menu(self, _icono, boton, momento):
+        menu = Gtk.Menu()
+        mudo = Gtk.CheckMenuItem(label=T_SILENCIAR)
+        mudo.set_active(self.mudo)
+        mudo.connect("toggled", self.silenciar)
+        mezcla = Gtk.MenuItem(label=T_MEZCLADOR)
+        mezcla.connect("activate", self.mezclador)
+        menu.append(mudo)
+        menu.append(mezcla)
+        menu.show_all()
+        menu.popup(None, None, Gtk.StatusIcon.position_menu, self.icono, boton, momento)
+        self.menu_abierto = menu
+
+    # Barrita de volumen sobre el icono, como en Windows.
+    def mostrar_barra(self, *_):
+        # Un clic en el icono con la barrita abierta la cierra (al perder
+        # el foco ya se cerro un instante antes).
+        if self.barra is not None or GLib.get_monotonic_time() - self.cerrada < 400000:
+            self.cerrar_barra()
+            return
+        v = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        v.set_decorated(False)
+        v.set_skip_taskbar_hint(True)
+        v.set_skip_pager_hint(True)
+        v.set_keep_above(True)
+        v.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        caja = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        caja.set_border_width(10)
+        mudo = Gtk.Button.new_from_icon_name(
+            "audio-volume-muted" if self.mudo else "audio-volume-high", Gtk.IconSize.BUTTON)
+        mudo.set_relief(Gtk.ReliefStyle.NONE)
+        mudo.set_tooltip_text(T_SILENCIAR)
+        mudo.connect("clicked", self.silenciar)
+        self.escala = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.escala.set_draw_value(False)
+        self.escala.set_size_request(200, -1)
+        self.escala.set_value(self.vol)
+        self.ajuste_ignorar = False
+        self.escala.connect("value-changed", self.mover)
+        self.etiqueta = Gtk.Label(label=f"{self.vol} %")
+        self.etiqueta.set_width_chars(5)
+        mezcla = Gtk.Button.new_from_icon_name("multimedia-volume-control", Gtk.IconSize.BUTTON)
+        mezcla.set_relief(Gtk.ReliefStyle.NONE)
+        mezcla.set_tooltip_text(T_MEZCLADOR)
+        mezcla.connect("clicked", lambda *_: (self.cerrar_barra(), self.mezclador()))
+        for w in (mudo, self.escala, self.etiqueta, mezcla):
+            caja.pack_start(w, w is self.escala, True, 0)
+        v.add(caja)
+        v.connect("focus-out-event", lambda *_: self.cerrar_barra())
+        v.connect("key-press-event",
+                  lambda _w, e: e.keyval == Gdk.KEY_Escape and self.cerrar_barra())
+        self.barra = v
+        caja.show_all()
+        ancho, alto = v.get_preferred_size()[1].width, v.get_preferred_size()[1].height
+        ok, pantalla, area, _orient = self.icono.get_geometry()
+        if ok:
+            geo = pantalla.get_monitor_geometry(pantalla.get_monitor_at_point(area.x, area.y))
+            x = min(max(area.x + area.width // 2 - ancho // 2, geo.x),
+                    geo.x + geo.width - ancho)
+            y = area.y - alto - 4 if area.y > geo.y + geo.height // 2 else area.y + area.height + 4
+            v.move(x, y)
+        v.show_all()
+        v.present()
+
+    def mover(self, escala):
+        if not self.ajuste_ignorar:
+            self.poner(escala.get_value())
+
+    def cerrar_barra(self):
+        if self.barra is not None:
+            self.barra.destroy()
+            self.barra = None
+            self.cerrada = GLib.get_monotonic_time()
+        return False
+
+
+if __name__ == "__main__":
+    Volumen()
+    Gtk.main()
+VOLUMEN
+    chmod 755 /usr/local/libexec/icewm-lxde/volumen
 }
 
 # Menu de aplicaciones. Alpine compila IceWM sin traducciones, asi que el
@@ -4657,7 +4843,7 @@ nombres() {
 }
 
 buscar() { # NOMBRE TAMANO
-    for tema in Papirus-Light Papirus; do
+    for tema in Papirus Papirus-Light; do
         for f in /usr/share/icons/$tema/${2}x${2}/*/"$1".svg; do
             [ -f "$f" ] && { echo "$f"; return 0; }
         done
@@ -4709,7 +4895,6 @@ icewm_barra() {
         fi
         command -v pcmanfm >/dev/null 2>&1 && echo 'prog "Archivos" system-file-manager pcmanfm'
         command -v lxterminal >/dev/null 2>&1 && echo 'prog "Terminal" utilities-terminal lxterminal'
-        command -v pavucontrol >/dev/null 2>&1 && echo 'prog "Volumen" multimedia-volume-control pavucontrol'
         true
     } > /etc/icewm/toolbar
 }
@@ -4764,7 +4949,7 @@ icewm_pcmanfm() {
     # fondo nuevo llega tambien a los equipos ya instalados).
     if [ ! -e "$_conf" ] || grep -q '^# Generado por desktop-postinstall.sh' "$_conf"; then
         {
-            echo "# Generado por desktop-postinstall.sh: PCManFM en IceWM (estilo LXDE)."
+            echo "# Generado por desktop-postinstall.sh: PCManFM en IceWM moderno."
             echo "[config]"
             echo "bm_open_method=0"
             echo
