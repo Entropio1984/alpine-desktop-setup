@@ -179,8 +179,12 @@ if [ "$escritorio" = icewm ]; then
     done
     xprop -root _NET_SUPPORTING_WM_CHECK _NET_WORKAREA > "$S" 2>&1
     decir "--- papelera (gio) ---"
-    dbus=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-)
-    su -s /bin/sh prueba -c "DBUS_SESSION_BUS_ADDRESS='$dbus' gio info trash:/// 2>&1 | head -n 5" > "$S" 2>&1
+    ls /usr/libexec/gvfsd* /usr/libexec/gvfs/ > "$S" 2>&1
+    U="DISPLAY=:0 XAUTHORITY=/home/prueba/.Xauthority $(tr '\0' '\n' < /proc/$pid/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | sed "s/=\(.*\)/='\1'/")"
+    decir "entorno para el usuario: $U"
+    su -s /bin/sh prueba -c "$U gio info trash:/// 2>&1 | head -n 5" > "$S" 2>&1
+    su -s /bin/sh prueba -c "$U gio mime image/png 2>&1 | head -n 3" > "$S" 2>&1
+    ls -la /usr/share/file-manager/actions > "$S" 2>&1
     sleep 8
     decir "PRUEBA-FOTO escritorio"
     sleep 12
@@ -188,12 +192,43 @@ if [ "$escritorio" = icewm ]; then
     alto=$(xdotool getdisplaygeometry | cut -d' ' -f2)
     xdotool mousemove $((ancho * 2 / 3)) $((alto / 2)) click 3
     sleep 4
-    decir "=== Ventanas con el clic derecho en el escritorio ==="
-    xdotool search --onlyvisible --name . getwindowname %@ > "$S" 2>&1 || true
     decir "PRUEBA-FOTO clic-derecho"
     sleep 12
     xdotool key Escape
     sleep 2
+    # Clic derecho sobre la imagen del escritorio (primer icono).
+    xdotool mousemove 60 40 click 1
+    sleep 1
+    xdotool click 3
+    sleep 4
+    decir "PRUEBA-FOTO clic-derecho-imagen"
+    sleep 12
+    xdotool key Escape
+    sleep 2
+    # Arrastrar una foto desde una ventana de PCManFM al escritorio.
+    mkdir -p /home/prueba/Pictures
+    cp "$dir/imagen-de-prueba.png" /home/prueba/Pictures/arrastrada.png
+    chown prueba:prueba /home/prueba/Pictures/arrastrada.png
+    su -s /bin/sh prueba -c "$U pcmanfm --profile icewm-lxde --new-win /home/prueba/Pictures >/dev/null 2>&1 &"
+    sleep 8
+    w=$(xdotool search --onlyvisible --name Pictures 2>/dev/null | tail -n 1)
+    decir "ventana de Pictures: $w"
+    if [ -n "$w" ]; then
+        xdotool windowmove "$w" 600 150 windowsize "$w" 600 400
+        sleep 3
+        xdotool getwindowgeometry "$w" > "$S" 2>&1
+        decir "PRUEBA-FOTO ventana-pictures"
+        sleep 12
+    fi
+    unset DISPLAY XAUTHORITY
+    decir "--- poner la foto de fondo ---"
+    su -s /bin/sh prueba -c "$U /usr/local/libexec/icewm-lxde/fondo /home/prueba/Pictures/arrastrada.png" > "$S" 2>&1
+    decir "fondo rc=$?"
+    export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
+    sleep 5
+    cat /home/prueba/.config/pcmanfm/icewm-lxde/desktop-items-0.conf > "$S" 2>&1
+    decir "PRUEBA-FOTO fondo"
+    sleep 12
     decir "=== Avisos de PCManFM (.xsession-errors) ==="
     grep -i -E 'pcmanfm|libfm|gvfs|gio|dbus' /home/prueba/.xsession-errors > "$S" 2>&1 || true
     unset DISPLAY XAUTHORITY

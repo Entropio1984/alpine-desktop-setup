@@ -4163,12 +4163,15 @@ CONF
     # Deja listo el menu de aplicaciones apenas abre la sesion.
     echo "@/usr/local/libexec/icewm-lxde/menu-aplicaciones --cache" >> "/etc/xdg/lxsession/$ICEWM_SESION/autostart"
 
+    # La sesion arranca con su propio bus de D-Bus (como startlxde): sin
+    # el, los programas usan uno "automatico" que gvfs no siempre
+    # encuentra, y PCManFM se queda sin papelera.
     cat > "/usr/share/xsessions/$ICEWM_SESION.desktop" <<SESION
 [Desktop Entry]
 Type=Application
 Name=IceWM (estilo LXDE)
 Comment=Escritorio liviano para equipos con poca memoria
-Exec=lxsession -s $ICEWM_SESION -e LXDE
+Exec=dbus-launch --exit-with-session lxsession -s $ICEWM_SESION -e LXDE
 TryExec=lxsession
 DesktopNames=LXDE
 SESION
@@ -4782,6 +4785,34 @@ show_mounts=1
 sort=mtime;ascending;
 ESCRITORIO
     fi
+    # Clic derecho sobre una foto (en el escritorio o en una carpeta):
+    # "Usar como fondo del escritorio". Solo en esta sesion (LXQt tiene
+    # su propio PCManFM-Qt, que tambien lee estas acciones).
+    mkdir -p /usr/local/libexec/icewm-lxde /usr/share/file-manager/actions
+    cat > /usr/local/libexec/icewm-lxde/fondo <<FONDO
+#!/bin/sh
+# Generado por desktop-postinstall.sh: pone la foto \$1 de fondo del
+# escritorio (llenando la pantalla, sin deformarla).
+[ -f "\$1" ] || exit 1
+exec pcmanfm --profile $ICEWM_SESION --set-wallpaper "\$1" --wallpaper-mode crop
+FONDO
+    chmod 755 /usr/local/libexec/icewm-lxde/fondo
+    cat > /usr/share/file-manager/actions/icewm-lxde-fondo.desktop <<'ACCION'
+[Desktop Entry]
+Type=Action
+Name=Use as desktop background
+Name[es]=Usar como fondo del escritorio
+Name[pt_BR]=Usar como fundo da área de trabalho
+Icon=preferences-desktop-wallpaper
+OnlyShowIn=LXDE;
+Profiles=foto;
+
+[X-Action-Profile foto]
+MimeTypes=image/jpeg;image/png;image/gif;image/bmp;image/webp;image/tiff;image/x-portable-pixmap;
+SelectionCount==1
+Exec=/usr/local/libexec/icewm-lxde/fondo %f
+ACCION
+
     # Terminal de los menus de PCManFM: LXTerminal.
     if [ -f /etc/xdg/libfm/libfm.conf ]; then
         if grep -q '^terminal=' /etc/xdg/libfm/libfm.conf; then
