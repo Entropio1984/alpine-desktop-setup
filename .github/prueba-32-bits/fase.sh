@@ -136,6 +136,11 @@ if [ "$escritorio" = icewm ]; then
             tail -n 20 /home/prueba/.cache/lxsession/icewm-lxde/run.log > "$S" 2>&1
         esac
     fi
+    # Botones propios de la barra: menú y "mostrar escritorio".
+    for b in start desktop; do
+        head -n 1 "/etc/icewm/themes/moderno/taskbar/$b.xpm" 2>/dev/null | grep -q XPM \
+            || decir "PRUEBA-FALLO IceWM: falta el botón $b.xpm del tema"
+    done
     # IceWM no abre SVG: sin los iconos en PNG, la barra y el menú
     # quedan sin iconos.
     iconos=$(find /usr/share/icewm-lxde/iconos -name '*_16x16.png' 2>/dev/null | wc -l)
