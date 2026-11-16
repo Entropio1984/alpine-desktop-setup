@@ -3809,11 +3809,13 @@ install_daily_apps() {
 
     # --- Accesorios de IceWM moderno ---
     # Los mismos que trae LXDE: visor de fotos, editor de texto,
-    # calculadora, descompresor y capturas de pantalla (tecla Imprimir,
-    # setup_icewm). Todos GTK y livianos.
+    # calculadora, descompresor y capturas de pantalla (GNOME Capturas:
+    # ventana para elegir pantalla, ventana o zona, con espera y copia al
+    # portapapeles; GTK 3, menos de 1 MB más libhandy; teclas Imprimir en
+    # icewm_teclas). Todos GTK y livianos.
     if [ "$DE_ICEWM" = "yes" ]; then
         # En una sola línea: la ISO de Lázaro lee esta lista con grep.
-        install_pkgs gpicview mousepad galculator xarchiver scrot
+        install_pkgs gpicview mousepad galculator xarchiver gnome-screenshot
         if img_app="$(find_desktop_file gpicview.desktop)"; then
             set_default_app "$img_app" \
                 image/jpeg image/png image/gif image/webp image/bmp image/tiff \
@@ -4899,24 +4901,42 @@ icewm_barra() {
     } > /etc/icewm/toolbar
 }
 
-# Teclas: volumen (las del teclado del portatil), capturas con Imprimir,
+# Teclas: volumen (las del teclado del portatil), capturas con Imprimir
+# (con Mayús una zona, con Alt la ventana),
 # Super+E archivos y Ctrl+Alt+T terminal. La tecla Super sola abre el
 # menu (IceWM lo hace por su cuenta).
 icewm_teclas() {
+    # Imprimir abre la ventana de capturas (como la herramienta Recortes
+    # de Windows); Mayús+Imprimir elige una zona con el mouse y
+    # Alt+Imprimir captura la ventana activa. Las dos últimas guardan
+    # directo en Imágenes. El ayudante "captura" queda para quien copió
+    # el archivo de teclas viejo a ~/.icewm/keys. Sin gnome-screenshot
+    # (no se pudo instalar), Imprimir guarda la pantalla con scrot.
     cat > /usr/local/libexec/icewm-lxde/captura <<'CAPTURA'
 #!/bin/sh
 # Generado por desktop-postinstall.sh: captura de pantalla con Imprimir.
+modo="${1:---interactive}"
+if command -v gnome-screenshot >/dev/null 2>&1; then
+    exec gnome-screenshot "$modo"
+fi
 d="$(xdg-user-dir PICTURES 2>/dev/null)"
 [ -n "$d" ] && [ -d "$d" ] || d="$HOME"
-exec scrot "$d/Captura-%Y-%m-%d-%H%M%S.png"
+case "$modo" in
+    --area) exec scrot -s "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+    --window) exec scrot -u "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+    *) exec scrot "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+esac
 CAPTURA
     chmod 755 /usr/local/libexec/icewm-lxde/captura
+    command -v gnome-screenshot >/dev/null 2>&1 || install_pkgs scrot
     cat > /etc/icewm/keys <<'TECLAS'
 # Generado por desktop-postinstall.sh
 key "XF86AudioRaiseVolume"  pactl set-sink-volume @DEFAULT_SINK@ +5%
 key "XF86AudioLowerVolume"  pactl set-sink-volume @DEFAULT_SINK@ -5%
 key "XF86AudioMute"         pactl set-sink-mute @DEFAULT_SINK@ toggle
 key "Print"                 /usr/local/libexec/icewm-lxde/captura
+key "Shift+Print"           /usr/local/libexec/icewm-lxde/captura --area
+key "Alt+Print"             /usr/local/libexec/icewm-lxde/captura --window
 key "Super+e"               pcmanfm
 key "Alt+Ctrl+t"            lxterminal
 TECLAS
