@@ -4909,16 +4909,34 @@ icewm_teclas() {
     # Imprimir abre la ventana de capturas (como la herramienta Recortes
     # de Windows); Mayús+Imprimir elige una zona con el mouse y
     # Alt+Imprimir captura la ventana activa. Las dos últimas guardan
-    # directo en Imágenes.
-    rm -f /usr/local/libexec/icewm-lxde/captura
+    # directo en Imágenes. El ayudante "captura" queda para quien copió
+    # el archivo de teclas viejo a ~/.icewm/keys. Sin gnome-screenshot
+    # (no se pudo instalar), Imprimir guarda la pantalla con scrot.
+    cat > /usr/local/libexec/icewm-lxde/captura <<'CAPTURA'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: captura de pantalla con Imprimir.
+modo="${1:---interactive}"
+if command -v gnome-screenshot >/dev/null 2>&1; then
+    exec gnome-screenshot "$modo"
+fi
+d="$(xdg-user-dir PICTURES 2>/dev/null)"
+[ -n "$d" ] && [ -d "$d" ] || d="$HOME"
+case "$modo" in
+    --area) exec scrot -s "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+    --window) exec scrot -u "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+    *) exec scrot "$d/Captura-%Y-%m-%d-%H%M%S.png" ;;
+esac
+CAPTURA
+    chmod 755 /usr/local/libexec/icewm-lxde/captura
+    command -v gnome-screenshot >/dev/null 2>&1 || install_pkgs scrot
     cat > /etc/icewm/keys <<'TECLAS'
 # Generado por desktop-postinstall.sh
 key "XF86AudioRaiseVolume"  pactl set-sink-volume @DEFAULT_SINK@ +5%
 key "XF86AudioLowerVolume"  pactl set-sink-volume @DEFAULT_SINK@ -5%
 key "XF86AudioMute"         pactl set-sink-mute @DEFAULT_SINK@ toggle
-key "Print"                 gnome-screenshot --interactive
-key "Shift+Print"           gnome-screenshot --area
-key "Alt+Print"             gnome-screenshot --window
+key "Print"                 /usr/local/libexec/icewm-lxde/captura
+key "Shift+Print"           /usr/local/libexec/icewm-lxde/captura --area
+key "Alt+Print"             /usr/local/libexec/icewm-lxde/captura --window
 key "Super+e"               pcmanfm
 key "Alt+Ctrl+t"            lxterminal
 TECLAS

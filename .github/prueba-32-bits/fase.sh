@@ -240,11 +240,11 @@ if [ "$escritorio" = icewm ] && command -v xdotool >/dev/null 2>&1; then
     decir "=== Tamaño en disco del programa de capturas ==="
     apk info -s gnome-screenshot libhandy1 > "$S" 2>&1
     rm -f /tmp/prueba-captura.png
-    timeout 30 gnome-screenshot -f /tmp/prueba-captura.png > "$S" 2>&1
-    if [ -s /tmp/prueba-captura.png ]; then
+    rc=0; timeout 30 gnome-screenshot -f /tmp/prueba-captura.png > "$S" 2>&1 || rc=$?
+    if [ "$rc" = 0 ] && [ "$(head -c 8 /tmp/prueba-captura.png 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ]; then
         decir "PRUEBA-CAPTURAS-OK gnome-screenshot guardó $(wc -c < /tmp/prueba-captura.png) bytes"
     else
-        decir "PRUEBA-FALLO gnome-screenshot no guardó la captura"
+        decir "PRUEBA-FALLO gnome-screenshot no guardó la captura (salida $rc)"
     fi
     xdotool key Print
     ventana=""
@@ -257,7 +257,7 @@ if [ "$escritorio" = icewm ] && command -v xdotool >/dev/null 2>&1; then
         decir "PRUEBA-CAPTURAS-TECLA-OK Imprimir abrió la ventana de capturas"
         decir "=== Memoria de la ventana de capturas (MB) ==="
         for d in /proc/[0-9]*; do
-            awk -v n="$(cat "$d/comm" 2>/dev/null)" '/^VmRSS/ && n ~ /screenshot/ {printf "%6.1f %s\n", $2/1024, n}' "$d/status" 2>/dev/null
+            awk -v n="$(cat "$d/comm" 2>/dev/null)" '/^VmRSS/ && n ~ /screensho/ {printf "%6.1f %s\n", $2/1024, n}' "$d/status" 2>/dev/null
         done > "$S"
         decir "PRUEBA-OTRA-CAPTURA"
         sleep 15
@@ -266,6 +266,8 @@ if [ "$escritorio" = icewm ] && command -v xdotool >/dev/null 2>&1; then
         ps -o pid,args > "$S" 2>&1 || true
     fi
     unset DISPLAY XAUTHORITY
+elif [ "$escritorio" = icewm ]; then
+    decir "PRUEBA-FALLO sin xdotool no se pudo probar el programa de capturas"
 fi
 decir "PRUEBA-FIN"
 poweroff
