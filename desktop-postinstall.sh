@@ -4363,6 +4363,7 @@ ColorQuickSwitchActive="#1f6aa5"
 TEMA
     icewm_botones "$_dir"
     icewm_boton_menu "$_dir/taskbar/start.xpm"
+    icewm_boton_escritorio "$_dir/taskbar/desktop.xpm"
 }
 
 # Botones de ventana anchos y con trazo fino, como en Windows 10: guion,
@@ -4426,6 +4427,32 @@ icewm_boton_menu() { # ARCHIVO
                 a = h[x + 1]; b = (x + 2 <= n) ? h[x + 2] : a
                 lo = (a < b) ? a : b; hi = (a < b) ? b : a
                 fila = fila ((x >= 3 && x <= 20 && y >= lo && y <= hi + (lo == hi ? 1 : 0)) ? "#" : ".")
+            }
+            printf "\"%s\"%s\n", fila, (y == n - 1) ? "" : ","
+        }
+        print "};"
+    }' > "$1"
+}
+
+# Boton "mostrar escritorio": una pantalla celeste con marco blanco y su
+# pie. El de IceWM es oscuro y se perdia en la barra azul marino.
+icewm_boton_escritorio() { # ARCHIVO
+    awk 'BEGIN {
+        n = 24
+        print "/* XPM */"
+        print "static char *escritorio[] = {"
+        printf "\"%d %d 3 1\",\n\"  c None\",\n\". c #29b6f6\",\n\"# c #ffffff\",\n", n, n
+        for (y = 0; y < n; y++) {
+            fila = ""
+            for (x = 0; x < n; x++) {
+                p = " "
+                # Pantalla: marco blanco de 2 puntos y relleno celeste.
+                if (x >= 2 && x <= 21 && y >= 3 && y <= 16)
+                    p = (x <= 3 || x >= 20 || y <= 4 || y >= 15) ? "#" : "."
+                # Pie: columna y base.
+                if (x >= 10 && x <= 13 && y >= 17 && y <= 18) p = "#"
+                if (x >= 6 && x <= 17 && y >= 19 && y <= 20) p = "#"
+                fila = fila p
             }
             printf "\"%s\"%s\n", fila, (y == n - 1) ? "" : ","
         }
