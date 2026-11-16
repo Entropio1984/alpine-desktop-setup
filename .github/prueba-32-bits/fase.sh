@@ -231,21 +231,39 @@ fi
 decir "PRUEBA-CAPTURA"
 sleep 15
 
-# IceWM: segunda captura con la barrita de volumen abierta (clic en el
-# icono de la bandeja).
+# IceWM: programa de capturas. Primero una captura sin ventana (que
+# funcione sin GNOME Shell); después la tecla Imprimir debe abrir su
+# ventana, que sale en la segunda captura.
 if [ "$escritorio" = icewm ] && command -v xdotool >/dev/null 2>&1; then
     export DISPLAY=:0 XAUTHORITY=/var/run/lightdm/root/:0
     xdotool key Escape; sleep 1
-    icono=$(xdotool search --onlyvisible --class volumen 2>/dev/null | head -n 1)
-    if [ -n "$icono" ]; then
-        eval "$(xdotool getwindowgeometry --shell "$icono")"
-        decir "Icono de volumen en x=$X y=$Y (${WIDTH}x$HEIGHT)"
-        xdotool mousemove $((X + WIDTH / 2)) $((Y + HEIGHT / 2)) click 1
-        sleep 4
+    decir "=== Tamaño en disco del programa de capturas ==="
+    apk info -s gnome-screenshot libhandy1 > "$S" 2>&1
+    rm -f /tmp/prueba-captura.png
+    timeout 30 gnome-screenshot -f /tmp/prueba-captura.png > "$S" 2>&1
+    if [ -s /tmp/prueba-captura.png ]; then
+        decir "PRUEBA-CAPTURAS-OK gnome-screenshot guardó $(wc -c < /tmp/prueba-captura.png) bytes"
+    else
+        decir "PRUEBA-FALLO gnome-screenshot no guardó la captura"
+    fi
+    xdotool key Print
+    ventana=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 2
+        ventana=$(xdotool search --onlyvisible --class gnome-screenshot 2>/dev/null | head -n 1)
+        [ -n "$ventana" ] && break
+    done
+    if [ -n "$ventana" ]; then
+        decir "PRUEBA-CAPTURAS-TECLA-OK Imprimir abrió la ventana de capturas"
+        decir "=== Memoria de la ventana de capturas (MB) ==="
+        for d in /proc/[0-9]*; do
+            awk -v n="$(cat "$d/comm" 2>/dev/null)" '/^VmRSS/ && n ~ /screenshot/ {printf "%6.1f %s\n", $2/1024, n}' "$d/status" 2>/dev/null
+        done > "$S"
         decir "PRUEBA-OTRA-CAPTURA"
         sleep 15
     else
-        decir "PRUEBA-AVISO no se encontró el icono de volumen para hacerle clic"
+        decir "PRUEBA-FALLO la tecla Imprimir no abrió la ventana de capturas"
+        ps -o pid,args > "$S" 2>&1 || true
     fi
     unset DISPLAY XAUTHORITY
 fi
