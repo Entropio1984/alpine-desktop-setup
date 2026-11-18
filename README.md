@@ -344,6 +344,8 @@ Si hay un disco de estado sólido que acepta TRIM, programa `fstrim -a` una vez 
 ### Bloque 24 — `setup_usb_automount`
 Hace que las memorias USB se monten solas: instala y habilita `dbus`, `udisks2`, `elogind` y `polkit`, más `gvfs` en XFCE, GNOME, MATE y LXQt (en LXQt también `lxqt-policykit`, y en XFCE `thunar-volman`). Plasma no necesita nada más.
 
+También ordena el arranque: `polkit` antes que `networkmanager` y `fwupd`, y `modemmanager` antes que `networkmanager` (con `rc_before` en `/etc/conf.d/polkit` y `/etc/conf.d/modemmanager`). Si no, al encender NetworkManager despierta a ModemManager por D-Bus y este a polkit; cuando OpenRC llega a esos servicios, chocan con los que ya corren y quedan como fallidos (`failed`) aunque polkit funcione.
+
 ### Bloque 25 — `setup_printing`
 Solo si se marcó en el menú. Instala CUPS y su configurador; la administración web queda en `http://localhost:631`.
 
@@ -434,7 +436,7 @@ Firefox ofrece cambiar su interfaz al idioma del sistema en el primer arranque. 
 
 Solo si se marcó Flatpak, OnlyOffice, Chrome o Brave. Instala Flatpak, agrega Flathub y los portales del escritorio (para que los diálogos de abrir y guardar se vean como el resto del sistema), y luego las aplicaciones marcadas. Si agregar Flathub o descargar una aplicación falla por un corte de internet, espera a que la red vuelva y lo reintenta (hasta 3 veces).
 
-**Si una aplicación de Flathub no se puede instalar en ese momento** (sin internet, o por ejemplo Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano: una vez por minuto, hasta 20 veces. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
+**Si una aplicación de Flathub no se puede instalar en ese momento** (sin internet, o por ejemplo Google Chrome al instalar desde el instalador de Lázaro Linux: Chrome se descarga de la página de Google y ese paso no funciona dentro del sistema que se está instalando), queda anotada en `/etc/flatpak-pendientes`. En cada arranque, el servicio `local` la reintenta en segundo plano. Sin internet, espera sin gastar intentos. Si Flathub no responde o la descarga se corta, vuelve a probar cada vez más espaciado (2, 4, 8... hasta 30 minutos), hasta 24 veces por arranque, y sigue en el siguiente. Lo ya descargado no se vuelve a bajar. Cuando ya no queda ninguna pendiente, el reintento se borra solo. El resultado queda en `/var/log/flatpak-pendientes.log`.
 
 ### Bloque 32c — `setup_icewm`
 Solo con IceWM. Es el escritorio más liviano del script, pensado para equipos con 1 GB de memoria: IceWM (ventanas y barra) dentro de la sesión de LXDE (`lxsession`), sin compositor ni efectos. Queda así:
