@@ -3611,7 +3611,9 @@ log=/var/log/flatpak-pendientes.log
         echo "== $(date '+%F %T') quedan pendientes; se intenta de nuevo en el proximo arranque con internet" >>"$log"
     else
         echo "== $(date '+%F %T') listo: todas instaladas" >>"$log"
-        rm -f "$lista" /etc/local.d/flatpak-pendientes.start
+        # Se borra solo si sigue vacia: si el script agrego otra mientras
+        # tanto, la lista y este archivo se quedan para el proximo arranque.
+        [ -s "$lista" ] || rm -f "$lista" /etc/local.d/flatpak-pendientes.start
     fi
 ) >/dev/null 2>&1 &
 PEND
