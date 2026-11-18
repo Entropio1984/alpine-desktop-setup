@@ -3570,7 +3570,8 @@ flatpak_app() {
 }
 
 # Deja una aplicacion de Flathub pendiente: se instala sola, en segundo
-# plano, en cada arranque con internet (hasta 20 minutos por arranque)
+# plano, en cada arranque con internet (con reintentos cada vez mas
+# espaciados si la conexion con Flathub se corta)
 # hasta lograrlo. Tambien agrega Flathub si no se pudo agregar antes.
 # $3 = "primer-arranque" si se deja para despues a proposito (no fallo).
 flatpak_pendiente() {
@@ -3586,36 +3587,58 @@ flatpak_pendiente() {
 # Generado por desktop-postinstall.sh: instala en segundo plano las
 # aplicaciones de Flathub que no se pudieron instalar antes. Se borra
 # sola cuando no queda ninguna pendiente.
+#
+# Paciente con la red: sin internet espera (sin gastar intentos); si una
+# descarga se corta (Flathub a veces no responde: "Timeout was reached"),
+# reintenta cada vez mas espaciado (2, 4, 8... hasta 30 minutos), hasta
+# 24 veces por encendido, y sigue en el proximo encendido. Lo ya bajado
+# no se vuelve a bajar.
 lista=/etc/flatpak-pendientes
 log=/var/log/flatpak-pendientes.log
+candado=/run/flatpak-pendientes.pid
 [ -s "$lista" ] || { rm -f "$0"; exit 0; }
+# Una sola copia a la vez.
+if [ -s "$candado" ] && kill -0 "$(cat "$candado")" 2>/dev/null; then exit 0; fi
 # El paquete flatpak de Alpine crea el repositorio sin la carpeta state/:
 # cada descarga avisa "Encountered error marking commit partial" (no la
 # detiene, pero asusta en el registro).
 [ ! -d /var/lib/flatpak/repo/objects ] || mkdir -p /var/lib/flatpak/repo/state 2>/dev/null
 (
-    i=0
-    while [ -s "$lista" ] && [ $i -lt 20 ]; do
-        sleep 60
-        i=$((i + 1))
-        echo "== $(date '+%F %T') intento $i de 20: $(tr '\n' ' ' < "$lista")" >>"$log"
-        flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo \
-            >>/var/log/flatpak-pendientes.log 2>&1 || continue
-        for app in $(cat "$lista"); do
-            if flatpak install -y --noninteractive flathub "$app" >>/var/log/flatpak-pendientes.log 2>&1; then
-                grep -vx "$app" "$lista" > "$lista.tmp"; mv -f "$lista.tmp" "$lista"
-            fi
-        done
+    intento=0
+    espera=120
+    sleep 60
+    while [ -s "$lista" ] && [ "$intento" -lt 24 ]; do
+        if ! wget -q --spider -T 30 https://dl.flathub.org/repo/flathub.flatpakrepo >/dev/null 2>&1; then
+            sleep 120
+            continue
+        fi
+        intento=$((intento + 1))
+        echo "== $(date '+%F %T') intento $intento: $(tr '\n' ' ' < "$lista")" >>"$log"
+        if flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo >>"$log" 2>&1; then
+            for app in $(cat "$lista"); do
+                if nice -n 10 flatpak install -y --noninteractive flathub "$app" >>"$log" 2>&1; then
+                    echo "== $(date '+%F %T') instalada: $app" >>"$log"
+                    grep -vx "$app" "$lista" > "$lista.tmp"; mv -f "$lista.tmp" "$lista"
+                fi
+            done
+        fi
+        [ -s "$lista" ] || break
+        echo "== $(date '+%F %T') la conexion con Flathub fallo; se reintenta en $((espera / 60)) min" >>"$log"
+        sleep "$espera"
+        espera=$((espera * 2))
+        [ "$espera" -le 1800 ] || espera=1800
     done
     if [ -s "$lista" ]; then
-        echo "== $(date '+%F %T') quedan pendientes; se intenta de nuevo en el proximo arranque con internet" >>"$log"
+        echo "== $(date '+%F %T') quedan pendientes; se sigue en el proximo encendido con internet" >>"$log"
     else
         echo "== $(date '+%F %T') listo: todas instaladas" >>"$log"
         # Se borra solo si sigue vacia: si el script agrego otra mientras
         # tanto, la lista y este archivo se quedan para el proximo arranque.
         [ -s "$lista" ] || rm -f "$lista" /etc/local.d/flatpak-pendientes.start
     fi
+    rm -f "$candado"
 ) >/dev/null 2>&1 &
+echo $! > "$candado"
 PEND
     chmod 755 /etc/local.d/flatpak-pendientes.start
     rc-update add local default >/dev/null 2>&1 || log_warn "No se pudo habilitar el servicio 'local' de OpenRC."
