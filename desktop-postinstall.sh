@@ -3236,6 +3236,32 @@ EOF
 # reaccione al evento de conexión: gvfs para los basados en GTK
 # (XFCE/GNOME/MATE), gvfs + lxqt-policykit para LXQt. Plasma no necesita
 # nada de esto porque Dolphin usa KIO/Solid + udisks2 directamente.
+# Orden de arranque de polkit. Polkit (y ModemManager) tambien se
+# encienden "a pedido" por D-Bus: al arrancar, NetworkManager despierta a
+# ModemManager y este a polkit. Si eso pasa antes de que OpenRC llegue a
+# su servicio, el polkit de OpenRC encuentra el nombre ocupado ("Lost the
+# name org.freedesktop.PolicyKit1"), se reinicia en bucle y queda como
+# fallido (visto en un Acer Aspire 4739). Polkit sigue funcionando, pero
+# el servicio se ve roto y el diagnostico lo marca. Por eso polkit va
+# antes que NetworkManager y fwupd, y ModemManager (que necesita polkit)
+# antes que NetworkManager. rc_before en /etc/conf.d es la forma de
+# OpenRC de cambiar el orden sin tocar los servicios de Alpine.
+ordenar_polkit() {
+    mkdir -p /etc/conf.d
+    if ! grep -q '^rc_before=' /etc/conf.d/polkit 2>/dev/null; then
+        printf '%s\n' \
+            '# desktop-postinstall.sh: polkit arranca antes que quienes lo despiertan' \
+            '# por D-Bus; si no, su servicio choca con ese polkit y queda "failed".' \
+            'rc_before="networkmanager fwupd"' >> /etc/conf.d/polkit
+    fi
+    if ! grep -q '^rc_before=' /etc/conf.d/modemmanager 2>/dev/null; then
+        printf '%s\n' \
+            '# desktop-postinstall.sh: ModemManager arranca antes que NetworkManager,' \
+            '# que si no lo despierta por D-Bus y su servicio queda "failed".' \
+            'rc_before="networkmanager"' >> /etc/conf.d/modemmanager
+    fi
+}
+
 setup_usb_automount() {
     log_info "== Configurando montaje automático de USB =="
 
@@ -3253,6 +3279,7 @@ setup_usb_automount() {
 
     install_pkg "polkit-elogind"
     enable_service polkit
+    ordenar_polkit
 
     if [ "$DE_XFCE" = "yes" ]; then
         install_pkgs gvfs thunar-volman
@@ -3557,12 +3584,18 @@ flatpak_pendiente() {
 # aplicaciones de Flathub que no se pudieron instalar antes. Se borra
 # sola cuando no queda ninguna pendiente.
 lista=/etc/flatpak-pendientes
+log=/var/log/flatpak-pendientes.log
 [ -s "$lista" ] || { rm -f "$0"; exit 0; }
+# El paquete flatpak de Alpine crea el repositorio sin la carpeta state/:
+# cada descarga avisa "Encountered error marking commit partial" (no la
+# detiene, pero asusta en el registro).
+[ ! -d /var/lib/flatpak/repo/objects ] || mkdir -p /var/lib/flatpak/repo/state 2>/dev/null
 (
     i=0
     while [ -s "$lista" ] && [ $i -lt 20 ]; do
         sleep 60
         i=$((i + 1))
+        echo "== $(date '+%F %T') intento $i de 20: $(tr '\n' ' ' < "$lista")" >>"$log"
         flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo \
             >>/var/log/flatpak-pendientes.log 2>&1 || continue
         for app in $(cat "$lista"); do
@@ -3571,7 +3604,12 @@ lista=/etc/flatpak-pendientes
             fi
         done
     done
-    [ -s "$lista" ] || rm -f "$lista" /etc/local.d/flatpak-pendientes.start
+    if [ -s "$lista" ]; then
+        echo "== $(date '+%F %T') quedan pendientes; se intenta de nuevo en el proximo arranque con internet" >>"$log"
+    else
+        echo "== $(date '+%F %T') listo: todas instaladas" >>"$log"
+        rm -f "$lista" /etc/local.d/flatpak-pendientes.start
+    fi
 ) >/dev/null 2>&1 &
 PEND
     chmod 755 /etc/local.d/flatpak-pendientes.start
@@ -3948,6 +3986,10 @@ setup_flatpak() {
         log_warn "flatpak no quedó instalado. Verifica el repositorio 'community'. Se omite esta sección."
         return 0
     fi
+    # El paquete de Alpine deja el repositorio de flatpak sin state/ (ver
+    # flatpak-pendientes.start): sin ella, cada descarga avisa "Encountered
+    # error marking commit partial".
+    [ ! -d /var/lib/flatpak/repo/objects ] || mkdir -p /var/lib/flatpak/repo/state 2>/dev/null || true
 
     if command -v dbus-run-session >/dev/null 2>&1; then
         remote_add_cmd="dbus-run-session -- flatpak"

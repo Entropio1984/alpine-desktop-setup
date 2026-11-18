@@ -344,6 +344,8 @@ Si hay un disco de estado sólido que acepta TRIM, programa `fstrim -a` una vez 
 ### Bloque 24 — `setup_usb_automount`
 Hace que las memorias USB se monten solas: instala y habilita `dbus`, `udisks2`, `elogind` y `polkit`, más `gvfs` en XFCE, GNOME, MATE y LXQt (en LXQt también `lxqt-policykit`, y en XFCE `thunar-volman`). Plasma no necesita nada más.
 
+También ordena el arranque: `polkit` antes que `networkmanager` y `fwupd`, y `modemmanager` antes que `networkmanager` (con `rc_before` en `/etc/conf.d/polkit` y `/etc/conf.d/modemmanager`). Si no, al encender NetworkManager despierta a ModemManager por D-Bus y este a polkit; cuando OpenRC llega a esos servicios, chocan con los que ya corren y quedan como fallidos (`failed`) aunque polkit funcione.
+
 ### Bloque 25 — `setup_printing`
 Solo si se marcó en el menú. Instala CUPS y su configurador; la administración web queda en `http://localhost:631`.
 
