@@ -3248,18 +3248,21 @@ EOF
 # OpenRC de cambiar el orden sin tocar los servicios de Alpine.
 ordenar_polkit() {
     mkdir -p /etc/conf.d
-    if ! grep -q '^rc_before=' /etc/conf.d/polkit 2>/dev/null; then
-        printf '%s\n' \
-            '# desktop-postinstall.sh: polkit arranca antes que quienes lo despiertan' \
-            '# por D-Bus; si no, su servicio choca con ese polkit y queda "failed".' \
-            'rc_before="networkmanager fwupd"' >> /etc/conf.d/polkit
-    fi
-    if ! grep -q '^rc_before=' /etc/conf.d/modemmanager 2>/dev/null; then
-        printf '%s\n' \
-            '# desktop-postinstall.sh: ModemManager arranca antes que NetworkManager,' \
-            '# que si no lo despierta por D-Bus y su servicio queda "failed".' \
-            'rc_before="networkmanager"' >> /etc/conf.d/modemmanager
-    fi
+    _op_poner polkit "polkit arranca antes que quienes lo despiertan por D-Bus; si no, su servicio choca con ese polkit y queda \"failed\"." networkmanager fwupd
+    _op_poner modemmanager "ModemManager arranca antes que NetworkManager, que si no lo despierta por D-Bus y su servicio queda \"failed\"." networkmanager
+}
+# Suma a rc_before de /etc/conf.d/$1 los servicios que falten (vale la
+# ultima linea, como en OpenRC): si alguien ya puso su orden, se respeta.
+_op_poner() {
+    _op_f="/etc/conf.d/$1" _op_c="$2"
+    shift 2
+    _op_actual="$(sed -n 's/^rc_before="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$_op_f" 2>/dev/null | tail -n 1)"
+    _op_falta=""
+    for _op_n in "$@"; do
+        case " $_op_actual " in *" $_op_n "*) ;; *) _op_falta="$_op_falta $_op_n" ;; esac
+    done
+    [ -n "$_op_falta" ] || return 0
+    printf '# desktop-postinstall.sh: %s\nrc_before="%s"\n' "$_op_c" "${_op_actual:+$_op_actual }${_op_falta# }" >> "$_op_f"
 }
 
 setup_usb_automount() {
