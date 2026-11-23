@@ -372,6 +372,7 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 | PDF | Evince (Okular en Plasma) |
 | Fotos, texto, capturas, calculadora y archivos comprimidos (solo XFCE, que no los trae) | Ristretto (predeterminado para imágenes), Mousepad (predeterminado para texto), Capturas de pantalla, Galculator y Xarchiver con su menú en Thunar |
 | Editor de texto (LXQt y Sway, que no traen uno) | Mousepad (el de XFCE), predeterminado para los `.txt` |
+| Capturas de pantalla y salvapantallas (solo LXQt) | ScreenGrab: LXQt ya tiene la tecla Imprimir Pantalla para él, pero no traía el programa. `xscreensaver-gl-extras`, para que la ventana de ajustes de XScreenSaver no avise que faltan paquetes; la pantalla sigue quedando en negro (sin animaciones que gasten procesador) hasta que elijas una (`~/.xscreensaver`, solo si no existía). Los demás escritorios ya tienen su programa de capturas con esa tecla |
 | Abrir carpetas y enlaces desde los programas | `xdg-utils` (`xdg-open`), en todos los escritorios |
 | Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 16 |
 | Reproductor completo | VLC (opcional; `vlc` y `vlc-qt`, que trae la ventana y la entrada del menú). `mpv` sigue siendo el predeterminado |
@@ -382,6 +383,8 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 La tienda instala y actualiza paquetes de Alpine y, si se activó Flatpak, también aplicaciones de Flathub.
 
 Para que la tienda muestre programas para instalar (y no solo los instalados), el script activa el servicio `apk-polkit-server` (lo necesita GNOME Software) y descarga la lista de programas de Alpine (catálogo AppStream, con `alpine-appstream-downloader`). Esa lista se renueva sola una vez al día (`/etc/periodic/hourly/alpine-tienda-catalogo`); si se instaló sin internet, se descarga en cuanto haya conexión, a más tardar en una hora. Si se instala solo desde un USB (edición Completa de Lázaro), la lista se baja después, con internet. Solo cuenta como descargada si la lista llegó de verdad. Como `alpine-appstream-downloader` descarga sin tiempo límite, la tarea le da 60 segundos por conexión y hasta 3 intentos: si el servidor deja de mandar datos, ya no se queda esperando para siempre.
+
+Además, **cada vez que se abre la tienda** (desde el menú, la Bienvenida o la terminal) se pide la lista nueva, sin esperar a la tarea de cada hora: `/usr/local/bin/plasma-discover` y `/usr/local/bin/gnome-software` van antes que los originales y pasan por `/usr/local/libexec/alpine-tienda-abrir`, que abre la tienda enseguida y pide la descarga a `/usr/local/sbin/alpine-tienda-lista-ahora` (como root con `pkexec`; polkit lo deja sin contraseña porque no tiene opciones y solo baja la lista). Si la lista se renovó hace menos de 30 minutos, si no hay internet o si ya se está bajando, no hace nada. Solo cuando la tienda todavía no tiene ninguna lista y hay conexión, una ventanita avisa que se está descargando y espera como mucho 3 minutos ("Abrir ya" no espera). La tienda nunca se queda colgada: la descarga sigue sola por detrás.
 
 Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
 

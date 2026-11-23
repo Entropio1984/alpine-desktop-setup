@@ -3921,6 +3921,44 @@ install_daily_apps() {
         fi
     fi
 
+    # --- Capturas de pantalla y salvapantallas en LXQt ---
+    # LXQt trae la tecla Imprimir Pantalla configurada para ScreenGrab
+    # (lxqt-globalkeys), pero no el programa: la tecla no hacia nada (VM de
+    # Julian, 23 de noviembre de 2026). ScreenGrab es el de LXQt (Qt,
+    # liviano): captura la pantalla entera, una ventana o una zona, y deja
+    # guardarla o copiarla. Los demas escritorios ya tienen el suyo con esa
+    # tecla: XFCE (xfce4-screenshooter, aqui arriba), MATE (mate-screenshot),
+    # GNOME y Plasma (incluidos), Sway (grim, setup_sway_barra) e IceWM
+    # (gnome-screenshot, icewm_teclas).
+    # XScreenSaver (el salvapantallas de LXQt) viene en Alpine sin ninguna
+    # animacion: su ventana de ajustes avisaba "No GL visuals: the
+    # xscreensaver-gl* packages are required". xscreensaver-gl-extras trae
+    # lo que esa ventana necesita para revisar la pantalla (y las
+    # animaciones 3D). Para no gastar procesador en equipos viejos, la
+    # pantalla sigue quedando en negro (mode: blank) hasta que la persona
+    # elija una animacion, y la lista muestra solo las instaladas.
+    if [ "$DE_LXQT" = "yes" ]; then
+        # En una sola línea: la edición Completa de Lázaro lee esta lista
+        # con grep para llevar los paquetes en el USB.
+        install_pkgs screengrab xscreensaver-gl-extras
+        for base in /etc/skel "$TARGET_HOME"; do
+            [ -n "$base" ] && [ -d "$base" ] || continue
+            # Si ya existe, es de la persona (o de una ejecucion anterior).
+            [ -e "$base/.xscreensaver" ] && continue
+            cat > "$base/.xscreensaver" <<'XSCREENSAVER'
+# Lazaro Linux: solo lo que cambia; lo demas lo pone XScreenSaver.
+# Pantalla en negro (sin animaciones que gasten procesador) y, en la
+# lista, solo las animaciones instaladas.
+mode:		blank
+ignoreUninstalledPrograms: True
+XSCREENSAVER
+            if [ "$base" = "$TARGET_HOME" ] && [ -n "$TARGET_USER" ]; then
+                chown "$TARGET_USER:$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")" "$base/.xscreensaver" || true
+            fi
+        done
+        log_ok "LXQt: capturas con la tecla Imprimir Pantalla (ScreenGrab) y salvapantallas sin avisos."
+    fi
+
     # --- Abrir carpetas y enlaces desde los programas (xdg-open) ---
     # Lo usan los botones "Abrir la carpeta" y los enlaces de la
     # Bienvenida y del Diagnostico. LXQt no lo trae.
@@ -4202,6 +4240,7 @@ runpy.run_path(shutil.which("alpine-appstream-downloader"), run_name="__main__")
 INNEREOF
     chmod 755 /etc/periodic/hourly/alpine-tienda-catalogo
     enable_service crond default "No se pudo habilitar 'crond': el catalogo de la tienda no se renovara solo."
+    setup_tienda_al_abrir
 
     # Instalando solo desde un USB no hay repositorios de internet de
     # donde bajar la lista: la baja el instalador al terminar (si hay
@@ -4222,6 +4261,148 @@ INNEREOF
     else
         log_warn "No se pudo descargar ahora el catalogo de la tienda (¿sin internet?). Se descargara solo cuando haya conexion."
     fi
+}
+
+# La lista de la tienda tambien se renueva cada vez que se abre la tienda
+# (pedido de Julian, 23 de noviembre de 2026), sin esperar a la tarea de
+# cada hora:
+#  - /usr/local/bin/plasma-discover y /usr/local/bin/gnome-software van
+#    antes que los de /usr/bin en el PATH: el menu, la Bienvenida y la
+#    terminal pasan por ellos. Piden la lista nueva y abren la tienda
+#    enseguida (alpine-tienda-abrir).
+#  - Pedir la lista necesita ser root: lo hace alpine-tienda-lista-ahora,
+#    que polkit deja correr sin contrasena (no tiene opciones: solo puede
+#    bajar la lista). Si se renovo hace menos de 30 minutos, si no hay
+#    internet o si ya se esta bajando, termina enseguida.
+#  - Solo si la tienda todavia no tiene ninguna lista (instalado sin
+#    internet) y hay conexion, una ventanita avisa que se esta bajando y
+#    espera como mucho 3 minutos ("Abrir ya" no espera), para que la
+#    tienda no se abra vacia. Nunca se queda colgada: la descarga sigue
+#    sola por detras.
+setup_tienda_al_abrir() {
+    mkdir -p /usr/local/sbin /usr/local/libexec /usr/local/bin \
+        /usr/share/polkit-1/actions /etc/polkit-1/rules.d
+
+    cat > /usr/local/sbin/alpine-tienda-lista-ahora <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: renueva ya la lista de programas de
+# la tienda. Lo llama alpine-tienda-abrir (como root, con pkexec, sin
+# contrasena) cada vez que se abre la tienda. No acepta opciones.
+tarea=/etc/periodic/hourly/alpine-tienda-catalogo
+marca=/var/lib/swcatalog/.ultima-descarga
+[ -x "$tarea" ] || exit 0
+# Renovada hace menos de 30 minutos: ya esta al dia.
+[ -n "$(find "$marca" -mmin -30 2>/dev/null)" ] && exit 0
+# Una sola descarga a la vez (abrir la tienda dos veces no baja dos).
+exec 9>/run/alpine-tienda-lista.lock || exit 0
+flock -n 9 || exit 0
+# Sin internet no hay nada que esperar.
+_repo="$(grep -m1 -E '^https?://' /etc/apk/repositories 2>/dev/null)" || exit 0
+wget -q --spider -T 8 "$_repo/$(apk --print-arch)/APKINDEX.tar.gz" 2>/dev/null || exit 0
+# La tarea solo descarga si su marca tiene mas de un dia: se aparta y,
+# si esta vez no llega la lista, se devuelve (la tarea de cada hora
+# sigue igual que antes).
+[ ! -e "$marca" ] || mv -f "$marca" "$marca.antes"
+"$tarea" || true
+if [ -e "$marca" ]; then
+    rm -f "$marca.antes"
+elif [ -e "$marca.antes" ]; then
+    mv -f "$marca.antes" "$marca"
+fi
+exit 0
+INNEREOF
+    chmod 755 /usr/local/sbin/alpine-tienda-lista-ahora
+
+    cat > /usr/share/polkit-1/actions/org.alpinelinux.tienda-lista.policy <<'INNEREOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Generado por desktop-postinstall.sh: renovar la lista de la tienda
+     al abrirla, sin contrasena (solo baja la lista de programas). -->
+<policyconfig>
+  <action id="org.alpinelinux.tienda-lista">
+    <description>Renovar la lista de programas de la tienda</description>
+    <message>Renovar la lista de programas de la tienda</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/sbin/alpine-tienda-lista-ahora</annotate>
+  </action>
+</policyconfig>
+INNEREOF
+    # Por si la sesion no figura como activa (pasa con algunas pantallas
+    # de inicio): a los del grupo wheel tampoco se les pide contrasena.
+    cat > /etc/polkit-1/rules.d/50-alpine-tienda-lista.rules <<'INNEREOF'
+// Generado por desktop-postinstall.sh: renovar la lista de la tienda.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.alpinelinux.tienda-lista" &&
+        (subject.isInGroup("wheel") || (subject.local && subject.active))) {
+        return polkit.Result.YES;
+    }
+});
+INNEREOF
+    chmod 644 /usr/share/polkit-1/actions/org.alpinelinux.tienda-lista.policy \
+        /etc/polkit-1/rules.d/50-alpine-tienda-lista.rules
+
+    cat > /usr/local/libexec/alpine-tienda-abrir <<'INNEREOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: abre la tienda (el programa que se
+# le pasa) y pide renovar su lista de programas. Uso:
+#   alpine-tienda-abrir /usr/bin/plasma-discover [opciones de la tienda]
+real="$1"
+shift
+# GNOME Software tambien corre escondido desde el inicio de sesion: eso no
+# es abrir la tienda.
+case " $* " in
+    *" --gapplication-service "*) exec "$real" "$@" ;;
+esac
+if command -v pkexec >/dev/null 2>&1 && [ -x /usr/local/sbin/alpine-tienda-lista-ahora ]; then
+    # Entre parentesis: pkexec pasa a ser root y "kill -0" no podria
+    # mirarlo; el subproceso que lo espera sigue siendo de la persona.
+    ( pkexec /usr/local/sbin/alpine-tienda-lista-ahora </dev/null >/dev/null 2>&1 ) &
+    _pid=$!
+    # Sin ninguna lista la tienda se abriria vacia: si se esta bajando
+    # (sin internet termina en segundos), se avisa y se espera un poco.
+    if [ -z "$(ls -A /var/lib/swcatalog/xml 2>/dev/null)" ] && command -v zenity >/dev/null 2>&1; then
+        sleep 3
+        if kill -0 "$_pid" 2>/dev/null; then
+            case "${LANG:-}" in
+                es*) _t="Tienda de aplicaciones"; _m="Descargando la lista de programas de la tienda (solo la primera vez, puede tardar unos minutos)..."; _a="Abrir ya" ;;
+                pt*) _t="Loja de aplicativos"; _m="Baixando a lista de programas da loja (só na primeira vez, pode levar alguns minutos)..."; _a="Abrir agora" ;;
+                *) _t="Software store"; _m="Downloading the list of programs for the store (only the first time, it may take a few minutes)..."; _a="Open now" ;;
+            esac
+            _n=0
+            while [ "$_n" -lt 180 ] && kill -0 "$_pid" 2>/dev/null; do
+                echo "#$_m"
+                sleep 1
+                _n=$((_n + 1))
+            done | zenity --progress --pulsate --auto-close --width=420 \
+                --title="$_t" --text="$_m" --cancel-label="$_a" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+exec "$real" "$@"
+INNEREOF
+    chmod 755 /usr/local/libexec/alpine-tienda-abrir
+
+    for _tienda in plasma-discover gnome-software; do
+        if [ -x "/usr/bin/$_tienda" ]; then
+            printf '#!/bin/sh\n# Generado por desktop-postinstall.sh: renueva la lista de la tienda al abrirla.\nexec /usr/local/libexec/alpine-tienda-abrir /usr/bin/%s "$@"\n' \
+                "$_tienda" > "/usr/local/bin/$_tienda"
+            chmod 755 "/usr/local/bin/$_tienda"
+        fi
+    done
+    # GNOME Software se abre desde el menu por D-Bus, sin pasar por el
+    # PATH: una copia de su acceso directo sin esa linea va antes que la
+    # original (/usr/local/share va antes que /usr/share).
+    if [ -f /usr/share/applications/org.gnome.Software.desktop ]; then
+        mkdir -p /usr/local/share/applications
+        sed '/^DBusActivatable=/d' /usr/share/applications/org.gnome.Software.desktop \
+            > /usr/local/share/applications/org.gnome.Software.desktop
+    fi
+    log_ok "La lista de la tienda se renovara tambien cada vez que se abra la tienda."
 }
 
 # ------------------------------------------------------------------------------
