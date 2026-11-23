@@ -4314,9 +4314,15 @@ if command -v flock >/dev/null 2>&1; then
 fi
 # Sin internet no hay nada que esperar (las lineas pueden empezar con
 # una etiqueta "@nombre").
-_repo="$(sed -n 's/^\(@[^[:space:]]*[[:space:]]*\)\{0,1\}\(https\{0,1\}:\/\/[^[:space:]]*\).*/\2/p' /etc/apk/repositories 2>/dev/null | head -n 1)"
-[ -n "$_repo" ] || exit 0
-wget -q --spider -T 8 "$_repo/$(apk --print-arch)/APKINDEX.tar.gz" 2>/dev/null || exit 0
+# Basta con que responda uno (20 segundos como mucho cada uno).
+_red=no
+for _repo in $(sed -n 's/^\(@[^[:space:]]*[[:space:]]*\)\{0,1\}\(https\{0,1\}:\/\/[^[:space:]]*\).*/\2/p' /etc/apk/repositories 2>/dev/null); do
+    if timeout 20 wget -q --spider -T 8 "$_repo/$(apk --print-arch)/APKINDEX.tar.gz" 2>/dev/null; then
+        _red=si
+        break
+    fi
+done
+[ "$_red" = si ] || exit 0
 # La tarea solo descarga si su marca tiene mas de un dia: se aparta y,
 # si esta vez no llega la lista, se devuelve (la tarea de cada hora
 # sigue igual que antes).
