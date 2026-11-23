@@ -4176,7 +4176,24 @@ log=/var/log/alpine-tienda-catalogo.log
     # Sin xml/ el programa se cae al limpiar ("No such file or
     # directory: '/var/lib/swcatalog/xml'") cuando no pudo bajar nada.
     mkdir -p /var/lib/swcatalog/xml /var/lib/swcatalog/icons
-    timeout 600 alpine-appstream-downloader || exit 1
+    # El programa de Alpine descarga con requests sin tiempo limite: si
+    # la conexion se traba a mitad de camino (el servidor deja de mandar
+    # datos), esperaba para siempre ("Read timed out" recien con limite;
+    # VM de Julian, 23 de noviembre de 2026). Aqui cada conexion tiene 60
+    # segundos sin recibir nada; si se traba, se intenta otra vez (3 veces
+    # como mucho, 4 minutos cada una) y, si no, la hora siguiente.
+    _ok=no
+    for _intento in 1 2 3; do
+        if timeout 240 python3 -c 'import functools, requests, runpy, shutil
+for n in ("get", "head"):
+    setattr(requests, n, functools.partial(getattr(requests, n), timeout=60))
+runpy.run_path(shutil.which("alpine-appstream-downloader"), run_name="__main__")'; then
+            _ok=si
+            break
+        fi
+        echo "Intento $_intento: la descarga se trabo o fallo."
+    done
+    [ "$_ok" = si ] || exit 1
     # Solo cuenta como hecha si la lista llego de verdad.
     [ -n "$(ls -A /var/lib/swcatalog/xml 2>/dev/null)" ] || { echo "No llego la lista de programas."; exit 1; }
     touch "$marca"
