@@ -381,7 +381,7 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 
 La tienda instala y actualiza paquetes de Alpine y, si se activó Flatpak, también aplicaciones de Flathub.
 
-Para que la tienda muestre programas para instalar (y no solo los instalados), el script activa el servicio `apk-polkit-server` (lo necesita GNOME Software) y descarga la lista de programas de Alpine (catálogo AppStream, con `alpine-appstream-downloader`). Esa lista se renueva sola una vez al día (`/etc/periodic/hourly/alpine-tienda-catalogo`); si se instaló sin internet, se descarga en cuanto haya conexión, a más tardar en una hora. Si se instala solo desde un USB (edición Completa de Lázaro), la lista se baja después, con internet. Solo cuenta como descargada si la lista llegó de verdad.
+Para que la tienda muestre programas para instalar (y no solo los instalados), el script activa el servicio `apk-polkit-server` (lo necesita GNOME Software) y descarga la lista de programas de Alpine (catálogo AppStream, con `alpine-appstream-downloader`). Esa lista se renueva sola una vez al día (`/etc/periodic/hourly/alpine-tienda-catalogo`); si se instaló sin internet, se descarga en cuanto haya conexión, a más tardar en una hora. Si se instala solo desde un USB (edición Completa de Lázaro), la lista se baja después, con internet. Solo cuenta como descargada si la lista llegó de verdad. Como `alpine-appstream-downloader` descarga sin tiempo límite, la tarea le da 60 segundos por conexión y hasta 3 intentos: si el servidor deja de mandar datos, ya no se queda esperando para siempre.
 
 Las preferencias se escriben en `/etc/xdg/mimeapps.list`. Si el usuario ya eligió otra aplicación, su elección personal manda.
 
