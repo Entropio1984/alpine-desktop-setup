@@ -3906,24 +3906,14 @@ install_daily_apps() {
 
     # --- Editor de texto en LXQt y Sway ---
     # Ninguno de los dos trae uno: un .txt no tenia con que abrirse (VM
-    # con la Completa y LXQt, 23 de noviembre de 2026). LXQt: FeatherPad,
-    # el editor de LXQt (Qt, liviano). Sway: Mousepad, el mismo de XFCE.
-    if [ "$DE_LXQT" = "yes" ]; then
+    # con la Completa y LXQt, 23 de noviembre de 2026). Los dos reciben
+    # Mousepad, el mismo de XFCE e IceWM (liviano). FeatherPad, el de
+    # LXQt, no esta en los repositorios de Alpine (main ni community).
+    if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         # En una sola línea: la edición Completa de Lázaro lee esta lista
         # con grep para llevar los paquetes en el USB.
-        install_pkgs featherpad
-    fi
-    if [ "$DE_SWAY" = "yes" ]; then
         install_pkgs mousepad
-    fi
-    if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
-        # En LXQt primero FeatherPad (si tambien hay Mousepad, por XFCE).
-        if [ "$DE_LXQT" = "yes" ]; then
-            txt_app="$(find_desktop_file org.tsujan.FeatherPad.desktop featherpad.desktop org.xfce.mousepad.desktop mousepad.desktop)" || txt_app=""
-        else
-            txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop org.tsujan.FeatherPad.desktop featherpad.desktop)" || txt_app=""
-        fi
-        if [ -n "$txt_app" ]; then
+        if txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop)"; then
             set_default_app "$txt_app" text/plain
             log_ok "Editor de texto predeterminado: $txt_app"
         else
@@ -4186,7 +4176,24 @@ log=/var/log/alpine-tienda-catalogo.log
     # Sin xml/ el programa se cae al limpiar ("No such file or
     # directory: '/var/lib/swcatalog/xml'") cuando no pudo bajar nada.
     mkdir -p /var/lib/swcatalog/xml /var/lib/swcatalog/icons
-    timeout 600 alpine-appstream-downloader || exit 1
+    # El programa de Alpine descarga con requests sin tiempo limite: si
+    # la conexion se traba a mitad de camino (el servidor deja de mandar
+    # datos), esperaba para siempre ("Read timed out" recien con limite;
+    # VM de Julian, 23 de noviembre de 2026). Aqui cada conexion tiene 60
+    # segundos sin recibir nada; si se traba, se intenta otra vez (3 veces
+    # como mucho, 4 minutos cada una) y, si no, la hora siguiente.
+    _ok=no
+    for _intento in 1 2 3; do
+        if timeout 240 python3 -c 'import functools, requests, runpy, shutil
+for n in ("get", "head"):
+    setattr(requests, n, functools.partial(getattr(requests, n), timeout=60))
+runpy.run_path(shutil.which("alpine-appstream-downloader"), run_name="__main__")'; then
+            _ok=si
+            break
+        fi
+        echo "Intento $_intento: la descarga se trabo o fallo."
+    done
+    [ "$_ok" = si ] || exit 1
     # Solo cuenta como hecha si la lista llego de verdad.
     [ -n "$(ls -A /var/lib/swcatalog/xml 2>/dev/null)" ] || { echo "No llego la lista de programas."; exit 1; }
     touch "$marca"
