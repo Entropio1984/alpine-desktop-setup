@@ -3943,18 +3943,25 @@ install_daily_apps() {
         install_pkgs screengrab xscreensaver-gl-extras
         for base in /etc/skel "$TARGET_HOME"; do
             [ -n "$base" ] && [ -d "$base" ] || continue
-            # Si ya existe, es de la persona (o de una ejecucion anterior).
-            [ -e "$base/.xscreensaver" ] && continue
-            cat > "$base/.xscreensaver" <<'XSCREENSAVER'
+            # Si ya existe (aunque sea un enlace roto), es de la persona o
+            # de una ejecucion anterior: no se toca.
+            { [ -e "$base/.xscreensaver" ] || [ -L "$base/.xscreensaver" ]; } && continue
+            # A un archivo nuevo y despues a su lugar sin pisar nada (mv -n):
+            # asi nunca se escribe a traves de un enlace.
+            _xs="$(mktemp "$base/.xscreensaver.XXXXXX")" || continue
+            cat > "$_xs" <<'XSCREENSAVER'
 # Lazaro Linux: solo lo que cambia; lo demas lo pone XScreenSaver.
 # Pantalla en negro (sin animaciones que gasten procesador) y, en la
 # lista, solo las animaciones instaladas.
 mode:		blank
 ignoreUninstalledPrograms: True
 XSCREENSAVER
+            chmod 644 "$_xs"
             if [ "$base" = "$TARGET_HOME" ] && [ -n "$TARGET_USER" ]; then
-                chown "$TARGET_USER:$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")" "$base/.xscreensaver" || true
+                chown "$TARGET_USER:$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")" "$_xs" || true
             fi
+            mv -n "$_xs" "$base/.xscreensaver" 2>/dev/null || true
+            rm -f "$_xs"
         done
         log_ok "LXQt: capturas con la tecla Imprimir Pantalla (ScreenGrab) y salvapantallas sin avisos."
     fi
@@ -4206,6 +4213,12 @@ marca=/var/lib/swcatalog/.ultima-descarga
 [ -n "$(find "$marca" -mmin -1430 2>/dev/null)" ] && exit 0
 # Si "Actualizar el sistema" esta trabajando, no estorbar.
 [ -d /run/alpine-update.lock ] && exit 0
+# Una sola descarga a la vez: la tienda, al abrirse, usa el mismo candado
+# (alpine-tienda-lista-ahora) y avisa que ya lo tiene.
+if [ "${ALPINE_TIENDA_CANDADO:-}" != ya ] && command -v flock >/dev/null 2>&1; then
+    exec 9>/run/alpine-tienda-lista.lock || exit 0
+    flock -n 9 || exit 0
+fi
 log=/var/log/alpine-tienda-catalogo.log
 {
     date
@@ -4293,17 +4306,22 @@ marca=/var/lib/swcatalog/.ultima-descarga
 [ -x "$tarea" ] || exit 0
 # Renovada hace menos de 30 minutos: ya esta al dia.
 [ -n "$(find "$marca" -mmin -30 2>/dev/null)" ] && exit 0
-# Una sola descarga a la vez (abrir la tienda dos veces no baja dos).
+# Una sola descarga a la vez (abrir la tienda dos veces no baja dos); la
+# tarea de cada hora usa el mismo candado.
 exec 9>/run/alpine-tienda-lista.lock || exit 0
-flock -n 9 || exit 0
-# Sin internet no hay nada que esperar.
-_repo="$(grep -m1 -E '^https?://' /etc/apk/repositories 2>/dev/null)" || exit 0
+if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || exit 0
+fi
+# Sin internet no hay nada que esperar (las lineas pueden empezar con
+# una etiqueta "@nombre").
+_repo="$(sed -n 's/^\(@[^[:space:]]*[[:space:]]*\)\{0,1\}\(https\{0,1\}:\/\/[^[:space:]]*\).*/\2/p' /etc/apk/repositories 2>/dev/null | head -n 1)"
+[ -n "$_repo" ] || exit 0
 wget -q --spider -T 8 "$_repo/$(apk --print-arch)/APKINDEX.tar.gz" 2>/dev/null || exit 0
 # La tarea solo descarga si su marca tiene mas de un dia: se aparta y,
 # si esta vez no llega la lista, se devuelve (la tarea de cada hora
 # sigue igual que antes).
 [ ! -e "$marca" ] || mv -f "$marca" "$marca.antes"
-"$tarea" || true
+ALPINE_TIENDA_CANDADO=ya "$tarea" || true
 if [ -e "$marca" ]; then
     rm -f "$marca.antes"
 elif [ -e "$marca.antes" ]; then
@@ -4375,7 +4393,7 @@ if command -v pkexec >/dev/null 2>&1 && [ -x /usr/local/sbin/alpine-tienda-lista
             esac
             _n=0
             while [ "$_n" -lt 180 ] && kill -0 "$_pid" 2>/dev/null; do
-                echo "#$_m"
+                echo "#$_m" || break
                 sleep 1
                 _n=$((_n + 1))
             done | zenity --progress --pulsate --auto-close --width=420 \
