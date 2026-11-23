@@ -424,7 +424,8 @@ FALLOS_DE_RED=0
 # corta solo haria esperar.
 solo_repos_locales() {
     grep -q '^[^#]' /etc/apk/repositories 2>/dev/null || return 1
-    ! grep -q '^https\?://' /etc/apk/repositories 2>/dev/null
+    # Tambien las lineas con etiqueta ("@etiqueta https://...").
+    ! grep -Eq '^(@[^[:space:]]+[[:space:]]+)?https?://' /etc/apk/repositories 2>/dev/null
 }
 
 red_disponible() {
@@ -3916,7 +3917,13 @@ install_daily_apps() {
         install_pkgs mousepad
     fi
     if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
-        if txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop org.tsujan.FeatherPad.desktop featherpad.desktop)"; then
+        # En LXQt primero FeatherPad (si tambien hay Mousepad, por XFCE).
+        if [ "$DE_LXQT" = "yes" ]; then
+            txt_app="$(find_desktop_file org.tsujan.FeatherPad.desktop featherpad.desktop org.xfce.mousepad.desktop mousepad.desktop)" || txt_app=""
+        else
+            txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop org.tsujan.FeatherPad.desktop featherpad.desktop)" || txt_app=""
+        fi
+        if [ -n "$txt_app" ]; then
             set_default_app "$txt_app" text/plain
             log_ok "Editor de texto predeterminado: $txt_app"
         else
