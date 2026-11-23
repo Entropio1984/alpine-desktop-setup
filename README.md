@@ -371,7 +371,7 @@ Instala y deja como predeterminadas las aplicaciones de uso diario:
 |---|---|
 | PDF | Evince (Okular en Plasma) |
 | Fotos, texto, capturas, calculadora y archivos comprimidos (solo XFCE, que no los trae) | Ristretto (predeterminado para imágenes), Mousepad (predeterminado para texto), Capturas de pantalla, Galculator y Xarchiver con su menú en Thunar |
-| Editor de texto (LXQt y Sway, que no traen uno) | FeatherPad en LXQt y Mousepad en Sway, predeterminados para los `.txt` |
+| Editor de texto (LXQt y Sway, que no traen uno) | Mousepad (el de XFCE), predeterminado para los `.txt` |
 | Abrir carpetas y enlaces desde los programas | `xdg-utils` (`xdg-open`), en todos los escritorios |
 | Audio y video | `mpv`, que usa la decodificación por hardware del Bloque 16 |
 | Reproductor completo | VLC (opcional; `vlc` y `vlc-qt`, que trae la ventana y la entrada del menú). `mpv` sigue siendo el predeterminado |

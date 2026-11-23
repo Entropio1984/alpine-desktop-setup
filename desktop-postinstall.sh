@@ -3906,24 +3906,14 @@ install_daily_apps() {
 
     # --- Editor de texto en LXQt y Sway ---
     # Ninguno de los dos trae uno: un .txt no tenia con que abrirse (VM
-    # con la Completa y LXQt, 23 de noviembre de 2026). LXQt: FeatherPad,
-    # el editor de LXQt (Qt, liviano). Sway: Mousepad, el mismo de XFCE.
-    if [ "$DE_LXQT" = "yes" ]; then
+    # con la Completa y LXQt, 23 de noviembre de 2026). Los dos reciben
+    # Mousepad, el mismo de XFCE e IceWM (liviano). FeatherPad, el de
+    # LXQt, no esta en los repositorios de Alpine (main ni community).
+    if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
         # En una sola línea: la edición Completa de Lázaro lee esta lista
         # con grep para llevar los paquetes en el USB.
-        install_pkgs featherpad
-    fi
-    if [ "$DE_SWAY" = "yes" ]; then
         install_pkgs mousepad
-    fi
-    if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
-        # En LXQt primero FeatherPad (si tambien hay Mousepad, por XFCE).
-        if [ "$DE_LXQT" = "yes" ]; then
-            txt_app="$(find_desktop_file org.tsujan.FeatherPad.desktop featherpad.desktop org.xfce.mousepad.desktop mousepad.desktop)" || txt_app=""
-        else
-            txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop org.tsujan.FeatherPad.desktop featherpad.desktop)" || txt_app=""
-        fi
-        if [ -n "$txt_app" ]; then
+        if txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop)"; then
             set_default_app "$txt_app" text/plain
             log_ok "Editor de texto predeterminado: $txt_app"
         else
