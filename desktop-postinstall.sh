@@ -418,6 +418,16 @@ FALLOS_DE_RED=0
 
 # Devuelve 0 si responde el primer repositorio de internet de apk. Sin
 # repositorios de internet (solo locales) no hay nada que comprobar.
+# Instalacion solo con lo que trae un USB (edicion Completa de Lazaro):
+# /etc/apk/repositories no tiene ningun repositorio de internet. Ahi no se
+# intenta nada por internet aunque haya conexion: una red lenta o que se
+# corta solo haria esperar.
+solo_repos_locales() {
+    grep -q '^[^#]' /etc/apk/repositories 2>/dev/null || return 1
+    # Tambien las lineas con etiqueta ("@etiqueta https://...").
+    ! grep -Eq '^(@[^[:space:]]+[[:space:]]+)?https?://' /etc/apk/repositories 2>/dev/null
+}
+
 red_disponible() {
     _repo="$(grep -m1 '^http' /etc/apk/repositories 2>/dev/null || true)"
     [ -n "$_repo" ] || return 0
@@ -3894,6 +3904,38 @@ install_daily_apps() {
         fi
     fi
 
+    # --- Editor de texto en LXQt y Sway ---
+    # Ninguno de los dos trae uno: un .txt no tenia con que abrirse (VM
+    # con la Completa y LXQt, 23 de noviembre de 2026). LXQt: FeatherPad,
+    # el editor de LXQt (Qt, liviano). Sway: Mousepad, el mismo de XFCE.
+    if [ "$DE_LXQT" = "yes" ]; then
+        # En una sola línea: la edición Completa de Lázaro lee esta lista
+        # con grep para llevar los paquetes en el USB.
+        install_pkgs featherpad
+    fi
+    if [ "$DE_SWAY" = "yes" ]; then
+        install_pkgs mousepad
+    fi
+    if [ "$DE_LXQT" = "yes" ] || [ "$DE_SWAY" = "yes" ]; then
+        # En LXQt primero FeatherPad (si tambien hay Mousepad, por XFCE).
+        if [ "$DE_LXQT" = "yes" ]; then
+            txt_app="$(find_desktop_file org.tsujan.FeatherPad.desktop featherpad.desktop org.xfce.mousepad.desktop mousepad.desktop)" || txt_app=""
+        else
+            txt_app="$(find_desktop_file org.xfce.mousepad.desktop mousepad.desktop org.tsujan.FeatherPad.desktop featherpad.desktop)" || txt_app=""
+        fi
+        if [ -n "$txt_app" ]; then
+            set_default_app "$txt_app" text/plain
+            log_ok "Editor de texto predeterminado: $txt_app"
+        else
+            log_warn "No se encontro el editor de texto instalado; no se cambio el editor predeterminado."
+        fi
+    fi
+
+    # --- Abrir carpetas y enlaces desde los programas (xdg-open) ---
+    # Lo usan los botones "Abrir la carpeta" y los enlaces de la
+    # Bienvenida y del Diagnostico. LXQt no lo trae.
+    install_pkgs xdg-utils
+
     # --- Reproductor multimedia ---
     # mpv: bajo consumo, trae controles en pantalla y usa la decodificacion
     # de video por hardware (VA-API) instalada en el Bloque 16. Cubre los
@@ -4029,8 +4071,18 @@ setup_flatpak() {
     # Agregar Flathub descarga su descripcion: con la red inestable se
     # reintenta. Si no se logra, las aplicaciones quedan pendientes y
     # Flathub se agrega junto con ellas despues del primer arranque.
+    # Instalando solo desde un USB, Flathub no se agrega por internet: el
+    # instalador lo deja puesto desde el USB (con OnlyOffice y Brave) y,
+    # si no, se agrega con las aplicaciones pendientes en el primer
+    # arranque. Antes se agregaba igual y, con la red cortandose, se
+    # quedaba esperando a Flathub (VM, 23 de noviembre de 2026).
     FLATHUB_LISTO="no"
-    for _intento in 1 2 3; do
+    _fh_intentos="1 2 3"
+    if solo_repos_locales; then
+        _fh_intentos=""
+        log_info "Instalacion desde el USB: Flathub no se agrega ahora por internet."
+    fi
+    for _intento in $_fh_intentos; do
         if $remote_add_cmd remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo >>"$LOG_FILE" 2>&1; then
             FLATHUB_LISTO="yes"
             break
@@ -4041,6 +4093,8 @@ setup_flatpak() {
     done
     if [ "$FLATHUB_LISTO" = "yes" ]; then
         log_ok "Repositorio Flathub agregado (o ya existía)."
+    elif [ -z "$_fh_intentos" ]; then
+        :
     else
         log_warn "No se pudo agregar el repositorio Flathub ahora (¿sin internet?)."
     fi
@@ -4129,14 +4183,26 @@ log=/var/log/alpine-tienda-catalogo.log
     date
     command -v alpine-appstream-downloader >/dev/null 2>&1 \
         || timeout 600 apk add -q alpine-appstream-downloader || exit 1
+    # Sin xml/ el programa se cae al limpiar ("No such file or
+    # directory: '/var/lib/swcatalog/xml'") cuando no pudo bajar nada.
+    mkdir -p /var/lib/swcatalog/xml /var/lib/swcatalog/icons
     timeout 600 alpine-appstream-downloader || exit 1
-    mkdir -p /var/lib/swcatalog
+    # Solo cuenta como hecha si la lista llego de verdad.
+    [ -n "$(ls -A /var/lib/swcatalog/xml 2>/dev/null)" ] || { echo "No llego la lista de programas."; exit 1; }
     touch "$marca"
     echo "Catalogo descargado."
 } >"$log" 2>&1
 INNEREOF
     chmod 755 /etc/periodic/hourly/alpine-tienda-catalogo
     enable_service crond default "No se pudo habilitar 'crond': el catalogo de la tienda no se renovara solo."
+
+    # Instalando solo desde un USB no hay repositorios de internet de
+    # donde bajar la lista: la baja el instalador al terminar (si hay
+    # internet) o la tarea de cada hora.
+    if solo_repos_locales; then
+        log_info "Instalacion desde el USB: la lista de la tienda se descarga despues, con internet."
+        return 0
+    fi
 
     # Se descarga ahora aunque haya una descarga reciente (el script se
     # puede volver a ejecutar): solo cuenta como hecha si esta funciono.
