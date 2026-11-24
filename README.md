@@ -266,7 +266,7 @@ Luego instala los indicadores de red y volumen de cada escritorio:
 | GNOME | integrado | `pavucontrol` (mezclador avanzado) |
 | MATE | `network-manager-applet` | `mate-media` |
 | LXQt | `network-manager-applet` | `pavucontrol-qt` (el control de la bandeja ya viene en `lxqt-panel`) |
-| Sway | `network-manager-applet` (en la bandeja de `waybar`) | control de volumen de `waybar`; al hacer clic abre `pavucontrol` |
+| Sway | `network-manager-applet` (en la bandeja de `waybar`) | control de volumen de `waybar`; clic: barrita con deslizador (`sway-volumen`); clic derecho: `pavucontrol` |
 | IceWM | `network-manager-applet` (en la bandeja de IceWM) | icono de volumen propio en la bandeja, a la derecha (`/usr/local/libexec/icewm-lxde/volumen`, Python con GTK: clic abre una barrita, rueda del mouse sube o baja, clic del medio silencia, clic derecho abre `pavucontrol`) y las teclas de volumen del teclado (`pactl`). Alpine estable no trae un control de volumen para bandeja |
 
 En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para cada usuario sale de `/etc/xdg/xfce4/panel/default.xml`, que no lo incluye. El script lo agrega ahí, junto al área de notificación y con las teclas de volumen activadas. Solo afecta a los usuarios que todavía no entraron a XFCE; quien ya tiene su panel lo agrega con clic derecho en el panel > Panel > Agregar elementos > Plugin de audio PulseAudio.
@@ -275,9 +275,11 @@ En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para
 
 - un botón de **menú de aplicaciones** (`fuzzel`), que también se abre con **Super+D**;
 - un botón con la **lista de atajos de teclado** (`sway-atajos`), que también se abre con **Super+F1**. La lista se lee de la configuración real de Sway, sale en español si el sistema está en español, y se puede escribir para buscar;
-- el icono de WiFi de NetworkManager, el volumen (la rueda del ratón lo sube y lo baja), la red (al hacer clic abre `nmtui`), la batería, el brillo y el reloj.
+- el icono de WiFi de NetworkManager, el volumen (un clic abre una barrita con deslizador, como en los otros escritorios; clic derecho, el mezclador completo; la rueda del ratón lo sube y lo baja), la red (al hacer clic abre `nmtui`), la batería, el brillo y el reloj.
 
 Como Sway no arranca los programas de `/etc/xdg/autostart`, el script los agrega en `/etc/sway/config.d/50-lazaro-barra.conf`: el servidor de audio, el icono de WiFi y la ventana de contraseña de administrador (`polkit-gnome`). La configuración de `waybar` se copia al usuario y a `/etc/skel` (usuarios nuevos); si el usuario ya tenía una propia, no se toca. Si `waybar` no se puede instalar, queda la barra original.
+
+**Sway sin aceleración 3D** (máquinas virtuales, controlador básico): el dibujo normal de Sway usa un 3D imitado por el procesador que a veces deja manchas (por ejemplo, en el menú). El script pone `/usr/local/bin/sway`, que en cada arranque mira el controlador de la gráfica y, si no es `i915`, `xe`, `amdgpu`, `radeon` ni `nouveau`, arranca Sway con el modo de dibujo simple (`WLR_RENDERER=pixman`). Con esas gráficas queda el modo normal. Para forzar uno: `WLR_RENDERER=gles2` (normal) o `pixman`.
 
 ### Bloques 12 y 13 — WiFi
 Detecta adaptadores WiFi internos (`lspci`) y USB (`lsusb`), y según el fabricante instala su firmware (`linux-firmware-intel`, `-realtek`, `-ath10k`, etc.). Si **no hay adaptador WiFi, no instala nada**. El conjunto amplio de firmware (de varios fabricantes) se instala solo en dos casos: hay un adaptador pero no se reconoce el fabricante, o no se pudo revisar del todo el hardware (no están `pciutils` y `usbutils`, que traen los nombres de los dispositivos, o `lspci`/`lsusb` fallaron). En una instalación normal de Alpine ese firmware ya está, así que este paso solo cambia algo en sistemas reducidos.
@@ -507,6 +509,8 @@ Ejecuta los bloques en orden. Termina con código 0 si todo salió bien y con c�
 | `/usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override` | 9 | Teclado `latam` por defecto en GNOME |
 | `/etc/sway/config.d/50-lazaro-barra.conf` | 11 | Sway: barra `waybar`, audio, WiFi, agente de contraseña y atajos Super+D y Super+F1 |
 | `/usr/local/bin/sway-atajos` | 11 | Sway: lista de atajos de teclado |
+| `/usr/local/bin/sway` | 11 | Sway: modo de dibujo simple en equipos sin aceleración 3D |
+| `/usr/local/bin/sway-volumen` | 11 | Sway: barrita de volumen al hacer clic en el icono de volumen |
 | `~/.config/waybar/config.jsonc`, `/etc/skel/.config/waybar/config.jsonc` | 11 | Sway: botones y módulos de la barra (solo si no existía) |
 | `/etc/modprobe.d/blacklist-nouveau.conf` | 16 | Bloqueo de `nouveau` (modo seguro) |
 | `/etc/lightdm/lightdm.conf.d/40-nvidia-modo-seguro.conf` | 16 | LightDM abre aunque no haya pantalla del kernel (modo seguro) |
@@ -627,6 +631,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Planificador de discos | Borrar `/etc/udev/rules.d/60-ioscheduler.rules` y reiniciar |
 | TRIM semanal | Borrar `/etc/periodic/weekly/fstrim` |
 | Barra de Sway | Borrar `/etc/sway/config.d/50-lazaro-barra.conf` (vuelve la barra original) y, si se quiere, `~/.config/waybar/config.jsonc` y `/usr/local/bin/sway-atajos` |
+| Modo de dibujo simple de Sway | Borrar `/usr/local/bin/sway` |
 | Pantalla de inicio greetd (Sway) | `rc-update del greetd` y `apk del greetd-gtkgreet`; se vuelve a entrar por la consola escribiendo `sway` |
 | Resolución de la pantalla de inicio | Borrar `/usr/local/libexec/pantalla-inicio/`, `/etc/xdg/autostart/pantalla-inicio.desktop` y los dos `50-pantalla-inicio.conf` (con eso SDDM vuelve también a su servidor de siempre); con GDM, además, `rc-update del pantalla-inicio-gdm` y borrar `/etc/init.d/pantalla-inicio-gdm` |
 | YouTube ligero | `apk del pipe-viewer pipe-viewer-gtk yt-dlp yt-dlp-ejs-rt-quickjs`, y borrar `/usr/share/applications/lazaro-youtube.desktop` y `/usr/local/share/applications/gtk-pipe-viewer.desktop`. Si no tenías configuración propia antes, borrar también `/etc/yt-dlp.conf`, `~/.config/pipe-viewer/` y `/etc/skel/.config/pipe-viewer/` (el script no toca archivos que ya existían). `/etc/mpv/mpv.conf` puede quedarse (sirve para mpv en general) |
