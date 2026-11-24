@@ -2012,6 +2012,9 @@ sway_conf_sesion() {
         echo "bindsym --no-warn \$mod+d exec fuzzel"
         echo "# Super+F1 muestra la lista de atajos de teclado."
         echo "bindsym --no-warn \$mod+F1 exec sway-atajos"
+        echo "# Super+E abre el explorador de archivos (Thunar), como en Windows."
+        echo "# Reemplaza a 'layout toggle split', que sigue en Super+W y Super+S."
+        echo "bindsym --no-warn \$mod+e exec thunar"
         echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
         echo "bar bar-0 swaybar_command waybar"
         echo "# Barrita de volumen (clic en el icono de volumen): flotando, bajo el puntero."
@@ -2081,6 +2084,7 @@ lista() {
         if (c ~ /^exec (foot|\$term)/) return "Abrir la terminal"
         if (c ~ /^exec (fuzzel|wmenu|\$menu|dmenu|wofi)/) return "Menú de aplicaciones"
         if (c ~ /^exec sway-atajos/) return "Ver esta lista de atajos"
+        if (c ~ /^exec thunar/) return "Abrir el explorador de archivos"
         if (c ~ /^exec swaynag.*exit/) return "Salir de Sway (cerrar sesión)"
         if (c ~ /set-sink-mute/) return "Silenciar el sonido"
         if (c ~ /set-sink-volume.*-/) return "Bajar el volumen"
@@ -4221,6 +4225,32 @@ install_daily_apps() {
             log_ok "Editor de texto predeterminado: $txt_app"
         else
             log_warn "No se encontro el editor de texto instalado; no se cambio el editor predeterminado."
+        fi
+    fi
+
+    # --- Explorador de archivos en Sway ---
+    # Sway no trae uno: las carpetas no tenian con que abrirse (Julian,
+    # 24 de noviembre de 2026). Thunar, el de XFCE: liviano, funciona en
+    # Wayland y, con gvfs, monta los USB y tiene papelera. Las ISO de
+    # Lazaro ya lo traen (con XFCE). Super+E lo abre (sway_conf_sesion).
+    # Predeterminado para carpetas en Sway (sway-mimeapps.list) y, si Sway
+    # es el unico escritorio, para todos (mimeapps.list).
+    if [ "$DE_SWAY" = "yes" ]; then
+        # En una sola línea: la edición Completa de Lázaro lee esta lista
+        # con grep para llevar los paquetes en el USB.
+        install_pkgs thunar gvfs
+        if dir_app="$(find_desktop_file thunar.desktop Thunar.desktop)"; then
+            _mime_antes="$MIMEAPPS"
+            MIMEAPPS=/etc/xdg/sway-mimeapps.list
+            set_default_app "$dir_app" inode/directory
+            MIMEAPPS="$_mime_antes"
+            case "$DE_XFCE$DE_PLASMA$DE_GNOME$DE_MATE$DE_LXQT$DE_ICEWM" in
+                *yes*) ;;
+                *) set_default_app "$dir_app" inode/directory ;;
+            esac
+            log_ok "Sway: explorador de archivos Thunar (Super+E)."
+        else
+            log_warn "Sway: no se pudo instalar Thunar; las carpetas no tendran con que abrirse."
         fi
     fi
 
