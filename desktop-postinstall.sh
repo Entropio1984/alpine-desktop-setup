@@ -2013,7 +2013,7 @@ sway_conf_sesion() {
         echo "# Super+F1 muestra la lista de atajos de teclado."
         echo "bindsym --no-warn \$mod+F1 exec sway-atajos"
         echo "# Super+E abre el explorador de archivos (Thunar), como en Windows."
-        echo "# Reemplaza a 'layout toggle split', que sigue en Super+W y Super+S."
+        echo "# Reemplaza a 'layout toggle split' (lo mismo se logra con Super+B y Super+V)."
         echo "bindsym --no-warn \$mod+e exec thunar"
         echo "# La barra que define /etc/sway/config (bar-0) pasa a ser waybar."
         echo "bar bar-0 swaybar_command waybar"

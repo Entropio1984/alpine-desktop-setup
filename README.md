@@ -280,7 +280,7 @@ En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para
 - un botón con la **lista de atajos de teclado** (`sway-atajos`), que también se abre con **Super+F1**. La lista se lee de la configuración real de Sway, sale en español si el sistema está en español, y se puede escribir para buscar;
 - el icono de WiFi de NetworkManager, el volumen (un clic abre una barrita con deslizador, como en los otros escritorios; clic derecho, el mezclador completo; la rueda del ratón lo sube y lo baja), la red (al hacer clic abre `nmtui`), la batería, el brillo y el reloj.
 
-**Super+E** abre el explorador de archivos (Thunar), como en Windows; reemplaza el atajo de Sway que cambia entre ventanas lado a lado y una debajo de otra (eso sigue en Super+W y Super+S).
+**Super+E** abre el explorador de archivos (Thunar), como en Windows; reemplaza el atajo de Sway que cambia entre ventanas lado a lado y una debajo de otra (lo mismo se logra con Super+B, lado a lado, y Super+V, una debajo de otra).
 
 Como Sway no arranca los programas de `/etc/xdg/autostart`, el script los agrega en `/etc/sway/config.d/50-lazaro-barra.conf`: el servidor de audio, el icono de WiFi y la ventana de contraseña de administrador (`polkit-gnome`). La configuración de `waybar` se copia al usuario y a `/etc/skel` (usuarios nuevos); si el usuario ya tenía una propia, no se toca. Si `waybar` no se puede instalar, queda la barra original.
 
