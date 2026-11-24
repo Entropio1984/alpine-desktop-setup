@@ -1822,6 +1822,7 @@ setup_applets() {
     fi
 
     if [ "$DE_SWAY" = "yes" ]; then
+        sway_dibujo_sin_3d
         setup_sway_barra
     fi
 
@@ -1835,6 +1836,37 @@ setup_applets() {
     enable_service networkmanager
 
     log_ok "Arquitectura de red y audio acoplada al entorno visual."
+}
+
+# Sway sin aceleracion 3D (maquinas virtuales, controlador basico): el
+# dibujo normal de Sway usa un 3D "de mentira" hecho por el procesador
+# que a veces no borra lo anterior (menus con manchas). Ahi se usa el
+# modo de dibujo simple (WLR_RENDERER=pixman), que no tiene ese problema.
+# Con i915/xe/amdgpu/radeon/nouveau queda el modo normal. Se decide en
+# cada arranque de Sway (el equipo o la maquina virtual pueden cambiar):
+# /usr/local/bin va antes que /usr/bin, asi que "sway" pasa por aqui.
+sway_dibujo_sin_3d() {
+    mkdir -p /usr/local/bin || return 0
+    cat > /usr/local/bin/sway.nuevo <<'SWAY_EOF'
+#!/bin/sh
+# Generado por desktop-postinstall.sh: en equipos sin aceleracion 3D,
+# Sway dibuja en modo simple (pixman) para evitar manchas en pantalla.
+# Para forzar un modo: WLR_RENDERER=gles2 (normal) o pixman.
+if [ -z "${WLR_RENDERER:-}" ]; then
+    real_3d=no
+    for card in /sys/class/drm/card[0-9]*; do
+        case "${card##*/}" in *-*) continue ;; esac
+        [ -e "$card/device/driver" ] || continue
+        case "$(basename "$(readlink -f "$card/device/driver")")" in
+            i915|xe|amdgpu|radeon|nouveau) real_3d=si ;;
+        esac
+    done
+    [ "$real_3d" = si ] || export WLR_RENDERER=pixman
+fi
+exec /usr/bin/sway "$@"
+SWAY_EOF
+    chmod 755 /usr/local/bin/sway.nuevo && mv -f /usr/local/bin/sway.nuevo /usr/local/bin/sway
+    log_ok "Sway: modo de dibujo simple en equipos sin aceleracion 3D."
 }
 
 # Sway trae de fabrica una barra que solo muestra la fecha: sin wifi, sin
