@@ -279,6 +279,8 @@ En XFCE, instalar el plugin no basta: el panel que XFCE crea la primera vez para
 
 Como Sway no arranca los programas de `/etc/xdg/autostart`, el script los agrega en `/etc/sway/config.d/50-lazaro-barra.conf`: el servidor de audio, el icono de WiFi y la ventana de contraseña de administrador (`polkit-gnome`). La configuración de `waybar` se copia al usuario y a `/etc/skel` (usuarios nuevos); si el usuario ya tenía una propia, no se toca. Si `waybar` no se puede instalar, queda la barra original.
 
+**Claudito Shell Fusion** (en equipos de 64 bits con una versión estable de Alpine): después de dejar `waybar` lista, el script instala una barra más completa, [Claudito Shell Fusion](https://gitlab.com/linux-en-casa/claudito-shell-fusion) (menú, WiFi, volumen, notificaciones, bluetooth, temas claro y oscuro). Usa Quickshell, que Alpine no trae: los dos paquetes (`quickshell` y `lazaro-claudito`) salen del repositorio de [Lázaro Linux](https://github.com/Entropio1984/lazaro-linux) en GitHub, firmados con su clave (`/etc/apk/keys/lazaro.rsa.pub`; `apk` no instala nada que no esté firmado). Lo hace `/usr/local/sbin/sway-claudito`, que también corre una vez al día (`/etc/periodic/daily/sway-claudito`): instala Claudito si antes no se pudo y trae las versiones nuevas (Quickshell se recompila cada vez que Alpine cambia Qt). `waybar` queda de respaldo: sin internet, en 32 bits, en Alpine edge, o si Claudito no arranca, Sway usa `waybar`. Claudito gasta unos 70 MB más de memoria que `waybar` y se ve mejor con aceleración 3D. En Lázaro Linux esto lo hace su instalador.
+
 **Sway sin aceleración 3D** (máquinas virtuales, controlador básico): el dibujo normal de Sway usa un 3D imitado por el procesador que a veces deja manchas (por ejemplo, en el menú). El script pone `/usr/local/bin/sway`, que en cada arranque mira el controlador de la gráfica y, si no es `i915`, `xe`, `amdgpu`, `radeon` ni `nouveau`, arranca Sway con el modo de dibujo simple (`WLR_RENDERER=pixman`). Con esas gráficas queda el modo normal. Para forzar uno: `WLR_RENDERER=gles2` (normal) o `pixman`.
 
 ### Bloques 12 y 13 — WiFi
@@ -509,6 +511,7 @@ Ejecuta los bloques en orden. Termina con código 0 si todo salió bien y con c�
 | `/usr/share/glib-2.0/schemas/90-desktop-postinstall-teclado.gschema.override` | 9 | Teclado `latam` por defecto en GNOME |
 | `/etc/sway/config.d/50-lazaro-barra.conf` | 11 | Sway: barra `waybar`, audio, WiFi, agente de contraseña y atajos Super+D y Super+F1 |
 | `/usr/local/bin/sway-atajos` | 11 | Sway: lista de atajos de teclado |
+| `/usr/local/sbin/sway-claudito` y `/etc/periodic/daily/sway-claudito` | 11 | Sway: instala y actualiza Claudito Shell Fusion (no en Lázaro Linux) |
 | `/usr/local/bin/sway` | 11 | Sway: modo de dibujo simple en equipos sin aceleración 3D |
 | `/usr/local/bin/sway-volumen` | 11 | Sway: barrita de volumen al hacer clic en el icono de volumen |
 | `~/.config/waybar/config.jsonc`, `/etc/skel/.config/waybar/config.jsonc` | 11 | Sway: botones y módulos de la barra (solo si no existía) |
