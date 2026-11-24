@@ -6,6 +6,8 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 
 > ⚠️ **Tarjetas NVIDIA.** Versiones anteriores del modo seguro podían dejar la pantalla en negro en algunos equipos. La causa probable ya se corrigió (ver [Bloque 16](#bloque-16--install_drivers)), pero falta confirmarlo en un equipo que arranque con Xorg. En portátiles Optimus hay un modo nuevo, probado en un equipo real, que apaga la NVIDIA y deja todo en la gráfica integrada.
 
+> 🧭 **Sway con Claudito Shell Fusion.** En Sway (64 bits, Alpine estable), el script pone la barra [Claudito Shell Fusion](https://gitlab.com/linux-en-casa/claudito-shell-fusion), de Linux en Casa: menú, WiFi, volumen, avisos y fondos en un solo lugar, con `waybar` de respaldo. Ver [Bloque 11](#bloque-11--setup_applets).
+
 > 💿 **Lázaro Linux.** Este script también va dentro de la ISO instalable de [Lázaro Linux](https://github.com/Entropio1984/lazaro-linux) (*Tu hardware aún tiene pulso*), que lo ejecuta al final de la instalación sin hacer preguntas.
 
 ---
@@ -27,7 +29,8 @@ Está pensado para revivir equipos antiguos o con poca memoria (2 a 8 GB de RAM)
 13. [Cómo revertir cambios](#cómo-revertir-cambios)
 14. [Historial de correcciones](#historial-de-correcciones)
 15. [Pruebas automáticas](#pruebas-automáticas)
-16. [Licencia](#licencia)
+16. [Agradecimientos](#agradecimientos)
+17. [Licencia](#licencia)
 
 ---
 
@@ -88,7 +91,7 @@ Sin opciones aparece el menú. Con cualquiera de estas opciones (salvo `--usuari
 | `--destino CARPETA` | Configura el sistema instalado en esa carpeta, sin reiniciar |
 | `--ayuda` | Muestra la ayuda |
 
-Programas para `--con` y `--sin`: `impresoras`, `libreoffice`, `firefox`, `vlc`, `youtube` (YouTube ligero: pipe-viewer + mpv), `fastfetch`, `btop`, `flatpak` (tienda Flathub), `onlyoffice`, `chrome`, `brave` (estos tres por Flatpak; marcarlos activa Flatpak), `gcompat` y `actualizaciones` (botón "Actualizar el sistema", aviso de actualizaciones en la barra y, en Sway, su icono en waybar).
+Programas para `--con` y `--sin`: `impresoras`, `libreoffice`, `firefox`, `vlc`, `youtube` (YouTube ligero: pipe-viewer + mpv), `fastfetch`, `btop`, `flatpak` (tienda Flathub), `onlyoffice`, `chrome`, `brave` (estos tres por Flatpak; marcarlos activa Flatpak), `gcompat` y `actualizaciones` (botón "Actualizar el sistema", aviso de actualizaciones en la barra y, en Sway, su icono en la barra).
 
 Sin `--full` ni `--minimo`, se parte de las casillas premarcadas del menú. Sin escritorio, los programas gráficos se omiten aunque se pidan. Ejemplos:
 
@@ -169,7 +172,7 @@ Cada ejecución queda registrada en `/var/log/alpine-update.log`.
 **Aviso de actualizaciones.** Cada 6 horas (con `crond`, desde `/etc/periodic/hourly/alpine-update-revisar`) se leen los repositorios y se anota cuántos paquetes se pueden actualizar en `/var/lib/alpine-update/pendientes`. Si hay alguno:
 
 - En XFCE, MATE y LXQt aparece un icono en la bandeja del panel y una notificación con el botón "Actualizar ahora". En GNOME, que no tiene bandeja, solo la notificación. Los dos abren "Actualizar el sistema" (`/usr/local/bin/alpine-update-aviso`, que arranca con la sesión desde `/etc/xdg/autostart`).
-- En Sway aparece un icono con el número en waybar; un clic abre el botón.
+- En Sway aparece un icono con el número en la barra (Claudito Shell Fusion o `waybar`); un clic abre el botón.
 - Plasma no lleva este aviso: trae el suyo (Discover).
 
 Al terminar una actualización, el número se cuenta otra vez y el icono desaparece.
@@ -597,6 +600,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 - **Resolución de la pantalla de inicio:** no funciona con greetd (Sway, XFCE Wayland), que usa la resolución que sugiere el monitor. Con varios usuarios, la pantalla de inicio usa la resolución de la última sesión, sea de quien sea.
 - **Escritorio:** el script no elige ni configura un escritorio por su cuenta: o ya está instalado, o se pide con `--escritorio`.
 - **IceWM:** Alpine lo compila sin traducciones: el menú de aplicaciones sale en el idioma del sistema, pero los menús propios de IceWM (el de cada ventana: minimizar, cerrar...) quedan en inglés.
+- **Claudito Shell Fusion:** solo en 64 bits (`x86_64`) y en versiones estables de Alpine, porque Quickshell no está en Alpine y lo compila Lázaro Linux para cada versión. Cuando Alpine cambia Qt, Claudito puede dejar de arrancar hasta que Lázaro publique el Quickshell recompilado (lo trae la tarea diaria); mientras tanto Sway usa `waybar`.
 - **`--destino`:** la carpeta no puede tener espacios. Las aplicaciones de Flathub que no se pueden instalar dentro de un `chroot` (como Chrome) quedan para después del primer arranque.
 
 ## Solución de problemas
@@ -634,6 +638,7 @@ Revisión hecha en octubre de 2026 contra los repositorios reales de Alpine (ver
 | Planificador de discos | Borrar `/etc/udev/rules.d/60-ioscheduler.rules` y reiniciar |
 | TRIM semanal | Borrar `/etc/periodic/weekly/fstrim` |
 | Barra de Sway | Borrar `/etc/sway/config.d/50-lazaro-barra.conf` (vuelve la barra original) y, si se quiere, `~/.config/waybar/config.jsonc` y `/usr/local/bin/sway-atajos` |
+| Claudito Shell Fusion (Sway) | `apk del lazaro-claudito quickshell` (vuelve `waybar`) y borrar `/usr/local/sbin/sway-claudito` y `/etc/periodic/daily/sway-claudito`, para que no se vuelva a instalar |
 | Modo de dibujo simple de Sway | Borrar `/usr/local/bin/sway` |
 | Pantalla de inicio greetd (Sway) | `rc-update del greetd` y `apk del greetd-gtkgreet`; se vuelve a entrar por la consola escribiendo `sway` |
 | Resolución de la pantalla de inicio | Borrar `/usr/local/libexec/pantalla-inicio/`, `/etc/xdg/autostart/pantalla-inicio.desktop` y los dos `50-pantalla-inicio.conf` (con eso SDDM vuelve también a su servidor de siempre); con GDM, además, `rc-update del pantalla-inicio-gdm` y borrar `/etc/init.d/pantalla-inicio-gdm` |
@@ -681,6 +686,13 @@ lazaro-linux. Esos se prueban a mano antes de fusionar.
 El detalle está en `.github/workflows/pruebas.yml`.
 
 Aparte está la **prueba de 32 bits** (`.github/workflows/prueba-32-bits.yml`), que no bloquea la fusión: instala Alpine x86 en una máquina virtual con 1 GB de memoria, corre el script con LXQt, XFCE e IceWM, entra a la sesión, mide la memoria y saca una captura de pantalla. Con IceWM además comprueba que la sesión de LXDE arrancó (red en la bandeja, iconos del escritorio, agente de contraseñas), que el escritorio tiene el fondo de la distribución, la papelera y "Usar como fondo del escritorio" (y que esa orden cambia el fondo), y muestra el menú de aplicaciones.
+
+## Agradecimientos
+
+- [Alpine Linux](https://alpinelinux.org) y su `setup-desktop`, la base del script.
+- [Claudito Shell Fusion](https://gitlab.com/linux-en-casa/claudito-shell-fusion) (Linux en Casa, GPLv3) y [Quickshell](https://quickshell.org): la barra de Sway.
+- [Lázaro Linux](https://github.com/Entropio1984/lazaro-linux): la ISO instalable que usa este script; compila y firma los paquetes de Claudito.
+- [Pipe Viewer](https://github.com/trizen/pipe-viewer), [yt-dlp](https://github.com/yt-dlp/yt-dlp) y [mpv](https://mpv.io): YouTube ligero.
 
 ---
 
