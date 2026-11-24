@@ -1896,6 +1896,99 @@ setup_sway_barra() {
     sway_instalar_volumen
     sway_config_waybar
     log_ok "Sway: barra waybar con menu, wifi y volumen lista."
+    sway_claudito
+}
+
+# Claudito Shell Fusion (https://gitlab.com/linux-en-casa/claudito-shell-fusion):
+# una barra mas completa para Sway (menu, wifi, volumen, notificaciones,
+# bluetooth, temas). Usa Quickshell, que Alpine no trae: Lazaro Linux lo
+# compila y publica los dos paquetes (quickshell y lazaro-claudito),
+# firmados, en su repositorio de GitHub. waybar queda instalada y
+# configurada: si Claudito no se puede instalar o no arranca, Sway usa
+# waybar. Solo 64 bits (x86_64) y versiones estables de Alpine con
+# repositorio de Lazaro. Una tarea diaria lo instala si todavia no se pudo
+# y trae las versiones nuevas (Quickshell se recompila cuando Alpine
+# cambia Qt). En Lazaro Linux se encarga su propio repositorio.
+sway_claudito() {
+    if [ -d /etc/lazaro ]; then
+        log_info "Sway: en Lazaro Linux, Claudito Shell lo pone su instalador."
+        return 0
+    fi
+    mkdir -p /usr/local/sbin /etc/periodic/daily
+    cat > /usr/local/sbin/sway-claudito.nuevo <<'CLAUDITO'
+#!/bin/sh
+# sway-claudito (desktop-postinstall.sh): instala o actualiza Claudito
+# Shell Fusion, la barra de Sway, desde el repositorio de Lazaro Linux.
+# Codigos: 0 instalado o actualizado, 10 no hace falta, otro: no se pudo
+# (Sway sigue con waybar).
+set -u
+PROYECTO=https://github.com/Entropio1984/lazaro-linux/releases/download
+LLAVE='-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyxHsBrSbk0QKTHht7hRs
+27MUxkKKzGCKr9tB+VBHu2KDi/B5SkslMwfyB39+6t61tCWWMC8jgJxiK54witKh
++HPwVyrTrlZnB5Sd16zoPB66a7NIdIKaz8tZssNZC/j9VzBpqv5V4G7hZo1mAKaM
+fFBmYvguvELqNTE1Nly/1YaYc0qutnwF/Wj+RcUgMbzkJE49ht96OD5Iyf4FGYpp
+qEV6MEGKUd51h504qb5Kow/n3b6W76IkLdQgzhcahb86Bu8B4Mfye9mivP5pspx1
+0gt7UzJWCJ7KWWNm1ln9ksosuNPgIWXF3P/y1twldi4pJbZHR1AmC3zm/siUColv
+OQIDAQAB
+-----END PUBLIC KEY-----'
+[ "$(apk --print-arch)" = x86_64 ] || { echo "Claudito Shell: solo para 64 bits (x86_64)."; exit 10; }
+apk info -e sway >/dev/null 2>&1 || exit 10
+# Lazaro Linux lo actualiza con su propio repositorio.
+grep -qx 'lazaro-claudito@lazaro' /etc/apk/world 2>/dev/null && exit 10
+ver="$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null)"
+case "$ver" in
+    [0-9]*.[0-9]*) case "$ver" in *[!0-9.]*) ver="" ;; esac ;;
+    *) ver="" ;;
+esac
+[ -n "$ver" ] || { echo "Claudito Shell: solo para versiones estables de Alpine."; exit 1; }
+base="$PROYECTO/repo-v$ver"
+t="$(mktemp -d)" || exit 1
+trap 'rm -rf "$t"' EXIT
+wget -q -T 30 -O "$t/APKINDEX.tar.gz" "$base/APKINDEX.tar.gz" \
+    || { echo "Claudito Shell: no se pudo leer el repositorio de Lazaro para Alpine $ver. ¿Hay internet?"; exit 1; }
+versiones="$(tar -xzOf "$t/APKINDEX.tar.gz" APKINDEX 2>/dev/null |
+    awk '/^P:/ { p = substr($0, 3) } /^V:/ && (p == "quickshell" || p == "lazaro-claudito") { print p, substr($0, 3) }')"
+qs="$(echo "$versiones" | awk '$1 == "quickshell" { print $2 }')"
+lc="$(echo "$versiones" | awk '$1 == "lazaro-claudito" { print $2 }')"
+case "$qs$lc" in
+    *[!A-Za-z0-9._-]*) echo "Claudito Shell: el repositorio trae versiones no validas."; exit 1 ;;
+esac
+[ -n "$qs" ] && [ -n "$lc" ] \
+    || { echo "Claudito Shell: todavia no esta publicado para Alpine $ver."; exit 1; }
+instalada() { awk -v p="$1" '/^P:/ { e = (substr($0, 3) == p) } e && /^V:/ { print substr($0, 3); exit }' /lib/apk/db/installed; }
+falta=no
+for par in "quickshell $qs" "lazaro-claudito $lc"; do
+    set -- $par
+    v="$(instalada "$1")"
+    if [ -z "$v" ] || [ "$(apk version -t "$v" "$2")" = "<" ]; then falta=si; fi
+done
+[ "$falta" = si ] || exit 10
+mkdir -p /etc/apk/keys
+printf '%s\n' "$LLAVE" > /etc/apk/keys/lazaro.rsa.pub
+for a in "quickshell-$qs.apk" "lazaro-claudito-$lc.apk"; do
+    wget -q -T 30 -O "$t/$a" "$base/$a" || { echo "Claudito Shell: no se pudo descargar $a."; exit 1; }
+done
+# apk revisa la firma de Lazaro (/etc/apk/keys/lazaro.rsa.pub).
+apk add -q "$t/quickshell-$qs.apk" "$t/lazaro-claudito-$lc.apk" || exit 1
+echo "Claudito Shell $lc instalado (Quickshell $qs). Se ve al volver a entrar a Sway."
+CLAUDITO
+    chmod 755 /usr/local/sbin/sway-claudito.nuevo
+    mv -f /usr/local/sbin/sway-claudito.nuevo /usr/local/sbin/sway-claudito
+    printf '#!/bin/sh\n# Claudito Shell (Sway): lo instala si falta y trae versiones nuevas.\nexec /usr/local/sbin/sway-claudito >/dev/null 2>&1\n' \
+        > /etc/periodic/daily/sway-claudito
+    chmod 755 /etc/periodic/daily/sway-claudito
+    enable_service crond default "No se pudo habilitar 'crond': Claudito Shell no se actualizara solo."
+
+    log_info "Sway: instalando la barra Claudito Shell Fusion (repositorio de Lazaro Linux)..."
+    _sc_rc=0
+    _sc_out="$(timeout 900 /usr/local/sbin/sway-claudito 2>&1)" || _sc_rc=$?
+    [ -z "$_sc_out" ] || printf '%s\n' "$_sc_out" >> "$LOG_FILE"
+    case "$_sc_rc" in
+        0) log_ok "Sway: barra Claudito Shell Fusion instalada (waybar queda de respaldo)." ;;
+        10) log_info "Sway: Claudito Shell ya esta al dia o no aplica en este equipo." ;;
+        *) log_warn "Sway: no se pudo instalar Claudito Shell ($(printf '%s' "$_sc_out" | tail -n 1)). Sway sigue con waybar; se reintenta cada dia." ;;
+    esac
 }
 
 # Programas de la sesion, atajos y barra en /etc/sway/config.d.
